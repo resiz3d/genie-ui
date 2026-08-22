@@ -167,17 +167,18 @@ custom node can be turned off for anyone who doesn't have it installed:
 
 ```jsonc
 "400": {
-  "inputs": { "sage_attention": "{{sage_attention=auto}}", "model": ["127", 0] },
-  "class_type": "PathchSageAttentionKJ",
-  "_meta": { "title": "Patch Sage Attention KJ", "bypassable": true }
+  "inputs": { "attention": "{{attention=comfy kitchen attention|pytorch attention}}",
+              "model": ["127", 0] },
+  "class_type": "ModelAttentionBackend",
+  "_meta": { "title": "Model Attention Backend", "bypassable": true }
 }
 ```
 
-Best for single-in/single-out model "patch" nodes (Sage Attention, model-sampling
-patches, …) — the passthrough is taken from the node's `model` input (or its sole
-link input). The bundled MiniMax workflow ships this exact node: pick its
-`sage_attention` mode from the drawer, or uncheck **Patch Sage Attention KJ** to run
-without it.
+Best for single-in/single-out model "patch" nodes (attention backends, Sage
+Attention, model-sampling patches, …) — the passthrough is taken from the node's
+`model` input (or its sole link input). The bundled MiniMax workflow ships this exact
+node: pick the attention backend from the drawer, or uncheck **Model Attention
+Backend** to fall back to whatever ComfyUI was launched with.
 
 ### Per-workflow settings
 
@@ -224,10 +225,51 @@ stay contiguous. (Pruning doesn't renumber, so a hand-built workflow that fills
 non-contiguous slots could leave a gap the node may reject — not possible via the
 grouped field, which always fills in order.)
 
+### Reference-video tails ("use last N sec")
+
+Each reference **video** gets its own **use last N sec** box under the dropzone.
+Reference frames are re-injected on every sampling step, so a long reference is
+expensive: at 0.5 MP, a 15s target with a full 15s reference is ~123k tokens, while
+the same run with only the reference's last ~4s is ~74k — and attention cost grows
+faster than linearly, so the wall-clock saving is bigger than the token ratio. When
+you're continuing a shot, the tail is usually the only part that matters.
+
+Leave the box at `0` (or blank) for the whole clip. The hint next to it shows the
+clip's length and how many frames the tail actually keeps.
+
+It's applied as **`skip_first_frames` on that reference's own loader**, not by
+re-encoding a trimmed file: frame-exact, instant, and `VHS_LoadVideo` derives its
+audio start from the same input, so a trimmed reference keeps its soundtrack in sync.
+
+**Frame-grid snapping.** MiniMax H3 truncates reference frames **from the end** to
+reach its 17k+5 frame grid — on a continuation that would silently drop the newest
+frames, the ones you're continuing from. So the kept count snaps *down* to the grid
+(5 / 22 / 39 / 56 / 73 / 90 / 124 …) and nothing is lost off the end. Declare the
+grid on the loader node; without it the tail is used as-is:
+
+```jsonc
+"144": {
+  "inputs": { "video": "{{ref_video1}}", "skip_first_frames": 0, … },
+  "class_type": "VHS_LoadVideo",
+  "_meta": { "title": "Load Video (Upload)", "tail_frame_grid": [17, 5] }
+}
+```
+
+A video reference offers the control whenever its loader has a `skip_first_frames`
+input (override the input name with `_meta.tail_input`). Tails are remembered per
+file in the workflow's saved settings, and the **frames actually used** are recorded
+on the History entry, so re-importing a run restores the same trim.
+
+Measuring the clip needs **ffprobe** on the app server's PATH (ComfyUI already
+depends on ffmpeg for `VHS_VideoCombine` and reference-audio extraction, so it's
+normally there). Without it the run still queues — it just uses the whole clip and
+says so on the run.
+
 ## How a run works
 
 1. Image inputs are saved to the gallery, then pushed to ComfyUI (`/upload/image`).
-2. Empty optional reference loaders are pruned; remaining tokens are substituted
+2. Empty optional reference loaders are pruned; any reference-video tail becomes a
+   `skip_first_frames` on its loader; remaining tokens are substituted
    into a copy of the workflow (your file is never modified).
 3. The workflow is queued (`/prompt`) and its **pending History entry is created in
    the same request** (so a dropped connection right after — common on mobile —
@@ -278,3 +320,17 @@ in-memory record is gone: after a short grace the entry is marked failed with a 
   (inline dropdowns), and `model`/`clip`/`video_vae`/`audio_vae` (installed-file
   pickers from `/object_info`, shown in the **ComfyUI Settings** drawer), plus
   width/order layout hints. Add extra LoRAs via the drawer's **LoRAs** section.
+- **MiniMax H3 reference videos need the comfy-kitchen attention backend.** H3 hands
+  attention its `q`/`k` as slices of one fused qkv projection, so their sequence
+  stride is `3·56·128 = 21504` elements. SageAttention and PyTorch attention (flash
+  and mem-efficient alike) do that pointer arithmetic in int32, which overflows at
+  `2³¹ / 21504 ≈ 99,800 tokens` and dies mid-sampling with **CUDA error: an illegal
+  memory access was encountered**. A reference video roughly doubles the packed
+  sequence — 15s target + 15s reference at 0.5 MP is ~123k tokens — so it reliably
+  crosses the line, while reference *images* barely move it. ComfyUI's own int8
+  attention handles the layout correctly (and peaks lower on VRAM, since it quantizes
+  and frees `q`/`k`/`v` before attending), which is why the bundled workflow's
+  **Model Attention Backend** node defaults to `comfy kitchen attention`. Leave it
+  there for reference-video runs; on `pytorch attention` keep target + reference
+  duration under roughly 22 combined seconds at 0.5 MP (halve that per doubling of
+  megapixels).
