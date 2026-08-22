@@ -354,7 +354,11 @@
     },
     "class_type": "VHS_LoadVideo",
     "_meta": {
-      "title": "Load Video (Upload) 🎥🅥🅗🅢"
+      "title": "Load Video (Upload) 🎥🅥🅗🅢",
+      "tail_frame_grid": [
+        17,
+        5
+      ]
     }
   },
   "145": {
@@ -453,7 +457,11 @@
     },
     "class_type": "VHS_LoadVideo",
     "_meta": {
-      "title": "Load Video (Upload) 🎥🅥🅗🅢"
+      "title": "Load Video (Upload) 🎥🅥🅗🅢",
+      "tail_frame_grid": [
+        17,
+        5
+      ]
     }
   },
   "312": {
@@ -469,7 +477,11 @@
     },
     "class_type": "VHS_LoadVideo",
     "_meta": {
-      "title": "Load Video (Upload) 🎥🅥🅗🅢"
+      "title": "Load Video (Upload) 🎥🅥🅗🅢",
+      "tail_frame_grid": [
+        17,
+        5
+      ]
     }
   },
   "321": {
@@ -496,16 +508,15 @@
   },
   "400": {
     "inputs": {
-      "sage_attention": "{{sage_attention=auto ; 1/2 ; #10}}",
-      "allow_compile": false,
+      "attention": "{{attention=comfy kitchen attention ; 1/2 ; #10}}",
       "model": [
         "127",
         0
       ]
     },
-    "class_type": "PathchSageAttentionKJ",
+    "class_type": "ModelAttentionBackend",
     "_meta": {
-      "title": "Patch Sage Attention KJ",
+      "title": "Model Attention Backend",
       "bypassable": true
     }
   }
