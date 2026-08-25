@@ -634,6 +634,42 @@ img.zoomable {
   z-index: 2;
 }
 
+/* Per-file "use last N sec" rows under a reference-video field. */
+.media-tails:not(:empty) {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin: 0.55rem 0 0.2rem;
+}
+
+.tail-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  font-size: 0.85rem;
+}
+
+.tail-name {
+  font-weight: 600;
+  min-width: 4.5rem;
+}
+
+.tail-input {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  color: var(--muted);
+  font-weight: 400;
+  margin: 0;
+}
+
+.tail-input input[type="number"] {
+  width: 4.6rem;
+  margin: 0;
+  padding: 0.2rem 0.4rem;
+}
+
 .thumb.uploading::after,
 .thumb.saving::after {
   content: "";

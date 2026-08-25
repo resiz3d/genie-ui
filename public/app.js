@@ -204,7 +204,9 @@ function makeMediaList(kind, opts = {}) {
   const numLabel = opts.label || KIND_LABEL[mediaType];
   const numSep = opts.labelSep ?? "";
 
-  let dropzone, thumbs, fileInput, clearBtn, galleryWrap, galleryThumbs, galleryEmptyEl, fieldEl;
+  // Per-file "use last N sec" rows, for video fields whose loader can skip frames.
+  const tailGrid = opts.tail ? opts.tailGrid || null : null;
+  let dropzone, thumbs, fileInput, clearBtn, galleryWrap, galleryThumbs, galleryEmptyEl, fieldEl, tailsEl;
   if (opts.build) {
     // Build the field ourselves (ComfyUI controls have no static markup).
     const noun = mediaType === "audio" ? "audio files" : `${mediaType}s`;
@@ -217,10 +219,12 @@ function makeMediaList(kind, opts = {}) {
       `<div class="dropzone"><div class="thumbs"></div>` +
       `<p class="dz-hint">Drop ${noun} here or <span class="browse">browse</span></p>` +
       `<input type="file" accept="${mediaType}/*" multiple hidden /></div>` +
+      `<div class="media-tails"></div>` +
       `<details class="gallery-wrap comfy-gallery"><summary>Pick from gallery</summary>` +
       `<p class="dz-hint gallery-empty">No saved ${mediaType}s in this project yet.</p>` +
       `<div class="thumbs gallery"></div></details>`;
     dropzone = fieldEl.querySelector(".dropzone");
+    tailsEl = fieldEl.querySelector(".media-tails");
     thumbs = fieldEl.querySelector(".dropzone .thumbs");
     fileInput = fieldEl.querySelector("input[type=file]");
     clearBtn = fieldEl.querySelector(".link-btn");
@@ -304,7 +308,42 @@ function makeMediaList(kind, opts = {}) {
         thumbs.appendChild(div);
       }
       clearBtn.classList.toggle("hidden", list.items.length === 0);
+      list.renderTails();
       updateEstimate();
+    },
+
+    // One tail row per ready file, numbered like its thumbnail. Lengths are probed
+    // lazily (server-side ffprobe) and re-rendered when they arrive.
+    renderTails() {
+      if (!tailsEl) return;
+      const ready = list.items.filter((i) => i.status === "ready");
+      tailsEl.innerHTML = "";
+      if (!opts.tail || !ready.length) return;
+      ready.forEach((item, i) => {
+        if (item.localId && item.probe === undefined) {
+          item.probe = null; // probe once per file; null until it lands
+          probeGalleryVideo(item.localId).then((p) => {
+            item.probe = p;
+            list.renderTails();
+          });
+        }
+        tailsEl.appendChild(
+          makeTailRow({
+            label: `${numLabel}${numSep}${i + 1}`,
+            seconds: item.tailSec || 0,
+            probe: item.probe || null,
+            grid: tailGrid,
+            onInput: (v) => { item.tailSec = v; },
+          })
+        );
+      });
+    },
+
+    // Per-file tails for the ready files, in slot order: [{seconds, id}].
+    tails() {
+      return list.items
+        .filter((i) => i.status === "ready")
+        .map((i) => ({ seconds: i.tailSec || 0, id: i.localId || null }));
     },
 
     reorder(fromUid, toUid) {
@@ -386,6 +425,7 @@ function makeMediaList(kind, opts = {}) {
         thumb: item.localUrl,
         name: item.name,
         status: "ready",
+        tailSec: Number(item.tail) || 0, // remembered per-file reference tail, if any
       };
       list.items.push(entry);
       list.render();
@@ -1260,6 +1300,80 @@ const randomSeed = () => Math.floor(Math.random() * 2 ** 31);
 // included in exports; you can also pick an existing gallery item of that kind.
 // At generate time the chosen file is pushed into ComfyUI's input folder by id.
 const MEDIA_ARTICLE = { image: "an image", video: "a video", audio: "an audio file" };
+// --- reference-video tails ---------------------------------------------------
+// "Use only the last N seconds of this reference." Reference frames are re-injected
+// on every sampling step, so trimming a reference to the part that matters (its tail,
+// when continuing a shot) is the cheapest way to shorten a run. The server turns the
+// seconds into a frame-exact skip on that reference's loader; here we preview what
+// the model will actually see, because the kept frame count snaps *down* to the
+// loader's grid — MiniMax H3 drops reference frames from the end to reach its 17k+5
+// grid, which on a continuation would discard the newest frames.
+const videoProbeCache = new Map(); // gallery id → {fps, frames, duration} | null
+
+async function probeGalleryVideo(id) {
+  if (!id) return null;
+  if (videoProbeCache.has(id)) return videoProbeCache.get(id);
+  let probe = null;
+  try {
+    const res = await fetch(`/api/comfy/probe?id=${encodeURIComponent(id)}`);
+    const data = await res.json();
+    if (res.ok && data.data?.frames) probe = data.data;
+  } catch {
+    /* leave null — the server falls back to the whole clip and says so */
+  }
+  videoProbeCache.set(id, probe);
+  return probe;
+}
+
+// Largest frame count ≤ keep that lands on the loader's grid (mirrors the server).
+function snapTailFrames(keep, grid) {
+  if (!Array.isArray(grid) || grid.length !== 2) return keep;
+  const [k, r] = grid;
+  const rem = ((r % k) + k) % k;
+  const snapped = keep - (((keep % k) - rem + k) % k);
+  return snapped >= rem && snapped > 0 ? snapped : rem || k;
+}
+
+// What the model sees for a given tail request, as text for the row's hint.
+function tailHint(seconds, probe, grid) {
+  if (!probe) return "length unknown — the whole clip will be used";
+  const total = `of ${probe.duration.toFixed(1)}s`;
+  if (!(seconds > 0)) return `${total} · whole clip (${probe.frames} frames)`;
+  const keep = snapTailFrames(Math.min(probe.frames, Math.max(1, Math.round(seconds * probe.fps))), grid);
+  if (keep >= probe.frames) return `${total} · whole clip (${probe.frames} frames)`;
+  return `${total} → last ${keep} frames (${(keep / probe.fps).toFixed(1)}s)`;
+}
+
+// One "use last N sec" row for a reference video. Updates its own hint as you type
+// and reports the value back through onInput.
+function makeTailRow({ label, seconds, probe, grid, onInput }) {
+  const row = document.createElement("div");
+  row.className = "tail-row";
+  const name = document.createElement("span");
+  name.className = "tail-name";
+  name.textContent = label;
+  const wrap = document.createElement("label");
+  wrap.className = "inline tail-input";
+  const input = document.createElement("input");
+  input.type = "number";
+  input.min = "0";
+  input.step = "0.5";
+  input.placeholder = "0";
+  input.title = "Seconds from the end of the clip to use as the reference. 0 or blank = the whole clip.";
+  if (seconds > 0) input.value = String(seconds);
+  wrap.append(document.createTextNode("use last "), input, document.createTextNode(" sec"));
+  const hint = document.createElement("span");
+  hint.className = "hint";
+  hint.textContent = tailHint(seconds, probe, grid);
+  input.addEventListener("input", () => {
+    const v = Number(input.value) || 0;
+    hint.textContent = tailHint(v, probe, grid);
+    onInput(v);
+  });
+  row.append(name, wrap, hint);
+  return row;
+}
+
 function makeComfyMedia(token, mediaKind) {
   const field = document.createElement("div");
   field.className = "field";
@@ -1269,6 +1383,7 @@ function makeComfyMedia(token, mediaKind) {
     `<div class="dropzone"><div class="thumbs"></div>` +
     `<p class="dz-hint">Drop ${MEDIA_ARTICLE[mediaKind]} here or <span class="browse">browse</span></p>` +
     `<input type="file" accept="${mediaKind}/*" hidden /></div>` +
+    `<div class="media-tails"></div>` +
     `<details class="gallery-wrap comfy-gallery"><summary>Pick from gallery</summary>` +
     `<p class="dz-hint gallery-empty">No saved ${mediaKind}s in this project yet.</p>` +
     `<div class="thumbs gallery"></div></details>`;
@@ -1290,12 +1405,33 @@ function makeComfyMedia(token, mediaKind) {
     div.appendChild(makeThumbContent(mediaKind, { thumb: url, name }));
     return div;
   };
+  // Per-file "use last N sec", when this reference's loader can skip frames.
+  const tailsEl = field.querySelector(".media-tails");
+  let tailSec = 0, probe;
+  const renderTail = () => {
+    tailsEl.innerHTML = "";
+    if (!token.tail || !source) return;
+    if (source.id && probe === undefined) {
+      probe = null; // probe once per file; null until it lands
+      probeGalleryVideo(source.id).then((p) => { probe = p; renderTail(); });
+    }
+    tailsEl.appendChild(
+      makeTailRow({
+        label: prettyLabel(token.name),
+        seconds: tailSec,
+        probe: probe || null,
+        grid: token.tail.grid || null,
+        onInput: (v) => { tailSec = v; },
+      })
+    );
+  };
   const render = () => {
     thumbs.innerHTML = "";
     clearBtn.classList.toggle("hidden", !source);
     if (source) thumbs.appendChild(previewThumb(source.url, source.name));
+    renderTail();
   };
-  const setSource = (s) => { source = s; uploadedRef = null; render(); };
+  const setSource = (s) => { source = s; uploadedRef = null; probe = undefined; render(); };
 
   // Save a dropped/browsed file into the project gallery, then use it.
   const take = (file) => {
@@ -1363,8 +1499,20 @@ function makeComfyMedia(token, mediaKind) {
     setMedia(arr) {
       const it = (arr || [])[0];
       setSource(it && it.id ? { id: it.id, url: it.url, name: it.name } : null);
+      tailSec = Number(it?.tail) || 0;
+      renderTail();
     },
-    peekMedia: () => (source ? [{ id: source.id, url: source.url, name: source.name }] : []),
+    setTails(byToken) {
+      const seconds = Number(byToken?.[token.name]?.seconds);
+      if (seconds > 0) { tailSec = seconds; renderTail(); }
+    },
+    peekMedia: () => {
+      if (!source) return [];
+      const m = { id: source.id, url: source.url, name: source.name };
+      if (tailSec > 0) m.tail = tailSec; // remembered per-file reference tail
+      return [m];
+    },
+    tailSpec: () => (tailSec > 0 && source?.id ? { [token.name]: { seconds: tailSec, id: source.id } } : {}),
     localId: () => source?.id || null,
     async getValue() {
       if (!source) return token.default || "";
@@ -1469,7 +1617,7 @@ async function renderComfyControls() {
   for (const it of items) {
     if (it.kind === "series") {
       const entries = it.entries.sort((a, b) => a.index - b.index);
-      const ctrl = makeComfyMediaMulti(it.base, it.type, entries.map((e) => e.token.name));
+      const ctrl = makeComfyMediaMulti(it.base, it.type, entries.map((e) => e.token.name), entries[0].token.tail);
       ctrl.el.style.gridColumn = `span ${WIDTH_SPAN[entries[0].token.width] || 12}`;
       comfyControlsEl.appendChild(ctrl.el);
       comfyFields.push(ctrl);
@@ -1543,7 +1691,7 @@ function makeComfyBypassControl(bypassable) {
     label.className = "inline bypass-toggle";
     const cb = document.createElement("input");
     cb.type = "checkbox";
-    cb.checked = true; // enabled by default
+    cb.checked = !b.off; // enabled unless the workflow ships this node switched off
     label.append(cb, document.createTextNode(` ${b.title}`));
     const controlsEl = document.createElement("div");
     controlsEl.className = "bypass-controls comfy-grid";
@@ -1743,7 +1891,7 @@ function renderScalarControl(token, type, container = comfyControlsEl) {
 // badges ("Picture 1, 2…"). The Nth file fills the Nth token; unfilled tokens are
 // pruned at submit.
 let comfyListSeq = 0;
-function makeComfyMediaMulti(base, mediaKind, tokenNames) {
+function makeComfyMediaMulti(base, mediaKind, tokenNames, tail = null) {
   const label = prettyLabel(base);
   const max = tokenNames.length;
   const list = makeMediaList(`comfy-${base}-${comfyListSeq++}`, {
@@ -1756,6 +1904,8 @@ function makeComfyMediaMulti(base, mediaKind, tokenNames) {
     label,
     labelSep: " ", // "Picture 1" rather than "Picture1"
     hint: `(up to ${max}, in order — drag to reorder)`,
+    tail: !!tail, // loader can skip frames → offer a per-file "use last N sec"
+    tailGrid: tail?.grid || null,
   });
 
   const ready = () => list.items.filter((i) => i.status === "ready");
@@ -1770,9 +1920,20 @@ function makeComfyMediaMulti(base, mediaKind, tokenNames) {
     setMedia(arr) {
       list.items = [];
       for (const it of (arr || []).slice(0, max)) {
-        if (it?.id) list.addFromGallery({ id: it.id, localUrl: it.url, name: it.name });
+        if (it?.id) list.addFromGallery({ id: it.id, localUrl: it.url, name: it.name, tail: it.tail });
       }
       list.render();
+    },
+    // Re-apply per-file tails from a History entry, which keys them by token name
+    // (older entries have none — the files then keep whatever the field restored).
+    setTails(byToken) {
+      if (!byToken) return;
+      const filled = list.items.filter((i) => i.status === "ready");
+      tokenNames.forEach((name, i) => {
+        const seconds = Number(byToken[name]?.seconds);
+        if (filled[i] && seconds > 0) filled[i].tailSec = seconds;
+      });
+      list.renderTails();
     },
     // Append one saved file (from a history card's reference thumbnail). Respects
     // the field's capacity; returns false if it's full or the item has no local id.
@@ -1785,8 +1946,20 @@ function makeComfyMediaMulti(base, mediaKind, tokenNames) {
     peekMedia: () =>
       ready()
         .filter((i) => i.localId)
-        .map((i) => ({ id: i.localId, url: i.thumb, name: i.name })),
+        .map((i) => {
+          const m = { id: i.localId, url: i.thumb, name: i.name };
+          if (i.tailSec > 0) m.tail = i.tailSec; // remembered per-file reference tail
+          return m;
+        }),
     localIds: () => list.localIds(),
+    // { tokenName: {seconds, id} } for the filled slots that asked for a tail.
+    tailSpec() {
+      const spec = {};
+      list.tails().forEach((t, i) => {
+        if (t.seconds > 0 && tokenNames[i]) spec[tokenNames[i]] = t;
+      });
+      return spec;
+    },
     async resolve() {
       const values = {};
       const prune = [];
@@ -1854,6 +2027,11 @@ async function restoreComfyMedia(entry) {
       queue = queue.slice(f.capacity || 1);
     }
   }
+  // Re-apply the run's per-reference tails (absent on entries from before the
+  // feature, and on runs that used whole clips).
+  if (entry.input?.tails) {
+    for (const f of comfyFields) if (typeof f.setTails === "function") f.setTails(entry.input.tails);
+  }
 }
 
 // Per-workflow config, saved server-side (settings/comfy/<file>.json) so it's
@@ -1885,7 +2063,9 @@ async function saveComfySettings(file) {
 async function collectComfyValues() {
   const values = {};
   const prune = [];
+  const tails = {}; // per-reference "use last N sec" (the server turns it into frames)
   for (const f of comfyFields) {
+    if (typeof f.tailSpec === "function") Object.assign(tails, f.tailSpec());
     if (f.isMultiMedia) {
       const r = await f.resolve(); // fills the filled slots, prunes the empty ones
       Object.assign(values, r.values);
@@ -1898,7 +2078,7 @@ async function collectComfyValues() {
     }
     values[f.name] = await f.getValue();
   }
-  return { values, prune };
+  return { values, prune, tails };
 }
 
 // How many generations to queue (the ×N counter, local ComfyUI only).
@@ -1920,7 +2100,7 @@ async function submitComfy() {
   const bypass = comfyBypassControl ? comfyBypassControl.getDisabled() : [];
   try {
     for (let i = 0; i < count; i++) {
-      const { values, prune } = await collectComfyValues();
+      const { values, prune, tails } = await collectComfyValues();
       const mediaIds = { image: [], video: [], audio: [] };
       for (const f of comfyFields) {
         if (f.isMultiMedia) mediaIds[f.mediaKind]?.push(...f.localIds());
@@ -1933,7 +2113,7 @@ async function submitComfy() {
       if (loras.length) input.loras = loras;
       if (bypass.length) input.bypass = bypass;
       if (typeof values.prompt === "string" && values.prompt.trim()) input.prompt = values.prompt.trim();
-      await queueComfyRun(wf, values, prune, mediaIds, input, loras, bypass);
+      await queueComfyRun(wf, values, prune, mediaIds, input, loras, bypass, tails);
       // Advance seeds for the next queued run (no-op when the mode is "fixed").
       for (const f of comfyFields) if (typeof f.advance === "function") f.advance();
     }
@@ -1946,7 +2126,7 @@ async function submitComfy() {
 // Queue one ComfyUI run: one request queues it AND creates the pending History
 // entry server-side (so a dropped connection can't orphan it — the sweep finishes
 // it). Then attach a live status to that pending card, wire Cancel, and poll.
-async function queueComfyRun(wf, values, prune, mediaIds, input, loras, bypass) {
+async function queueComfyRun(wf, values, prune, mediaIds, input, loras, bypass, tails) {
   const job = {
     jobId: nextJobId++,
     taskId: null,
@@ -1965,6 +2145,7 @@ async function queueComfyRun(wf, values, prune, mediaIds, input, loras, bypass) 
         prune,
         loras: loras || [],
         bypass: bypass || [],
+        tails: tails || {},
         input: job.input,
         mediaLocalIds: job.mediaLocalIds,
         projectId: job.projectId,
@@ -1977,6 +2158,9 @@ async function queueComfyRun(wf, values, prune, mediaIds, input, loras, bypass) 
     }
     job.taskId = data.data.promptId;
     job.historyId = data.data.historyId || null;
+    // Queued, but something the run asked for couldn't be honored (e.g. a reference
+    // tail the server couldn't measure) — say so rather than silently ignoring it.
+    if (data.data.warnings?.length) setError(`Queued, but: ${data.data.warnings.join(" ")}`);
     const live = createLiveStatus(job);
     live.setStatus("Generating on ComfyUI… this can take a while.");
     if (job.historyId) liveStatus.set(job.historyId, live);

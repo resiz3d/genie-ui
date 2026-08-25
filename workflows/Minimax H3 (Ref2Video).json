@@ -115,7 +115,7 @@
   "126": {
     "inputs": {
       "model": [
-        "400",
+        "401",
         0
       ],
       "conditioning": [
@@ -354,7 +354,11 @@
     },
     "class_type": "VHS_LoadVideo",
     "_meta": {
-      "title": "Load Video (Upload) 🎥🅥🅗🅢"
+      "title": "Load Video (Upload) 🎥🅥🅗🅢",
+      "tail_frame_grid": [
+        17,
+        5
+      ]
     }
   },
   "145": {
@@ -453,7 +457,11 @@
     },
     "class_type": "VHS_LoadVideo",
     "_meta": {
-      "title": "Load Video (Upload) 🎥🅥🅗🅢"
+      "title": "Load Video (Upload) 🎥🅥🅗🅢",
+      "tail_frame_grid": [
+        17,
+        5
+      ]
     }
   },
   "312": {
@@ -469,7 +477,11 @@
     },
     "class_type": "VHS_LoadVideo",
     "_meta": {
-      "title": "Load Video (Upload) 🎥🅥🅗🅢"
+      "title": "Load Video (Upload) 🎥🅥🅗🅢",
+      "tail_frame_grid": [
+        17,
+        5
+      ]
     }
   },
   "321": {
@@ -507,6 +519,21 @@
     "_meta": {
       "title": "Patch Sage Attention KJ",
       "bypassable": true
+    }
+  },
+  "401": {
+    "inputs": {
+      "attention": "{{attention=comfy kitchen attention ; 1/2 ; #11}}",
+      "model": [
+        "400",
+        0
+      ]
+    },
+    "class_type": "ModelAttentionBackend",
+    "_meta": {
+      "title": "Model Attention Backend",
+      "bypassable": true,
+      "bypassed_by_default": true
     }
   }
 }

@@ -525,6 +525,10 @@ app.get("/api/comfy/workflow-meta", async (req, res) => {
     nodeId: nodeMap.get(t.name)?.id || null,
   }));
   const bypassable = bypassableNodes(workflow); // enable/disable toggles (offline-safe)
+  // Video references whose loader can skip frames get a per-file "use the last N
+  // seconds" control (see tailSupport).
+  const withTail = (list) =>
+    list.map((t) => (t.inputKey === "video" && t.nodeId ? { ...t, tail: tailSupport(workflow, t.nodeId) } : t));
   let objectInfo;
   try {
     objectInfo = await getObjectInfo();
@@ -532,14 +536,14 @@ app.get("/api/comfy/workflow-meta", async (req, res) => {
     return res.json({
       code: 200,
       msg: "success",
-      data: { offline: true, tokens: withKeys, loraOptions: [], bypassable },
+      data: { offline: true, tokens: withTail(withKeys), loraOptions: [], bypassable },
     });
   }
   const enriched = withKeys.map((t) => enrichToken(t, nodeMap, objectInfo));
   res.json({
     code: 200,
     msg: "success",
-    data: { offline: false, tokens: enriched, loraOptions: loraOptionsFrom(objectInfo), bypassable },
+    data: { offline: false, tokens: withTail(enriched), loraOptions: loraOptionsFrom(objectInfo), bypassable },
   });
 });
 
@@ -607,6 +611,21 @@ app.post("/api/comfy/upload", async (req, res) => {
     console.error("ComfyUI upload error:", err);
     res.status(502).json({ code: 502, msg: `Could not reach ComfyUI at ${COMFYUI_URL}` });
   }
+});
+
+// Length of a saved gallery video (frames + fps), so a reference-video field can
+// show how many frames a "use the last N seconds" tail actually keeps before the
+// run is queued.
+app.get("/api/comfy/probe", async (req, res) => {
+  const entry = readJson(IMAGES_FILE).find((i) => i.id === req.query.id);
+  if (!entry) return res.status(404).json({ code: 404, msg: "gallery item not found" });
+  const probe = await probeVideo(path.join(IMAGES_DIR, entry.storedName));
+  if (!probe) {
+    return res
+      .status(422)
+      .json({ code: 422, msg: ffprobeMissing ? "ffprobe was not found on PATH" : "Could not read the video's length" });
+  }
+  res.json({ code: 200, msg: "success", data: probe });
 });
 
 // True if any of a node's input strings contains a token with the given name.
@@ -827,11 +846,115 @@ function bypassNode(workflow, id) {
 }
 
 // Nodes an author marked `_meta.bypassable` — the UI offers an enable/disable toggle
-// for each (so an optional custom node can be turned off).
+// for each (so an optional custom node can be turned off). `_meta.bypassed_by_default`
+// ships the toggle *off*, for a node that shouldn't impose anything until asked for;
+// saved settings still win once the workflow has been run.
 function bypassableNodes(workflow) {
   return Object.entries(workflow || {})
     .filter(([, n]) => n?._meta?.bypassable)
-    .map(([id, n]) => ({ id, title: n._meta.title || `Node ${id}` }));
+    .map(([id, n]) => ({ id, title: n._meta.title || `Node ${id}`, off: !!n._meta.bypassed_by_default }));
+}
+
+// --- reference-video tails ----------------------------------------------------
+// "Use only the last N seconds of this reference." Reference frames ride through
+// every sampling step, so trimming a reference to the part that matters (the tail,
+// when continuing a shot) is the cheapest way to cut a run's cost.
+//
+// Implemented as `skip_first_frames` on the reference's own loader rather than by
+// re-encoding a trimmed file: it's frame-exact, instant, and VHS_LoadVideo derives
+// the audio start from the same input, so the reference keeps its soundtrack in sync.
+const DEFAULT_TAIL_INPUT = "skip_first_frames";
+
+// A video loader supports tailing if it has the skip input. `grid: [k, r]` comes
+// from the node's `_meta.tail_frame_grid` and snaps the kept frame count down to
+// `n % k === r`: MiniMax H3 truncates reference frames *from the end* to reach its
+// 17k+5 grid, which on a continuation would throw away the newest frames — exactly
+// the ones being continued from.
+function tailSupport(workflow, nodeId) {
+  const node = workflow?.[nodeId];
+  const input = node?._meta?.tail_input || DEFAULT_TAIL_INPUT;
+  if (!node?.inputs || !(input in node.inputs)) return null;
+  const g = node._meta?.tail_frame_grid;
+  const grid = Array.isArray(g) && g.length === 2 && g.every((n) => Number.isInteger(n) && n > 0) ? g : null;
+  return { input, grid };
+}
+
+// Frame count / fps of a local video, for turning seconds-of-tail into an exact
+// frame offset. `nb_frames` is missing from some containers, so fall back to a
+// packet count and finally to duration × fps.
+let ffprobeMissing = false;
+function probeVideo(file) {
+  if (ffprobeMissing) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    execFile(
+      "ffprobe",
+      ["-v", "error", "-select_streams", "v:0", "-count_packets",
+        "-show_entries", "stream=nb_frames,nb_read_packets,r_frame_rate,duration", "-of", "json", file],
+      { timeout: 30000, windowsHide: true },
+      (err, stdout) => {
+        if (err) {
+          if (err.code === "ENOENT") ffprobeMissing = true;
+          return resolve(null);
+        }
+        let s;
+        try {
+          s = JSON.parse(stdout)?.streams?.[0];
+        } catch {
+          return resolve(null);
+        }
+        const [num, den] = String(s?.r_frame_rate || "").split("/");
+        const fps = Number(num) / (Number(den) || 1);
+        const duration = Number(s?.duration);
+        const frames = Number(s?.nb_frames) || Number(s?.nb_read_packets) ||
+          (Number.isFinite(fps) && Number.isFinite(duration) ? Math.round(fps * duration) : 0);
+        if (!Number.isFinite(fps) || fps <= 0 || !frames) return resolve(null);
+        resolve({ fps, frames, duration: Number.isFinite(duration) ? duration : frames / fps });
+      }
+    );
+  });
+}
+
+// Largest frame count ≤ `keep` that lands on the loader's grid (see tailSupport).
+function snapTailFrames(keep, grid) {
+  if (!grid) return keep;
+  const [k, r] = grid;
+  const rem = ((r % k) + k) % k;
+  const snapped = keep - (((keep % k) - rem + k) % k);
+  return snapped >= rem && snapped > 0 ? snapped : rem || k;
+}
+
+// Apply the UI's per-reference tails to their loader nodes. `tails` is
+// { tokenName: { seconds, id } } (id = gallery item, so the file can be probed).
+// Returns { effective, warnings }: what was actually applied (recorded on the
+// History entry) and anything that couldn't be, so the client can say so.
+async function applyTails(workflow, nodeMap, tails) {
+  const effective = {};
+  const warnings = [];
+  for (const [name, spec] of Object.entries(tails || {})) {
+    const seconds = Number(spec?.seconds);
+    if (!(seconds > 0)) continue; // 0 / blank = whole clip
+    const loc = nodeMap.get(name);
+    const support = loc && tailSupport(workflow, loc.id);
+    if (!support) continue; // slot pruned, or its loader can't skip frames
+    const entry = spec?.id ? readJson(IMAGES_FILE).find((i) => i.id === spec.id) : null;
+    const probe = entry ? await probeVideo(path.join(IMAGES_DIR, entry.storedName)) : null;
+    if (!probe) {
+      warnings.push(
+        `Couldn't read the length of ${entry?.name || name}${ffprobeMissing ? " (ffprobe not found on PATH)" : ""} — ` +
+          "used the whole clip."
+      );
+      continue;
+    }
+    const keep = snapTailFrames(Math.min(probe.frames, Math.max(1, Math.round(seconds * probe.fps))), support.grid);
+    workflow[loc.id].inputs[support.input] = Math.max(0, probe.frames - keep);
+    effective[name] = {
+      seconds: Math.round((keep / probe.fps) * 100) / 100,
+      frames: keep,
+      sourceFrames: probe.frames,
+      skipped: Math.max(0, probe.frames - keep),
+    };
+  }
+  return { effective, warnings };
 }
 
 // --- ComfyUI errors → friendly text ------------------------------------------
@@ -1011,16 +1134,21 @@ async function comfyVram() {
 // orphan the run).
 app.post("/api/comfy/generate", async (req, res) => {
   ensureComfyWs(); // start listening for progress before the run begins
-  const { file, values, prune, loras, bypass, input, mediaLocalIds, projectId, refVideoSeconds } = req.body || {};
+  const { file, values, prune, loras, bypass, tails, input, mediaLocalIds, projectId, refVideoSeconds } =
+    req.body || {};
   const wfPath = workflowPath(file);
   if (!wfPath || !fs.existsSync(wfPath)) {
     return res.status(400).json({ code: 400, msg: "Unknown workflow file" });
   }
-  let workflow;
+  let workflow, tailResult;
   try {
     workflow = JSON.parse(fs.readFileSync(wfPath, "utf8"));
+    // Token → node map from the untouched workflow: substitution erases the tokens,
+    // and reference-video tails are addressed by token name.
+    const tokenNodes = mapTokenNodes(workflow);
     workflow = pruneWorkflow(workflow, prune); // drop empty optional reference loaders
     workflow = substituteWorkflow(workflow, values || {});
+    tailResult = await applyTails(workflow, tokenNodes, tails); // trim references to their last N seconds
     for (const id of Array.isArray(bypass) ? bypass : []) bypassNode(workflow, String(id)); // disabled patch nodes
     workflow = injectLoras(workflow, loras); // splice in any dynamically-added LoRAs
   } catch (err) {
@@ -1041,11 +1169,14 @@ app.post("/api/comfy/generate", async (req, res) => {
     let historyId = null;
     try {
       const proj = resolveProject(projectId);
+      const baseInput = input || { model: `comfy:${file}`, values };
       const entry = makeHistoryEntry({
         id: `${Date.now()}`,
         taskId: body.prompt_id,
         projectId: proj.id,
-        input: input || { model: `comfy:${file}`, values },
+        // Record the tails actually applied (frame-exact, grid-snapped), not what
+        // was asked for — that's what re-import should restore.
+        input: Object.keys(tailResult.effective).length ? { ...baseInput, tails: tailResult.effective } : baseInput,
         mediaLocalIds,
         refVideoSeconds,
         imageLocalIds: mediaLocalIds?.image || [],
@@ -1058,7 +1189,11 @@ app.post("/api/comfy/generate", async (req, res) => {
     } catch (err) {
       console.error("Failed to create pending history entry:", err);
     }
-    res.json({ code: 200, msg: "success", data: { promptId: body.prompt_id, historyId } });
+    res.json({
+      code: 200,
+      msg: "success",
+      data: { promptId: body.prompt_id, historyId, warnings: tailResult.warnings },
+    });
   } catch (err) {
     console.error("ComfyUI generate error:", err);
     res.status(502).json({ code: 502, msg: `Could not reach ComfyUI at ${COMFYUI_URL}` });
