@@ -532,7 +532,8 @@
     "class_type": "ModelAttentionBackend",
     "_meta": {
       "title": "Model Attention Backend",
-      "bypassable": true
+      "bypassable": true,
+      "bypassed_by_default": true
     }
   }
 }

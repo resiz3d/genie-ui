@@ -175,12 +175,18 @@ custom node can be turned off for anyone who doesn't have it installed:
 
 Best for single-in/single-out model "patch" nodes (Sage Attention, attention backends,
 model-sampling patches, …) — the passthrough is taken from the node's `model` input (or
-its sole link input). The bundled MiniMax workflow ships two of them chained:
-**Patch Sage Attention KJ** then **Model Attention Backend**. Both write the same
-`transformer_options["optimized_attention_override"]`, so the **downstream node wins** —
-the backend selector is authoritative while it's enabled, and unchecking it hands
-control back to the Sage patch. Unchecking both runs whatever ComfyUI was launched
-with.
+its sole link input).
+
+Add `_meta.bypassed_by_default: true` and the toggle starts **off**, for a node that
+shouldn't impose anything until it's asked for. Your saved settings win once the
+workflow has been run, so this only sets the starting state.
+
+The bundled MiniMax workflow ships two patch nodes chained: **Patch Sage Attention KJ**
+then **Model Attention Backend**, the second of them off by default. Both write the same
+`transformer_options["optimized_attention_override"]`, so they can't coexist and the
+**downstream node wins** — enabling the backend selector makes it authoritative,
+switching it back off hands control to the Sage patch, and with both off you get
+whatever ComfyUI was launched with.
 
 ### Per-workflow settings
 
@@ -331,11 +337,11 @@ in-memory record is gone: after a short grace the entry is marked failed with a 
   sequence — 15s target + 15s reference at 0.5 MP is ~123k tokens — so it reliably
   crosses the line, while reference *images* barely move it. ComfyUI's own int8
   attention handles the layout correctly (and peaks lower on VRAM, since it quantizes
-  and frees `q`/`k`/`v` before attending), which is why the bundled workflow adds a
-  **Model Attention Backend** node defaulting to `comfy kitchen attention` downstream of
-  the Sage patch. Leave it there for reference-video runs. To use Sage instead, uncheck
-  **Model Attention Backend** in the drawer — but then keep target + reference duration
-  under roughly 22 combined seconds at 0.5 MP (halve that per doubling of megapixels),
-  which is the same ceiling that applies on `pytorch attention`. On an install without
-  comfy-kitchen attention the dropdown offers only `pytorch attention`, and the same
+  and frees `q`/`k`/`v` before attending), which is why the bundled workflow offers a
+  **Model Attention Backend** node downstream of the Sage patch. It ships **switched
+  off**, so nothing changes for runs that don't use a reference video — tick it in the
+  drawer and pick `comfy kitchen attention` before a reference-video run. Left off (on
+  Sage or PyTorch attention) keep target + reference duration under roughly 22 combined
+  seconds at 0.5 MP, halving that per doubling of megapixels. On an install without
+  comfy-kitchen attention the dropdown offers only `pytorch attention`, where the same
   ceiling applies.

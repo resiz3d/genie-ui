@@ -1691,7 +1691,7 @@ function makeComfyBypassControl(bypassable) {
     label.className = "inline bypass-toggle";
     const cb = document.createElement("input");
     cb.type = "checkbox";
-    cb.checked = true; // enabled by default
+    cb.checked = !b.off; // enabled unless the workflow ships this node switched off
     label.append(cb, document.createTextNode(` ${b.title}`));
     const controlsEl = document.createElement("div");
     controlsEl.className = "bypass-controls comfy-grid";

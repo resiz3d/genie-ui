@@ -846,11 +846,13 @@ function bypassNode(workflow, id) {
 }
 
 // Nodes an author marked `_meta.bypassable` — the UI offers an enable/disable toggle
-// for each (so an optional custom node can be turned off).
+// for each (so an optional custom node can be turned off). `_meta.bypassed_by_default`
+// ships the toggle *off*, for a node that shouldn't impose anything until asked for;
+// saved settings still win once the workflow has been run.
 function bypassableNodes(workflow) {
   return Object.entries(workflow || {})
     .filter(([, n]) => n?._meta?.bypassable)
-    .map(([id, n]) => ({ id, title: n._meta.title || `Node ${id}` }));
+    .map(([id, n]) => ({ id, title: n._meta.title || `Node ${id}`, off: !!n._meta.bypassed_by_default }));
 }
 
 // --- reference-video tails ----------------------------------------------------
