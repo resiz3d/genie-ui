@@ -115,7 +115,7 @@
   "126": {
     "inputs": {
       "model": [
-        "400",
+        "401",
         0
       ],
       "conditioning": [
@@ -508,9 +508,24 @@
   },
   "400": {
     "inputs": {
-      "attention": "{{attention=comfy kitchen attention ; 1/2 ; #10}}",
+      "sage_attention": "{{sage_attention=auto ; 1/2 ; #10}}",
+      "allow_compile": false,
       "model": [
         "127",
+        0
+      ]
+    },
+    "class_type": "PathchSageAttentionKJ",
+    "_meta": {
+      "title": "Patch Sage Attention KJ",
+      "bypassable": true
+    }
+  },
+  "401": {
+    "inputs": {
+      "attention": "{{attention=comfy kitchen attention ; 1/2 ; #11}}",
+      "model": [
+        "400",
         0
       ]
     },
