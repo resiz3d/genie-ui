@@ -249,7 +249,7 @@ function loginPage(error = false) {
   return `<!doctype html>
 <html lang="en"><head><meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Seedance — Sign in</title>
+<title>GENie — Sign in</title>
 <style>
   body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
     background:#0f1115;color:#e6e8ec;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
@@ -265,7 +265,7 @@ function loginPage(error = false) {
   .err{color:#ff6b6b;font-size:0.85rem;${error ? "" : "display:none"}}
 </style></head><body>
 <form id="f">
-  <h1>Seedance</h1>
+  <h1>GENie</h1>
   <p>Enter the password to continue.</p>
   <input id="pw" type="password" autocomplete="current-password" autofocus placeholder="Password" />
   <div class="err" id="err">Incorrect password.</div>
@@ -342,7 +342,7 @@ async function forward(res, upstreamPromise) {
     res.status(upstream.status).json(body);
   } catch (err) {
     console.error("Upstream error:", err);
-    res.status(502).json({ code: 502, msg: "Failed to reach Seedance API" });
+    res.status(502).json({ code: 502, msg: "Failed to reach kie.ai API" });
   }
 }
 
@@ -1525,7 +1525,7 @@ function buildExportHtml(view, meta) {
   return `<!doctype html>
 <html lang="en"><head><meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Seedance export — ${escapeHtml(meta.scopeLabel)}</title>
+<title>GENie export — ${escapeHtml(meta.scopeLabel)}</title>
 <style>
   :root{color-scheme:dark}
   *{box-sizing:border-box}
@@ -1561,7 +1561,7 @@ function buildExportHtml(view, meta) {
   @media(max-width:640px){.card{flex-direction:column}}
 </style></head><body>
 <header>
-  <h1>Seedance export</h1>
+  <h1>GENie export</h1>
   <p>${escapeHtml(meta.scopeLabel)} &middot; ${meta.count} generation${meta.count === 1 ? "" : "s"} &middot; <b>${meta.totalCredits.toLocaleString()} credits total</b> &middot; exported ${escapeHtml(new Date().toLocaleString())}</p>
 </header>
 <main>
@@ -2122,7 +2122,7 @@ function lanUrls(port) {
 
 app.listen(PORT, HOST, () => {
   const loopback = HOST === "127.0.0.1" || HOST === "localhost" || HOST === "::1";
-  console.log(`\n  Seedance app running:  http://localhost:${PORT}`);
+  console.log(`\n  GENie running:  http://localhost:${PORT}`);
   console.log(`  Password protection:   ${AUTH_ENABLED ? "ON" : "OFF (set APP_PASSWORD in .env to enable)"}`);
 
   if (!loopback) {

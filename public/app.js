@@ -1157,7 +1157,7 @@ function updateModelChrome() {
     document.getElementById("pageSub").innerHTML =
       `Run ${escapeHtmlJs(label)} on your local ComfyUI ` +
       `<span class="experimental-tag">Experimental</span>`;
-    document.title = label;
+    document.title = `GENie — ${label}`;
     submitBtn.textContent = "Generate";
     return;
   }
@@ -1165,7 +1165,7 @@ function updateModelChrome() {
   const medium = image ? "image" : "video";
   document.getElementById("pageTitle").textContent = label;
   document.getElementById("pageSub").textContent = `Generate ${medium} with the ${label} model`;
-  document.title = label;
+  document.title = `GENie — ${label}`;
   submitBtn.textContent = image ? "Generate Image" : "Generate Video";
 }
 const MODEL_KEY = "seedance_last_model";
