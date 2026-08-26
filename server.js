@@ -490,8 +490,11 @@ function workflowPath(file) {
   return null;
 }
 
-// The .json workflow filenames available, custom (WORKFLOWS_DIR) overriding shipped
-// (default/) by name. Returns bare filenames; workflowPath() resolves each to disk.
+// The .json workflows available, custom (WORKFLOWS_DIR) overriding shipped
+// (default/) by name. Each entry is { file, label }: `file` is the bare filename
+// used as the identity everywhere (workflowPath resolves it), `label` is the
+// display path — shipped workflows are shown folder-qualified (e.g.
+// "default/Minimax H3.json") to make their source clear.
 function listWorkflowFiles() {
   const jsonIn = (dir) => {
     try {
@@ -500,21 +503,24 @@ function listWorkflowFiles() {
       return []; // dir missing — treated as empty
     }
   };
-  const custom = jsonIn(WORKFLOWS_DIR);
-  const taken = new Set(custom.map((f) => f.toLowerCase()));
-  const shipped = jsonIn(WORKFLOWS_DEFAULT_DIR).filter((f) => !taken.has(f.toLowerCase()));
-  return [...custom, ...shipped].sort();
+  const custom = jsonIn(WORKFLOWS_DIR).map((file) => ({ file, label: file }));
+  const taken = new Set(custom.map((e) => e.file.toLowerCase()));
+  const shipped = jsonIn(WORKFLOWS_DEFAULT_DIR)
+    .filter((f) => !taken.has(f.toLowerCase()))
+    .map((file) => ({ file, label: `default/${file}` }));
+  return [...custom, ...shipped].sort((a, b) => a.label.localeCompare(b.label));
 }
 
 // List workflows + their tokens (so the UI can render controls).
 app.get("/api/workflows", (req, res) => {
-  const list = listWorkflowFiles().map((file) => {
+  const list = listWorkflowFiles().map(({ file, label }) => {
+    const name = label.replace(/\.json$/i, "");
     try {
       const text = fs.readFileSync(workflowPath(file), "utf8");
       JSON.parse(text); // validate it's JSON (tokens are valid JSON strings)
-      return { file, name: file.replace(/\.json$/i, ""), tokens: parseWorkflowTokens(text) };
+      return { file, name, tokens: parseWorkflowTokens(text) };
     } catch (err) {
-      return { file, name: file.replace(/\.json$/i, ""), tokens: [], error: err.message };
+      return { file, name, tokens: [], error: err.message };
     }
   });
   res.json({ code: 200, msg: "success", data: list });
