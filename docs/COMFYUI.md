@@ -29,93 +29,26 @@ Replace any value in the workflow JSON with a token to expose it as a control:
 
 ```jsonc
 "129": { "inputs": { "noise_seed": "{{seed=14}}" } },      // number, default 14
-"132": { "inputs": { "value": "{{duration=25}}" } },       // number, default 25
 "138": { "inputs": { "value": "{{prompt}}" } },            // big text box
-"137": { "inputs": { "image": "{{first_frame}}" } }        // image upload
+"137": { "inputs": { "image": "{{first_frame}}" } },       // image upload
+"12":  { "inputs": { "sampler_name": "{{sampler}}" } }     // dropdown from ComfyUI
 ```
 
-Grammar: `{{ name }}`, `{{ name=default }}`, or `{{ name=default|opt1|opt2 }}`.
+The grammar is `{{ name = default | opt | opt ; width ; #order }}`, and GENie picks
+each control automatically from the token name, its options, and what ComfyUI reports
+for that node input. In brief:
 
-Dropdown options can be plain values, or **`Label=value`** to show a friendly label
-while writing a different value — handy for on/off toggles:
+- **Type is preserved** for a whole-value token (a number stays a number); embedded
+  tokens interpolate as text.
+- The **same name** on multiple nodes renders one control and fills them all.
+- **`=default`** bakes a starting value; your last-used settings (saved per workflow
+  under `settings/comfy/<name>.json`) override it — delete that file to reset.
+- **Layout hints** `; 1/2` … `; full` (width) and `; #N` (order) arrange the grid.
 
-```jsonc
-// strength 1 = on, 0 = off; the dropdown shows "Enabled" / "Disabled"
-"20": { "inputs": { "strength_model": "{{extra_lora=1|Enabled=1|Disabled=0}}" } },
-"124": { "inputs": { "steps": "{{steps=8}}" } }
-```
-
-If every option value is a number, the dropdown sends a number (so a `strength_model`
-of `0` stays numeric, not `"0"`).
-
-- The **same token name** can appear in multiple nodes — it renders one control and
-  fills every occurrence.
-- If a token is the **entire** value, its type is preserved (a number stays a
-  number in the JSON). Tokens embedded in a longer string interpolate as text.
-
-### Control inference
-
-The control is chosen from the token, in this order:
-
-| Rule | Control |
-| --- | --- |
-| Has inline options `\|a\|b` | dropdown |
-| Name contains `prompt` | multi-line text box |
-| Name contains `audio` | audio upload (checked before video, so `ref_video_audio` reads as audio) |
-| Name contains `video` | video upload |
-| Name contains `image` / `img` / `frame` / `photo` / `picture` | image upload |
-| ComfyUI reports the field as a **combo** (checkpoint, LoRA, VAE, `sampler_name`, `scheduler`, …) | dropdown of the installed choices (from `/object_info`) |
-| ComfyUI reports the field as **FLOAT/INT** | number box using the field's min/max/step |
-| Name contains a numeric hint (`seed`, `steps`, `cfg`, `width`, `height`, `length`, `duration`, `fps`, `frames`, `count`, `denoise`, `strength`, `scale`, `megapixel`, `batch`) **or** the default is a number | number box (a `seed` box also gets a 🎲 and a **control-after-generate** dropdown) |
-| otherwise | single-line text box |
-
-Media vs. combo is decided by the node **input**, not the token name: an
-*uploadable* input (`LoadImage.image`, `VHS_LoadVideo.video`, `VHS_LoadAudioUpload.audio`)
-gets the upload dropzone, while a model-file selector (`vae_name`, `ckpt_name`,
-`unet_name`, `lora_name`, `clip_name`, …) gets the installed-file dropdown — so a
-token named `video_vae` on a `vae_name` input is correctly a VAE picker, not a video
-upload.
-
-Image / video / audio controls all save dropped files to the project gallery and
-offer **Pick from gallery**; the chosen file is uploaded to ComfyUI at generate
-time and included in exports.
-
-**Seed — control after generate.** Any number token whose name contains `seed`
-gets a `fixed / increment / decrement / randomize` dropdown next to it (like
-ComfyUI's seed widget). After you queue a run, the seed advances per that setting
-so the next run differs (or stays fixed). The 🎲 randomizes it immediately. The
-mode itself is part of last-used settings, so it's remembered per workflow.
-
-**Defaults.** A token's `=default` sets the starting value in the JSON — the way to
-bake in a default (e.g. `{{steps=8}}`). On top of that, the form **remembers your
-last-used settings per workflow** — control values, the media files you picked (by
-gallery reference), the seed's fixed/increment/randomize mode, and your LoRA list.
-These are saved **server-side** (see [Per-workflow settings](#per-workflow-settings))
-so they're shared across devices, and they override the token defaults. Delete the
-workflow's `settings/comfy/<name>.json` to reset.
-
-**Layout hints.** Controls render in a 12-column grid. A token can carry trailing
-`;`-separated hints to control its layout — they're ignored when the value is sent:
-
-- **width**: `; 1/2`, `; 1/3`, `; 1/4`, `; 2/3`, `; 3/4`, `; full` — the column span.
-  Untagged controls, the prompt, and reference-file dropzones always span full width.
-- **order**: `; #N` — sort position (ascending). Tokens without one keep their
-  scan order, after any explicitly-ordered ones.
-
-```jsonc
-// half-width, shown first
-"115": { "inputs": { "aspect_ratio": "{{aspect_ratio=3:4 (Portrait Standard)|... ; 1/2 ; #1}}" } },
-// quarter-width, shown eighth
-"20": { "inputs": { "strength_model": "{{extra_lora=1|Enabled=1|Disabled=0 ; 1/4 ; #8}}" } }
-```
-
-To force a dropdown for something like an aspect-ratio node, list the exact strings
-the node accepts:
-
-```jsonc
-"115": { "inputs": { "aspect_ratio":
-  "{{aspect_ratio=3:4 (Portrait Standard)|16:9 (Landscape Standard)|1:1 (Square)}}" } }
-```
+> 📖 **Full authoring reference:** [workflows/tokens.md](workflows/tokens.md) — the
+> complete `{{token}}` guide (grammar, the control-inference rules, media series,
+> forcing dropdowns, the worked example, and gotchas) for anyone writing their own
+> workflows. The rest of this page covers the surrounding behavior.
 
 ## Models, LoRAs, VAEs & samplers (from ComfyUI)
 

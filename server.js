@@ -39,8 +39,13 @@ const PROJECTS_FILE = path.join(__dirname, "projects.json");
 // Point at a running ComfyUI instance to run local workflows from the UI.
 // WORKFLOWS_DIR holds ComfyUI API-format .json exports, optionally tokenized
 // with {{name=default|opt|opt}} placeholders. See docs/COMFYUI.md.
+// Workflows load from two places: WORKFLOWS_DIR itself (the user's custom
+// workflows) and its `default/` subfolder (the ones GENie ships). A custom file
+// overrides a shipped default of the same name; both are addressed by bare
+// filename everywhere else (generate, meta, settings).
 const COMFYUI_URL = (process.env.COMFYUI_URL || "http://127.0.0.1:8188").replace(/\/+$/, "");
 const WORKFLOWS_DIR = path.resolve(__dirname, process.env.WORKFLOWS_DIR || "workflows");
+const WORKFLOWS_DEFAULT_DIR = path.join(WORKFLOWS_DIR, "default");
 // Per-workflow config (chosen model/LoRA/VAE/sampler + the dynamic LoRA list),
 // stored server-side so it's shared across devices (incl. the phone over LAN).
 const COMFY_SETTINGS_DIR = path.resolve(__dirname, process.env.COMFY_SETTINGS_DIR || "settings/comfy");
@@ -471,27 +476,41 @@ function substituteWorkflow(node, values) {
   return node;
 }
 
-// Resolve a workflow filename to a path inside WORKFLOWS_DIR (no traversal).
+// Resolve a bare workflow filename to its file path. A custom workflow in
+// WORKFLOWS_DIR takes precedence over a shipped one of the same name in
+// `default/`. Only a plain filename (no traversal) ending in .json is accepted.
 function workflowPath(file) {
   if (!file || typeof file !== "string") return null;
-  const resolved = path.resolve(WORKFLOWS_DIR, file);
-  const base = path.resolve(WORKFLOWS_DIR);
-  if (resolved !== base && !resolved.startsWith(base + path.sep)) return null;
-  if (!resolved.toLowerCase().endsWith(".json")) return null;
-  return resolved;
+  if (file !== path.basename(file)) return null; // basename only — no traversal
+  if (!file.toLowerCase().endsWith(".json")) return null;
+  const custom = path.join(WORKFLOWS_DIR, file);
+  if (fs.existsSync(custom)) return custom;
+  const shipped = path.join(WORKFLOWS_DEFAULT_DIR, file);
+  if (fs.existsSync(shipped)) return shipped;
+  return null;
+}
+
+// The .json workflow filenames available, custom (WORKFLOWS_DIR) overriding shipped
+// (default/) by name. Returns bare filenames; workflowPath() resolves each to disk.
+function listWorkflowFiles() {
+  const jsonIn = (dir) => {
+    try {
+      return fs.readdirSync(dir).filter((f) => f.toLowerCase().endsWith(".json"));
+    } catch {
+      return []; // dir missing — treated as empty
+    }
+  };
+  const custom = jsonIn(WORKFLOWS_DIR);
+  const taken = new Set(custom.map((f) => f.toLowerCase()));
+  const shipped = jsonIn(WORKFLOWS_DEFAULT_DIR).filter((f) => !taken.has(f.toLowerCase()));
+  return [...custom, ...shipped].sort();
 }
 
 // List workflows + their tokens (so the UI can render controls).
 app.get("/api/workflows", (req, res) => {
-  let files = [];
-  try {
-    files = fs.readdirSync(WORKFLOWS_DIR).filter((f) => f.toLowerCase().endsWith(".json"));
-  } catch {
-    /* dir missing — treated as empty */
-  }
-  const list = files.sort().map((file) => {
+  const list = listWorkflowFiles().map((file) => {
     try {
-      const text = fs.readFileSync(path.join(WORKFLOWS_DIR, file), "utf8");
+      const text = fs.readFileSync(workflowPath(file), "utf8");
       JSON.parse(text); // validate it's JSON (tokens are valid JSON strings)
       return { file, name: file.replace(/\.json$/i, ""), tokens: parseWorkflowTokens(text) };
     } catch (err) {
