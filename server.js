@@ -1480,6 +1480,26 @@ app.post("/api/open-folder", (req, res) => {
 // --- export the visible history to a shareable, self-contained folder ------
 const isImageOutputModel = (model) => (model || "").includes("-to-image");
 
+// Whether a finished entry's output is an image (vs video). ComfyUI output type
+// isn't in the model id, so read it off the saved file's extension.
+function entryIsImage(entry) {
+  const input = entry.input || {};
+  if ((input.model || "").startsWith("comfy:")) {
+    const out = (entry.localVideo || entry.resultUrl || "").split("?")[0];
+    const fromQuery = /[?&]filename=[^&]*\.(png|jpe?g|webp|gif|bmp)/i.test(entry.resultUrl || "");
+    return fromQuery || /\.(png|jpe?g|webp|gif|bmp)$/i.test(out);
+  }
+  return isImageOutputModel(input.model);
+}
+
+// The tag set for an entry: derived kind (image/video) + the stored draft/hidden.
+function entryTagSet(entry) {
+  const tags = new Set([entryIsImage(entry) ? "image" : "video"]);
+  if (entry.draft) tags.add("draft");
+  if (entry.hidden) tags.add("hidden");
+  return tags;
+}
+
 function escapeHtml(s) {
   return String(s ?? "").replace(
     /[&<>"']/g,
@@ -1623,17 +1643,24 @@ ${cards}
 }
 
 app.post("/api/export", (req, res) => {
-  const { projectId } = req.body || {};
+  const { projectId, excludeTags } = req.body || {};
   // Export is always scoped to a single project — there is no all-projects export.
   if (!projectId || projectId === "all") {
     return res.status(400).json({ code: 400, msg: "Choose a specific project to export." });
   }
   const scope = resolveProject(projectId);
 
+  // Tags to exclude; defaults to hidden. Only finished entries are exportable.
+  const exclude = new Set(Array.isArray(excludeTags) ? excludeTags : ["hidden"]);
   const allHistory = readJson(HISTORY_FILE);
-  const entries = allHistory.filter((e) => (e.projectId || "default") === scope.id);
+  const entries = allHistory.filter((e) => {
+    if ((e.projectId || "default") !== scope.id) return false;
+    if (!(e.localVideo || e.resultUrl)) return false; // skip pending/failed
+    const tags = entryTagSet(e);
+    return ![...exclude].some((t) => tags.has(t)); // drop entries carrying an excluded tag
+  });
   if (!entries.length) {
-    return res.status(400).json({ code: 400, msg: "No history to export for this project." });
+    return res.status(400).json({ code: 400, msg: "No history to export for this project (after tag filters)." });
   }
 
   const imgById = new Map(readJson(IMAGES_FILE).map((i) => [i.id, i]));
@@ -1950,7 +1977,7 @@ async function attachOutputs(entry, urls) {
 }
 
 // Build a history entry object (output fields may be null for a pending entry).
-function makeHistoryEntry({ id, taskId, projectId, input, resultUrl, localVideo, costCredits, refVideoSeconds, imageLocalIds, mediaLocalIds, status, runtimeMs }) {
+function makeHistoryEntry({ id, taskId, projectId, input, resultUrl, localVideo, costCredits, refVideoSeconds, imageLocalIds, mediaLocalIds, status, runtimeMs, draft, hidden }) {
   return {
     id,
     createdAt: new Date().toISOString(),
@@ -1966,6 +1993,11 @@ function makeHistoryEntry({ id, taskId, projectId, input, resultUrl, localVideo,
     status: status || "done",
     // wall time from submit to finished output (ms); null until done
     runtimeMs: typeof runtimeMs === "number" ? runtimeMs : null,
+    // user tags: hidden (excluded from the list + export by default), draft
+    // (auto-set at creation for low-res video, then toggleable). image/video are
+    // derived from the output, not stored.
+    hidden: hidden === true,
+    draft: draft === true,
     // total seconds of reference video inputs (video refs bill by combined duration)
     refVideoSeconds: typeof refVideoSeconds === "number" ? refVideoSeconds : 0,
     imageLocalIds: Array.isArray(imageLocalIds) ? imageLocalIds : [],
@@ -1976,7 +2008,7 @@ function makeHistoryEntry({ id, taskId, projectId, input, resultUrl, localVideo,
 
 // --- save a finished generation to history (+ download the video) -------
 app.post("/api/save", async (req, res) => {
-  const { input, taskId, resultUrl, costCredits, imageLocalIds, mediaLocalIds, projectId, refVideoSeconds, startedAt } =
+  const { input, taskId, resultUrl, costCredits, imageLocalIds, mediaLocalIds, projectId, refVideoSeconds, startedAt, draft } =
     req.body || {};
   if (!resultUrl) return res.status(400).json({ code: 400, msg: "resultUrl is required" });
 
@@ -1986,7 +2018,7 @@ app.post("/api/save", async (req, res) => {
   // No pending entry existed, so runtime comes from the client's job start time.
   const runtimeMs = typeof startedAt === "number" ? Date.now() - startedAt : null;
   const entry = makeHistoryEntry({
-    id, taskId, projectId: proj.id, input, resultUrl, localVideo, costCredits, refVideoSeconds, imageLocalIds, mediaLocalIds, runtimeMs,
+    id, taskId, projectId: proj.id, input, resultUrl, localVideo, costCredits, refVideoSeconds, imageLocalIds, mediaLocalIds, runtimeMs, draft,
   });
   const entries = readJson(HISTORY_FILE);
   entries.unshift(entry);
@@ -2011,7 +2043,7 @@ app.post("/api/history", (req, res) => {
 
 // --- attach the finished output to a pending entry (downloads the file) -------
 app.post("/api/history/:id/result", async (req, res) => {
-  const { resultUrl, resultUrls, costCredits, runtimeMs } = req.body || {};
+  const { resultUrl, resultUrls, costCredits, runtimeMs, draft } = req.body || {};
   const entries = readJson(HISTORY_FILE);
   const entry = entries.find((e) => e.id === req.params.id);
   if (!entry) return res.status(404).json({ code: 404, msg: "history entry not found" });
@@ -2025,6 +2057,7 @@ app.post("/api/history/:id/result", async (req, res) => {
   // A ComfyUI batch can return several files; kie.ai always one.
   const urls = (resultUrls && resultUrls.length ? resultUrls : resultUrl ? [resultUrl] : []).filter(Boolean);
   if (urls.length) await attachOutputs(entry, urls);
+  if (draft === true) entry.draft = true; // auto-draft (low-res video), decided client-side at finish
   if (typeof costCredits === "number") entry.costCredits = costCredits;
   entry.status = "done";
   // Prefer a caller-supplied run time (ComfyUI's real per-prompt execution time);
@@ -2074,6 +2107,18 @@ app.put("/api/history/:id", (req, res) => {
     entry.projectId = proj.id;
     writeJson(HISTORY_FILE, entries);
   }
+  res.json({ code: 200, msg: "updated", data: entry });
+});
+
+// --- toggle an entry's tags (hidden / draft) ------------------------------
+app.post("/api/history/:id/tags", (req, res) => {
+  const { hidden, draft } = req.body || {};
+  const entries = readJson(HISTORY_FILE);
+  const entry = entries.find((e) => e.id === req.params.id);
+  if (!entry) return res.status(404).json({ code: 404, msg: "history entry not found" });
+  if (typeof hidden === "boolean") entry.hidden = hidden;
+  if (typeof draft === "boolean") entry.draft = draft;
+  writeJson(HISTORY_FILE, entries);
   res.json({ code: 200, msg: "updated", data: entry });
 });
 

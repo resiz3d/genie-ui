@@ -31,6 +31,25 @@ const PROJECT_KEY = "seedance_project";
 let projects = [];
 let activeProjectId = localStorage.getItem(PROJECT_KEY) || "default";
 
+// History tag settings (per-browser). showHidden reveals hidden-tagged cards;
+// autoDraftMax auto-tags a finished video at/below that resolution as draft.
+const SHOW_HIDDEN_KEY = "genie_show_hidden";
+const AUTODRAFT_KEY = "genie_autodraft_max";
+let showHidden = localStorage.getItem(SHOW_HIDDEN_KEY) === "1";
+let autoDraftMax = localStorage.getItem(AUTODRAFT_KEY) || "off";
+const RESOLUTION_RANK = { "480p": 1, "720p": 2, "1080p": 3, "4k": 4 };
+
+// Whether a finishing generation should be auto-tagged draft: a kie.ai video whose
+// resolution is at or below the threshold. Images and ComfyUI runs (no resolution
+// field) are never auto-drafted.
+function autoDraftFor(input) {
+  if (autoDraftMax === "off") return false;
+  const model = input?.model || "";
+  if (model.startsWith("comfy:") || isImageOutput(model)) return false;
+  const rank = RESOLUTION_RANK[input?.resolution];
+  return !!rank && rank <= (RESOLUTION_RANK[autoDraftMax] || 0);
+}
+
 const POLL_INTERVAL_MS = 5000;
 
 // Persisted in-flight tasks so a tab reload can resume polling instead of losing
@@ -666,6 +685,39 @@ historyFilter.addEventListener("change", () => {
   renderHistory(historyEntries);
 });
 
+// History tag controls: reveal hidden cards, and the low-res-video → draft threshold.
+const showHiddenEl = document.getElementById("showHidden");
+const autoDraftMaxEl = document.getElementById("autoDraftMax");
+showHiddenEl.checked = showHidden;
+autoDraftMaxEl.value = autoDraftMax;
+showHiddenEl.addEventListener("change", () => {
+  showHidden = showHiddenEl.checked;
+  localStorage.setItem(SHOW_HIDDEN_KEY, showHidden ? "1" : "0");
+  historyPage = 1;
+  renderHistory(historyEntries);
+});
+autoDraftMaxEl.addEventListener("change", () => {
+  autoDraftMax = autoDraftMaxEl.value;
+  localStorage.setItem(AUTODRAFT_KEY, autoDraftMax);
+});
+
+// Toggle a history entry's tag (hidden/draft) and refresh.
+async function toggleHistoryTag(entry, tag) {
+  const next = !entry[tag];
+  try {
+    const res = await fetch(`/api/history/${entry.id}/tags`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ [tag]: next }),
+    });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).msg || "Update failed");
+    entry[tag] = next; // keep local copy in sync before re-render
+    renderHistory(historyEntries);
+  } catch (err) {
+    alert(err.message || String(err));
+  }
+}
+
 // open the output folder matching the history filter (all → video/ root)
 document.getElementById("openFolder").addEventListener("click", async () => {
   try {
@@ -680,15 +732,41 @@ document.getElementById("openFolder").addEventListener("click", async () => {
   }
 });
 
-// Export the currently-filtered history to a shareable, self-contained folder.
-document.getElementById("exportHistory").addEventListener("click", async () => {
-  const btn = document.getElementById("exportHistory");
+// Export opens a modal to choose which tags exclude a card (hidden pre-checked).
+const exportModal = document.getElementById("exportModal");
+const exportExcludeTags = document.getElementById("exportExcludeTags");
+document.getElementById("exportHistory").addEventListener("click", () => {
   // Export is per-project — the History filter must be on a specific project.
   const projectId = historyFilter.value;
   if (!projectId || projectId === "all") {
     alert('Pick a specific project in the History filter to export (the "All projects" view can\'t be exported).');
     return;
   }
+  const opts = [
+    { tag: "hidden", label: "Hidden", checked: true },
+    { tag: "draft", label: "Draft", checked: false },
+    { tag: "video", label: "Videos", checked: false },
+    { tag: "image", label: "Images", checked: false },
+  ];
+  exportExcludeTags.innerHTML = "";
+  for (const o of opts) {
+    const lbl = document.createElement("label");
+    lbl.className = "inline";
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.value = o.tag;
+    cb.checked = o.checked;
+    lbl.append(cb, document.createTextNode(` ${o.label}`));
+    exportExcludeTags.appendChild(lbl);
+  }
+  show(exportModal);
+});
+document.getElementById("exportCancel").addEventListener("click", () => hide(exportModal));
+exportModal.addEventListener("click", (e) => { if (e.target === exportModal) hide(exportModal); });
+document.getElementById("exportConfirm").addEventListener("click", async () => {
+  const projectId = historyFilter.value;
+  const excludeTags = [...exportExcludeTags.querySelectorAll("input:checked")].map((c) => c.value);
+  const btn = document.getElementById("exportConfirm");
   const original = btn.innerHTML;
   btn.disabled = true;
   btn.textContent = "Exporting…";
@@ -696,10 +774,11 @@ document.getElementById("exportHistory").addEventListener("click", async () => {
     const res = await fetch("/api/export", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ projectId }),
+      body: JSON.stringify({ projectId, excludeTags }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.msg || "Export failed");
+    hide(exportModal);
     alert(
       `Exported ${data.data.entries} generation(s) (${data.data.filesCopied} files) to:\n\n` +
         `${data.data.path}\n\n` +
@@ -2766,13 +2845,14 @@ async function createHistoryEntry(input, taskId, mediaLocalIds, projectId, refSe
 async function attachHistoryResult(job, result, costCredits, runtimeMs) {
   const resultUrls = Array.isArray(result) ? result : [result].filter(Boolean);
   const resultUrl = resultUrls[0] || null;
+  const draft = autoDraftFor(job.input); // low-res video → draft (once, at finish)
   try {
     let entry = null;
     if (job.historyId) {
       const r = await fetch(`/api/history/${job.historyId}/result`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ resultUrls, resultUrl, costCredits, runtimeMs }),
+        body: JSON.stringify({ resultUrls, resultUrl, costCredits, runtimeMs, draft }),
       });
       entry = (await r.json().catch(() => ({})))?.data;
     } else {
@@ -2784,6 +2864,7 @@ async function attachHistoryResult(job, result, costCredits, runtimeMs) {
           taskId: job.taskId,
           resultUrl,
           costCredits,
+          draft,
           mediaLocalIds: job.mediaLocalIds,
           refVideoSeconds: typeof job.refSecs === "number" ? job.refSecs : 0,
           projectId: job.projectId || activeProjectId,
@@ -2815,9 +2896,26 @@ async function loadHistory() {
 
 // The history entries the current filter keeps, in display order — shared by
 // the rendered list and the lightbox's ‹ › navigation so they stay in sync.
+// Hidden-tagged entries are dropped unless "Show hidden" is on.
 function filterHistory(entries) {
   const filter = historyFilter.value || "all";
-  return filter === "all" ? entries : entries.filter((e) => (e.projectId || "default") === filter);
+  const byProject = filter === "all" ? entries : entries.filter((e) => (e.projectId || "default") === filter);
+  return showHidden ? byProject : byProject.filter((e) => !e.hidden);
+}
+
+// A history entry's tags: derived kind (image/video, only once there's an output)
+// + the stored draft/hidden.
+function entryTags(entry) {
+  const tags = [];
+  const src = entry.localVideo || entry.resultUrl || "";
+  if (src) {
+    const input = entry.input || {};
+    const isImg = (input.model || "").startsWith("comfy:") ? isImageFile(src) : isImageOutput(input.model);
+    tags.push(isImg ? "image" : "video");
+  }
+  if (entry.draft) tags.push("draft");
+  if (entry.hidden) tags.push("hidden");
+  return tags;
 }
 
 // True if a saved-output URL/path points at a still image (used for ComfyUI,
@@ -3402,8 +3500,38 @@ function renderHistory(entries) {
     });
     actions.appendChild(del);
 
-    // Right column: buttons on top, then the Settings dropdown, then the timestamp,
+    // Hidden (eyeball) and draft toggles — tags kept on the entry either way.
+    const hideBtn = document.createElement("button");
+    hideBtn.type = "button";
+    hideBtn.className = "btn-secondary hist-tag-toggle" + (entry.hidden ? " active" : "");
+    hideBtn.innerHTML = entry.hidden ? "🙈 Hidden" : "👁 Hide";
+    hideBtn.title = entry.hidden
+      ? "Un-hide this card"
+      : "Hide this card (kept in history, excluded from export by default)";
+    hideBtn.addEventListener("click", () => toggleHistoryTag(entry, "hidden"));
+    actions.appendChild(hideBtn);
+
+    const draftBtn = document.createElement("button");
+    draftBtn.type = "button";
+    draftBtn.className = "btn-secondary hist-tag-toggle" + (entry.draft ? " active" : "");
+    draftBtn.innerHTML = "📝 Draft";
+    draftBtn.title = entry.draft ? "Remove the draft tag" : "Tag this as a draft";
+    draftBtn.addEventListener("click", () => toggleHistoryTag(entry, "draft"));
+    actions.appendChild(draftBtn);
+
+    // Tag chips (kind + draft/hidden), shown at the top of the card body.
+    const tagsRow = document.createElement("div");
+    tagsRow.className = "hist-tags";
+    for (const t of entryTags(entry)) {
+      const chip = document.createElement("span");
+      chip.className = `hist-tag hist-tag-${t}`;
+      chip.textContent = t;
+      tagsRow.appendChild(chip);
+    }
+
+    // Right column: tag chips, buttons, the Settings dropdown, then the timestamp,
     // separated by 2em gaps (see .hist-body spacing).
+    if (tagsRow.childElementCount) body.appendChild(tagsRow);
     body.appendChild(actions);
     body.appendChild(buildHistDetails(entry, input, comfyEntry, isImg));
     body.appendChild(meta);

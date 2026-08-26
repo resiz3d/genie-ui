@@ -1556,3 +1556,72 @@ img.zoomable {
   border-color: var(--error);
   color: #fff;
 }
+
+/* --- History tags, toggles, and the export modal --- */
+.hist-toggle {
+  font-size: 0.8rem;
+  gap: 0.3rem;
+}
+.hist-toggle select {
+  padding: 0.25rem 0.4rem;
+  font-size: 0.8rem;
+}
+
+/* Tag chips shown at the top of a history card. */
+.hist-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+.hist-tag {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+.hist-tag-image { color: #6cc4ff; border-color: #35617d; }
+.hist-tag-video { color: #b79cff; border-color: #574d7d; }
+.hist-tag-draft { color: #ffce6c; border-color: #7d6a35; }
+.hist-tag-hidden { color: var(--muted); }
+
+/* Active state for the hide / draft toggle buttons. */
+.hist-tag-toggle.active {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+/* Modal (export options). */
+.modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  padding: 1rem;
+}
+.modal-box {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1.25rem 1.5rem;
+  width: min(360px, 92vw);
+}
+.modal-box h3 {
+  margin: 0 0 0.25rem;
+}
+.modal-tags {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin: 0.75rem 0 1.25rem;
+}
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
