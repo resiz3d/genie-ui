@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="GENie.png" alt="GENie" width="300" />
+</p>
+
 # GENie
 
 *Your wish, rendered.* A tiny local web app for generating images and video from
