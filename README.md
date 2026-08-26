@@ -1,25 +1,30 @@
-# Seedance 2 App
+# GENie
 
-A tiny web app for generating with [kie.ai](https://kie.ai) models, switchable per
-generation: **Seedance 2.5** / **Seedance 2** / **Seedance 2 Fast** / **Seedance 2
-Mini** (video; 2.5, Fast and Mini are 480p/720p only — 2.5 adds start/end keyframes,
-an adaptive aspect ratio, up to 30s duration, and mp4/mov output)
-and **Seedream 5.0 Lite** image-to-image / text-to-image (the form adapts: quality
-tier instead of resolution/duration, image references only — or none at all for
-text-to-image — and results display as images).
+*Your wish, rendered.* A tiny local web app for generating images and video from
+both **cloud models** and **your own local ComfyUI**, all from one UI — pick the
+model per generation and the form adapts to it.
+
+**Cloud models** via [kie.ai](https://kie.ai): **Seedance 2.5** / **Seedance 2** /
+**Seedance 2 Fast** / **Seedance 2 Mini** (video; 2.5, Fast and Mini are 480p/720p
+only — 2.5 adds start/end keyframes, an adaptive aspect ratio, up to 30s duration,
+and mp4/mov output) and **Seedream 5.0 Lite** image-to-image / text-to-image (the
+form adapts: quality tier instead of resolution/duration, image references only —
+or none at all for text-to-image — and results display as images).
+
+**Local ComfyUI:** run tokenized `.json` workflows from the same Model dropdown —
+drop them in `workflows/` and pick them like any other model. See
+[`docs/COMFYUI.md`](docs/COMFYUI.md).
+
 A small Express server keeps your API key on the server side (never exposed to the
-browser) and proxies requests to the kie.ai API. A single-page UI lets you submit a
-prompt + reference media, then polls until the video is ready.
+browser) and proxies requests to the kie.ai API; local ComfyUI runs talk to your
+own ComfyUI instance. A single-page UI lets you submit a prompt + reference media,
+then polls until the result is ready.
 
-![Screenshot of the Seedance app](screenshot.png)
+![Screenshot of GENie](screenshot.png)
 
 > **API reference:** local copies of the kie.ai model docs (parameters per model,
 > shared endpoints, and known discrepancies) live in
 > [`docs/kie-api/`](docs/kie-api/README.md) so you don't have to re-check the web.
->
-> **Local ComfyUI:** you can also run local ComfyUI workflows from the same UI —
-> drop tokenized `.json` workflows in `workflows/` and pick them from the Model
-> dropdown. See [`docs/COMFYUI.md`](docs/COMFYUI.md).
 
 ## Features
 

@@ -1,8 +1,8 @@
-# Installing the Seedance App (Beginner's Guide)
+# Installing GENie (Beginner's Guide)
 
 This guide assumes you've never used git, Node, or a terminal. Follow it top to
-bottom and you'll be generating videos in about 10 minutes. Windows steps first;
-Mac steps are at the bottom.
+bottom and you'll be generating images and video in about 10 minutes. Windows steps
+first; Mac steps are at the bottom.
 
 There are only four real steps:
 
@@ -99,7 +99,7 @@ In the terminal:
 npm start
 ```
 
-You'll see `Seedance app running: http://localhost:3000`. Open your web browser
+You'll see `GENie running: http://localhost:3000`. Open your web browser
 and go to:
 
 **<http://localhost:3000>**
