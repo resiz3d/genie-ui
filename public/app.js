@@ -131,7 +131,7 @@ function stepLightbox(delta) {
   const i = lightboxNav.index + delta;
   if (i < 0 || i >= lightboxNav.items.length) return;
   lightboxNav.index = i;
-  const m = historyItemMedia(lightboxNav.items[i]);
+  const m = lightboxNav.items[i]; // {kind, src, name} — one output
   renderLightboxMedia(m.kind, m.src, m.name);
   updateLightboxNav();
 }
@@ -2202,10 +2202,10 @@ async function pollComfyJob(job) {
   if (state === "success") {
     removeInflight(job.taskId);
     finishLive(job);
-    const url = JSON.parse(data.data.resultJson || "{}").resultUrls?.[0];
-    if (!url) return failJob(job, "Finished, but ComfyUI returned no output file.");
-    // Pass ComfyUI's real per-prompt run time so queued items aren't over-counted.
-    await attachHistoryResult(job, url, null, data.data.runtimeMs); // downloads, marks done, refreshes History
+    const urls = JSON.parse(data.data.resultJson || "{}").resultUrls || [];
+    if (!urls.length) return failJob(job, "Finished, but ComfyUI returned no output file.");
+    // Pass every output (a batch can be several) and ComfyUI's real per-prompt run time.
+    await attachHistoryResult(job, urls, null, data.data.runtimeMs); // downloads, marks done, refreshes History
     return;
   }
   if (state === "fail") {
@@ -2640,14 +2640,18 @@ async function createHistoryEntry(input, taskId, mediaLocalIds, projectId, refSe
 // Returns the saved local file path (/video/…) so callers can preview the
 // downloaded copy instead of the source URL (ComfyUI's /view URL doesn't render a
 // reliable inline poster; the local file does).
-async function attachHistoryResult(job, resultUrl, costCredits, runtimeMs) {
+// `result` is one URL (kie.ai) or an array of URLs (a ComfyUI batch can return
+// several files). All are downloaded server-side; the first mirrors resultUrl.
+async function attachHistoryResult(job, result, costCredits, runtimeMs) {
+  const resultUrls = Array.isArray(result) ? result : [result].filter(Boolean);
+  const resultUrl = resultUrls[0] || null;
   try {
     let entry = null;
     if (job.historyId) {
       const r = await fetch(`/api/history/${job.historyId}/result`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ resultUrl, costCredits, runtimeMs }),
+        body: JSON.stringify({ resultUrls, resultUrl, costCredits, runtimeMs }),
       });
       entry = (await r.json().catch(() => ({})))?.data;
     } else {
@@ -2710,22 +2714,50 @@ const isImageFile = (u) => {
   return /\.(png|jpe?g|webp|gif|bmp)(\?|$)/i.test(name);
 };
 
-// kind/src/name for opening a history entry in the lightbox.
-function historyItemMedia(entry) {
+// A history entry's outputs as [{ resultUrl, localVideo }]. Newer entries carry an
+// `outputs` array (a batch can be several); older/kie entries have the single
+// resultUrl/localVideo, normalized here to a one-item list.
+function entryOutputs(entry) {
+  if (entry.outputs && entry.outputs.length) return entry.outputs;
+  if (entry.localVideo || entry.resultUrl) return [{ resultUrl: entry.resultUrl, localVideo: entry.localVideo }];
+  return [];
+}
+
+// kind/src/name for one output of an entry (for the lightbox / thumbnails).
+function outputMedia(entry, out, index, total) {
   const input = entry.input || {};
-  const src = entry.localVideo || entry.resultUrl; // localVideo is the saved output file
+  const src = out.localVideo || out.resultUrl; // localVideo is the saved output file
   const kind = (input.model || "").startsWith("comfy:")
     ? isImageFile(src) ? "image" : "video"
     : isImageOutput(input.model) ? "image" : "video";
-  return { kind, src, name: input.prompt };
+  const name = total > 1 ? `${input.prompt || ""} (${index + 1}/${total})` : input.prompt;
+  return { kind, src, name };
 }
 
-// Open a history entry full-size, with arrow navigation across the visible list.
-function openHistoryLightbox(entry) {
-  const items = filterHistory(historyEntries);
-  const index = items.findIndex((e) => e.id === entry.id);
-  const m = historyItemMedia(entry);
-  openLightbox(m.kind, m.src, m.name, index >= 0 ? { items, index } : null);
+// Every output of every visible history entry, flattened — so the lightbox arrows
+// step through all of them (including each image of a batch), not just one per entry.
+function flattenHistoryOutputs() {
+  const items = [];
+  for (const entry of filterHistory(historyEntries)) {
+    const outs = entryOutputs(entry);
+    outs.forEach((o, i) => {
+      const m = outputMedia(entry, o, i, outs.length);
+      if (m.src) items.push(m);
+    });
+  }
+  return items;
+}
+
+// Open one output full-size, with arrow navigation across every visible output.
+function openHistoryLightbox(entry, outIndex = 0) {
+  const outs = entryOutputs(entry);
+  const target = outs[outIndex] || outs[0];
+  if (!target) return;
+  const m = outputMedia(entry, target, outIndex, outs.length);
+  const items = flattenHistoryOutputs();
+  let index = items.findIndex((it) => it.src === m.src);
+  if (index < 0) index = 0;
+  openLightbox(items[index].kind, items[index].src, items[index].name, { items, index });
 }
 
 // Human-readable spend category for a model id, used in the per-project credit
@@ -3053,23 +3085,37 @@ function renderHistory(entries) {
     } else {
       // History always shows a thumbnail — a <video preload="metadata"> renders the
       // first frame without downloading the whole file. The media is wrapped in a
-      // fixed-width thumb so the flex row can't stretch it to the card's height.
+      // fixed-width thumb so the flex row can't stretch it to the card's height. A
+      // run that produced several outputs (a batch) shows them all in a grid.
+      const outs = entryOutputs(entry);
       const thumb = document.createElement("div");
-      thumb.className = "hist-thumb";
-      if (isImg) {
-        const im = document.createElement("img");
-        im.src = output; // localVideo holds the saved output file
-        im.className = "hist-img zoomable";
-        im.loading = "lazy";
-        im.addEventListener("click", () => openHistoryLightbox(entry)); // full-size, with ‹ › nav
-        thumb.appendChild(im);
-      } else {
-        const vid = document.createElement("video");
-        vid.src = output;
-        vid.controls = true;
-        vid.preload = "metadata";
-        thumb.appendChild(vid);
-      }
+      thumb.className = "hist-thumb" + (outs.length > 1 ? " hist-thumb-grid" : "");
+      outs.forEach((o, i) => {
+        const src = o.localVideo || o.resultUrl;
+        if (!src) return;
+        const oIsImg = comfyEntry ? isImageFile(src) : isImageOutput(input.model);
+        if (oIsImg) {
+          const im = document.createElement("img");
+          im.src = src;
+          im.className = "hist-img zoomable";
+          im.loading = "lazy";
+          im.addEventListener("click", () => openHistoryLightbox(entry, i)); // full-size, with ‹ › nav
+          thumb.appendChild(im);
+        } else {
+          const vid = document.createElement("video");
+          vid.src = src;
+          vid.preload = "metadata";
+          if (outs.length > 1) {
+            // In a grid, each video is a click-to-open thumb (controls live in the lightbox).
+            vid.muted = true;
+            vid.classList.add("zoomable");
+            vid.addEventListener("click", () => openHistoryLightbox(entry, i));
+          } else {
+            vid.controls = true; // a lone video plays inline as before
+          }
+          thumb.appendChild(vid);
+        }
+      });
       card.appendChild(thumb);
     }
 

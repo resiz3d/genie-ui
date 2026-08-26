@@ -1361,14 +1361,13 @@ let comfyWatchBusy = false;
 
 // Finish one pending entry: download its output (→ done) or mark it failed. Re-reads
 // history so it no-ops if the browser already finished the same entry.
-async function finalizePendingComfy(id, { resultUrl, fail, runtimeMs }) {
+async function finalizePendingComfy(id, { resultUrls, resultUrl, fail, runtimeMs }) {
   const entries = readJson(HISTORY_FILE);
   const entry = entries.find((e) => e.id === id);
   if (!entry || entry.status !== "pending") return; // already finished elsewhere
-  if (resultUrl) {
-    entry.resultUrl = resultUrl;
-    const localVideo = await downloadOutput(resultUrl, resolveProject(entry.projectId), entry.id);
-    if (localVideo) entry.localVideo = localVideo;
+  const urls = (resultUrls && resultUrls.length ? resultUrls : resultUrl ? [resultUrl] : []).filter(Boolean);
+  if (urls.length) {
+    await attachOutputs(entry, urls); // downloads every output (a batch can be several)
     entry.status = "done";
     // Prefer ComfyUI's own per-prompt execution time; fall back to since-created only
     // when it's unavailable (older ComfyUI / missing timestamps).
@@ -1409,7 +1408,7 @@ async function sweepPendingComfy() {
           await finalizePendingComfy(entry.id, { fail: formatComfyExecError(h) });
         } else {
           const urls = collectComfyOutputs(h);
-          if (urls.length) await finalizePendingComfy(entry.id, { resultUrl: urls[0], runtimeMs: comfyExecRuntime(h) });
+          if (urls.length) await finalizePendingComfy(entry.id, { resultUrls: urls, runtimeMs: comfyExecRuntime(h) });
           // in history but no outputs yet → still running; leave pending
         }
         continue;
@@ -1909,7 +1908,7 @@ app.delete("/api/images/:id", (req, res) => {
 
 // Download a finished result into a project's video folder; returns the served
 // /video/... path, or null on failure.
-async function downloadOutput(resultUrl, proj, id) {
+async function downloadOutput(resultUrl, proj, id, suffix = "") {
   try {
     const r = await fetch(resultUrl);
     if (!r.ok) return null;
@@ -1922,7 +1921,7 @@ async function downloadOutput(resultUrl, proj, id) {
       /* non-URL resultUrl — fall back to the path */
     }
     const ext = (fnameHint.match(/\.(\w+)$/)?.[1] || "mp4").toLowerCase();
-    const fileName = `${id}.${ext}`;
+    const fileName = `${id}${suffix}.${ext}`;
     const buf = Buffer.from(await r.arrayBuffer());
     fs.mkdirSync(path.join(OUTPUT_DIR, proj.slug), { recursive: true });
     fs.writeFileSync(path.join(OUTPUT_DIR, proj.slug, fileName), buf);
@@ -1931,6 +1930,23 @@ async function downloadOutput(resultUrl, proj, id) {
     console.error("Failed to download output:", err);
     return null;
   }
+}
+
+// Download every output of a finished run and attach them to the entry. A run can
+// produce several files (e.g. a batch of images), so we keep them all in `outputs`
+// [{ resultUrl, localVideo }]; resultUrl/localVideo mirror the first for back-compat
+// (exports, older single-output entries, and the kie.ai path all read those).
+async function attachOutputs(entry, urls) {
+  const proj = resolveProject(entry.projectId);
+  const outputs = [];
+  for (let i = 0; i < urls.length; i++) {
+    const suffix = urls.length > 1 ? `-${i}` : ""; // single output keeps the plain <id>.<ext>
+    const localVideo = await downloadOutput(urls[i], proj, entry.id, suffix);
+    outputs.push({ resultUrl: urls[i], localVideo: localVideo || null });
+  }
+  entry.outputs = outputs;
+  entry.resultUrl = urls[0] || null;
+  entry.localVideo = outputs[0]?.localVideo || null;
 }
 
 // Build a history entry object (output fields may be null for a pending entry).
@@ -1943,6 +1959,9 @@ function makeHistoryEntry({ id, taskId, projectId, input, resultUrl, localVideo,
     input: input || {},
     resultUrl: resultUrl || null,
     localVideo: localVideo || null,
+    // All outputs of the run [{ resultUrl, localVideo }] — a batch yields several;
+    // resultUrl/localVideo above mirror the first. Empty until the run finishes.
+    outputs: resultUrl ? [{ resultUrl, localVideo: localVideo || null }] : [],
     costCredits: typeof costCredits === "number" ? costCredits : null,
     status: status || "done",
     // wall time from submit to finished output (ms); null until done
@@ -1992,7 +2011,7 @@ app.post("/api/history", (req, res) => {
 
 // --- attach the finished output to a pending entry (downloads the file) -------
 app.post("/api/history/:id/result", async (req, res) => {
-  const { resultUrl, costCredits, runtimeMs } = req.body || {};
+  const { resultUrl, resultUrls, costCredits, runtimeMs } = req.body || {};
   const entries = readJson(HISTORY_FILE);
   const entry = entries.find((e) => e.id === req.params.id);
   if (!entry) return res.status(404).json({ code: 404, msg: "history entry not found" });
@@ -2003,11 +2022,9 @@ app.post("/api/history/:id/result", async (req, res) => {
     return res.json({ code: 200, msg: "already-done", data: entry });
   }
 
-  if (resultUrl) {
-    entry.resultUrl = resultUrl;
-    const localVideo = await downloadOutput(resultUrl, resolveProject(entry.projectId), entry.id);
-    if (localVideo) entry.localVideo = localVideo;
-  }
+  // A ComfyUI batch can return several files; kie.ai always one.
+  const urls = (resultUrls && resultUrls.length ? resultUrls : resultUrl ? [resultUrl] : []).filter(Boolean);
+  if (urls.length) await attachOutputs(entry, urls);
   if (typeof costCredits === "number") entry.costCredits = costCredits;
   entry.status = "done";
   // Prefer a caller-supplied run time (ComfyUI's real per-prompt execution time);

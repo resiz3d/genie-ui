@@ -896,6 +896,20 @@ img.zoomable {
   width: 100%;
   height: auto;
 }
+/* A batch of outputs: 2-up grid of square, cropped thumbs, each click-to-open. */
+.hist-thumb-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 4px;
+}
+.hist-thumb-grid video,
+.hist-thumb-grid .hist-img {
+  aspect-ratio: 1 / 1;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 6px;
+  cursor: pointer;
+}
 .hist-card video {
   width: 200px;
   flex-shrink: 0;
