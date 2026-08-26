@@ -113,7 +113,7 @@ That's it — you're running. 🎬
 - **To stop it:** click the terminal window and press **Ctrl+C** (or just close
   the terminal window)
 - The terminal window must stay open while you use the app. Generated videos
-  are saved in the `video` folder inside the project.
+  are saved in the `output` folder inside the project.
 
 ---
 
@@ -163,7 +163,7 @@ keep your key, media, and history:
 
 - `.env`
 - `history.json`, `images.json`, `projects.json` (whichever exist)
-- the `video` and `images` folders
+- the `output` and `input` folders
 
 Then run `npm install` once in the new folder and `npm start` as usual.
 

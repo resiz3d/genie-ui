@@ -49,14 +49,14 @@ then polls until the result is ready.
   with its prompt, settings, reference URLs, and measured credit cost. Each entry
   has **Re-import** (load the settings back into the form) and **Re-run** (load +
   generate again). Re-runs re-host the saved reference images automatically.
-- **Saved videos** — finished videos are downloaded into the `video/` folder, and
+- **Saved videos** — finished videos are downloaded into the `output/` folder, and
   the history record links to both the local copy and the original URL.
 - **Reload-safe** — the in-flight task id is saved to `localStorage`, so closing or
   reloading the tab mid-generation resumes polling automatically on the next load
   (generations can take 5+ minutes; nothing is held on an open connection).
 - **Projects** — divide generations into projects via the header switcher (＋ new,
-  ✎ rename, 🗑 delete). Each project gets its own `images/<slug>/` and
-  `video/<slug>/` subfolders; the gallery is strictly per-project and history can
+  ✎ rename, 🗑 delete). Each project gets its own `input/<slug>/` and
+  `output/<slug>/` subfolders; the gallery is strictly per-project and history can
   be filtered by project (or All). Re-running another project's generation warns
   before saving the result to the active project. Deleting a project moves its
   media and history to Default. Pre-project data is auto-migrated to Default on
@@ -114,6 +114,16 @@ key's account.
 
 ## Updating to a newer version (complete beginner)
 
+> ⚠️ **One-time step if you have data from before the folder rename.** The data
+> folders were renamed `video → output` and `images → input`. If your copy still
+> has old `video/` / `images/` folders after updating, stop the app and run this
+> once to move them and fix your saved history/gallery links (it backs up the JSON
+> first, and is safe to re-run):
+>
+> ```
+> node migrate-folders.cjs
+> ```
+
 New features and fixes land over time. How you update depends on how you first
 **got** the app. Not sure which you did? If your app folder contains a hidden
 `.git` folder, you cloned it — use the git steps. If you downloaded and unzipped
@@ -124,7 +134,7 @@ Whichever method you use, your personal stuff is always kept:
 - **`.env`** — your API key, password, and any settings
 - **`history.json`, `images.json`, `projects.json`** — your generation history,
   gallery, and projects
-- **the `video` and `images` folders** — your saved videos and reference media
+- **the `output` and `input` folders** — your generated results and reference media
 
 > 💡 Five-second safety net: before updating, make a copy of your whole app
 > folder (right-click → Copy, then Paste) so you can fall back to it if anything
@@ -141,7 +151,7 @@ You're not using git, so you re-download and carry your personal files across:
    what's there when asked:
    - the file `.env`
    - any of `history.json`, `images.json`, `projects.json` that exist
-   - the `video` folder and the `images` folder
+   - the `output` folder and the `input` folder
 
    *(These files are hidden from GitHub on purpose, so the new download won't
    contain them — that's why you copy your own across.)*
@@ -221,11 +231,11 @@ shared password meant for a trusted home network, not per-user accounts.
 | `GET /api/status?taskId=...` | Proxies `recordInfo` so the UI can poll for the result. |
 | `GET /api/credits` | Proxies the account credit balance. |
 | `GET/POST /api/projects`, `PUT/DELETE /api/projects/:id` | Project CRUD; delete moves contents to Default. |
-| `POST /api/upload` | Saves dropped media (image/video/audio) to `images/` locally — no API call. |
+| `POST /api/upload` | Saves dropped media (image/video/audio) to `input/` locally — no API call. |
 | `POST /api/reupload` | Hosts a saved local file (by id) on kie.ai at generate time; returns a fresh URL. |
 | `GET /api/images` | Lists the saved media gallery. |
 | `DELETE /api/images/:id` | Removes an item from the gallery. |
-| `POST /api/save` | Downloads the finished video into `video/` and appends the record (incl. measured cost) to `history.json`. |
+| `POST /api/save` | Downloads the finished video into `output/` and appends the record (incl. measured cost) to `history.json`. |
 | `GET /api/history` | Returns the saved generation history. |
 
 The browser never sees `KIE_API_KEY` — it only talks to this local server.
@@ -238,16 +248,16 @@ public/index.html  UI
 public/style.css   styling
 public/app.js      form handling, image upload, polling, history
 .env.example       template — copy to .env and add your key
-video/<project>/   downloaded result videos (git-ignored, created at runtime)
-images/<project>/  saved reference media — images/video/audio (git-ignored, created at runtime)
+output/<project>/   downloaded result videos (git-ignored, created at runtime)
+input/<project>/  saved reference media — images/video/audio (git-ignored, created at runtime)
 exports/<name>/    shareable history bundles from the Export button (git-ignored, created at runtime)
 history.json       generation history (git-ignored, created at runtime)
 images.json        saved-media gallery manifest (git-ignored, created at runtime)
 projects.json      project list (git-ignored, created at runtime)
 ```
 
-The `video/` and `images/` locations can be moved off the app folder by setting
-`VIDEO_DIR` and/or `IMAGES_DIR` in `.env` (absolute path, or relative to the app
+The `output/` and `input/` locations can be moved off the app folder by setting
+`OUTPUT_DIR` and/or `INPUT_DIR` in `.env` (absolute path, or relative to the app
 folder). The per-project subfolders are still created inside whatever you choose.
 
 ## License & Disclaimer

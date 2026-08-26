@@ -136,7 +136,7 @@ re-importing a run from History) reloads it.
 Image controls work like the kie.ai reference dropzones:
 
 - **Drop or browse** a file and it's saved into the current project's gallery
-  (`images/<project>/`), the same store the API side uses — so it's reusable and
+  (`input/<project>/`), the same store the API side uses — so it's reusable and
   shows up in exports.
 - **Pick from gallery** to reuse any image already saved in the project.
 
@@ -222,7 +222,7 @@ says so on the run.
    ComfyUI workflow is selected (refreshing every 5s, or every 2s during a run) so you
    can watch VRAM even between runs. GPU %/VRAM come from `nvidia-smi` when available;
    without it, VRAM falls back to ComfyUI's `/system_stats` and GPU % is shown as `–`.
-4. The first video/animation/image output is downloaded into your `video/<project>/`
+4. The first video/animation/image output is downloaded into your `output/<project>/`
    folder and the run's History card updates to the result — the **same folders and
    History** as a kie.ai generation, so mixed local+API projects export together. No
    credits are involved. The card records the **run-time** (wall time from submit to

@@ -23,11 +23,12 @@ const HOST = process.env.HOST || "127.0.0.1";
 const APP_PASSWORD = process.env.APP_PASSWORD || "";
 const AUTH_ENABLED = APP_PASSWORD.length > 0;
 
-// Media output folders — override via .env (VIDEO_DIR / IMAGES_DIR) to store
-// elsewhere. A relative value resolves against the app root; an absolute path is
-// used as-is. Per-project subfolders are still created inside these.
-const VIDEO_DIR = path.resolve(__dirname, process.env.VIDEO_DIR || "video");
-const IMAGES_DIR = path.resolve(__dirname, process.env.IMAGES_DIR || "images");
+// Media folders — INPUT_DIR holds saved reference media (the gallery), OUTPUT_DIR
+// holds generated results. Override via .env; a relative value resolves against the
+// app root, an absolute path is used as-is. Per-project subfolders live inside each.
+// The legacy VIDEO_DIR / IMAGES_DIR names are still honored as a fallback.
+const OUTPUT_DIR = path.resolve(__dirname, process.env.OUTPUT_DIR || process.env.VIDEO_DIR || "output");
+const INPUT_DIR = path.resolve(__dirname, process.env.INPUT_DIR || process.env.IMAGES_DIR || "input");
 // Where "Export" writes shareable, self-contained history bundles (one subfolder
 // per export). Override via EXPORTS_DIR; created on demand, not at startup.
 const EXPORTS_DIR = path.resolve(__dirname, process.env.EXPORTS_DIR || "exports");
@@ -58,8 +59,8 @@ if (!API_KEY) {
   process.exit(1);
 }
 
-fs.mkdirSync(VIDEO_DIR, { recursive: true });
-fs.mkdirSync(IMAGES_DIR, { recursive: true });
+fs.mkdirSync(OUTPUT_DIR, { recursive: true });
+fs.mkdirSync(INPUT_DIR, { recursive: true });
 fs.mkdirSync(WORKFLOWS_DIR, { recursive: true });
 
 // --- json file helpers ----------------------------------------------------
@@ -102,34 +103,34 @@ function slugify(name, projects) {
 // Move a gallery entry's file into another project's subfolder and fix its paths.
 function moveGalleryEntry(entry, targetSlug) {
   const fileName = path.basename(entry.storedName);
-  const from = path.join(IMAGES_DIR, entry.storedName);
+  const from = path.join(INPUT_DIR, entry.storedName);
   const newStored = `${targetSlug}/${fileName}`;
-  const to = path.join(IMAGES_DIR, newStored);
+  const to = path.join(INPUT_DIR, newStored);
   fs.mkdirSync(path.dirname(to), { recursive: true });
   if (fs.existsSync(from)) fs.renameSync(from, to);
   entry.storedName = newStored;
-  entry.localUrl = `/images/${newStored}`;
+  entry.localUrl = `/input/${newStored}`;
 }
 
 // Move a history entry's saved video into another project's subfolder.
 function moveHistoryVideo(entry, targetSlug) {
-  if (!entry.localVideo?.startsWith("/video/")) return;
-  const rel = entry.localVideo.slice("/video/".length);
+  if (!entry.localVideo?.startsWith("/output/")) return;
+  const rel = entry.localVideo.slice("/output/".length);
   const fileName = path.basename(rel);
-  const from = path.join(VIDEO_DIR, rel);
-  const to = path.join(VIDEO_DIR, targetSlug, fileName);
+  const from = path.join(OUTPUT_DIR, rel);
+  const to = path.join(OUTPUT_DIR, targetSlug, fileName);
   if (from === to) return;
   fs.mkdirSync(path.dirname(to), { recursive: true });
   if (fs.existsSync(from)) fs.renameSync(from, to);
-  entry.localVideo = `/video/${targetSlug}/${fileName}`;
+  entry.localVideo = `/output/${targetSlug}/${fileName}`;
 }
 
 // One-time migration: stamp pre-project data with the Default project and move
 // flat files into default/ subfolders. Idempotent — skips already-stamped entries.
 function migrateToProjects() {
   ensureDefaultProject();
-  fs.mkdirSync(path.join(IMAGES_DIR, "default"), { recursive: true });
-  fs.mkdirSync(path.join(VIDEO_DIR, "default"), { recursive: true });
+  fs.mkdirSync(path.join(INPUT_DIR, "default"), { recursive: true });
+  fs.mkdirSync(path.join(OUTPUT_DIR, "default"), { recursive: true });
 
   const images = readJson(IMAGES_FILE);
   let changed = false;
@@ -169,11 +170,11 @@ function reconcileVideoLocations() {
   const history = readJson(HISTORY_FILE);
   let changed = false;
   for (const entry of history) {
-    if (!entry.localVideo?.startsWith("/video/")) continue;
+    if (!entry.localVideo?.startsWith("/output/")) continue;
     const proj =
       projects.find((p) => p.id === (entry.projectId || "default")) ||
       projects.find((p) => p.id === "default");
-    if (entry.localVideo.startsWith(`/video/${proj.slug}/`)) continue;
+    if (entry.localVideo.startsWith(`/output/${proj.slug}/`)) continue;
     const before = entry.localVideo;
     try {
       moveHistoryVideo(entry, proj.slug);
@@ -319,8 +320,8 @@ if (AUTH_ENABLED) {
 }
 
 app.use(express.static(path.join(__dirname, "public")));
-app.use("/video", express.static(VIDEO_DIR)); // saved videos (per-project subfolders)
-app.use("/images", express.static(IMAGES_DIR)); // saved reference media (per-project subfolders)
+app.use("/output", express.static(OUTPUT_DIR)); // generated results (per-project subfolders)
+app.use("/input", express.static(INPUT_DIR)); // saved reference media (per-project subfolders)
 
 // Upload raw file bytes to kie.ai's file host (multipart stream — no base64
 // inflation, ~25% less upstream bandwidth than the old base64 endpoint).
@@ -443,6 +444,12 @@ function parseWorkflowTokens(text) {
   let m;
   while ((m = re.exec(text)) !== null) {
     const spec = parseTokenSpec(m[1]);
+    // Tokens are authored inside JSON strings, so a default's backslashes arrive
+    // JSON-escaped (a model path like "Z-Image Turbo\\model.safetensors"). Collapse
+    // "\\" → "\" so the default matches ComfyUI's real /object_info value and the
+    // combo pre-selects the right file instead of silently falling back to the first.
+    // Substitution is unaffected — it reads the already-parsed workflow object.
+    if (spec.default) spec.default = spec.default.replace(/\\\\/g, "\\");
     if (spec.name && !seen.has(spec.name)) seen.set(spec.name, spec);
   }
   return [...seen.values()];
@@ -614,7 +621,7 @@ app.post("/api/comfy/upload", async (req, res) => {
     if (id) {
       const entry = readJson(IMAGES_FILE).find((i) => i.id === id);
       if (!entry) return res.status(404).json({ code: 404, msg: "gallery item not found" });
-      buf = fs.readFileSync(path.join(IMAGES_DIR, entry.storedName));
+      buf = fs.readFileSync(path.join(INPUT_DIR, entry.storedName));
       name = entry.name || fileName || "image.png";
     } else if (base64Data) {
       buf = Buffer.from(String(base64Data).split(",").pop(), "base64");
@@ -644,7 +651,7 @@ app.post("/api/comfy/upload", async (req, res) => {
 app.get("/api/comfy/probe", async (req, res) => {
   const entry = readJson(IMAGES_FILE).find((i) => i.id === req.query.id);
   if (!entry) return res.status(404).json({ code: 404, msg: "gallery item not found" });
-  const probe = await probeVideo(path.join(IMAGES_DIR, entry.storedName));
+  const probe = await probeVideo(path.join(INPUT_DIR, entry.storedName));
   if (!probe) {
     return res
       .status(422)
@@ -962,7 +969,7 @@ async function applyTails(workflow, nodeMap, tails) {
     const support = loc && tailSupport(workflow, loc.id);
     if (!support) continue; // slot pruned, or its loader can't skip frames
     const entry = spec?.id ? readJson(IMAGES_FILE).find((i) => i.id === spec.id) : null;
-    const probe = entry ? await probeVideo(path.join(IMAGES_DIR, entry.storedName)) : null;
+    const probe = entry ? await probeVideo(path.join(INPUT_DIR, entry.storedName)) : null;
     if (!probe) {
       warnings.push(
         `Couldn't read the length of ${entry?.name || name}${ffprobeMissing ? " (ffprobe not found on PATH)" : ""} — ` +
@@ -1452,12 +1459,12 @@ app.get("/api/comfy/stats", async (req, res) => {
 });
 
 // --- open the output folder in the OS file explorer -----------------------
-// Only ever opens VIDEO_DIR or one of its project subfolders — no arbitrary paths.
+// Only ever opens OUTPUT_DIR or one of its project subfolders — no arbitrary paths.
 app.post("/api/open-folder", (req, res) => {
   const { projectId } = req.body || {};
-  let dir = VIDEO_DIR;
+  let dir = OUTPUT_DIR;
   if (projectId && projectId !== "all") {
-    dir = path.join(VIDEO_DIR, resolveProject(projectId).slug);
+    dir = path.join(OUTPUT_DIR, resolveProject(projectId).slug);
   }
   fs.mkdirSync(dir, { recursive: true });
   const cmd =
@@ -1668,16 +1675,16 @@ app.post("/api/export", (req, res) => {
         const g = imgById.get(id);
         if (!g) return; // gallery item was deleted — nothing local to copy
         const ext = path.extname(g.storedName) || "";
-        const href = copyInto(path.join(IMAGES_DIR, g.storedName), "input", `${entry.id}-${kind}-${idx}${ext}`);
+        const href = copyInto(path.join(INPUT_DIR, g.storedName), "input", `${entry.id}-${kind}-${idx}${ext}`);
         if (href) inputs.push({ kind, src: href, name: g.name || "" });
       });
     }
 
     let output = null;
-    if (entry.localVideo?.startsWith("/video/")) {
-      const rel = entry.localVideo.slice("/video/".length);
+    if (entry.localVideo?.startsWith("/output/")) {
+      const rel = entry.localVideo.slice("/output/".length);
       const ext = path.extname(rel) || "";
-      const href = copyInto(path.join(VIDEO_DIR, rel), "output", `${entry.id}${ext}`);
+      const href = copyInto(path.join(OUTPUT_DIR, rel), "output", `${entry.id}${ext}`);
       // Kind from the model, or from the file extension (ComfyUI outputs aren't
       // typed by the model id and may be images or video).
       const isImg = isImageOutputModel(entry.input?.model) || /\.(png|jpe?g|webp|gif|bmp)$/i.test(rel);
@@ -1731,8 +1738,8 @@ app.post("/api/projects", (req, res) => {
   const proj = { id: randomUUID(), name, slug: slugify(name, projects), createdAt: new Date().toISOString() };
   projects.push(proj);
   writeJson(PROJECTS_FILE, projects);
-  fs.mkdirSync(path.join(IMAGES_DIR, proj.slug), { recursive: true });
-  fs.mkdirSync(path.join(VIDEO_DIR, proj.slug), { recursive: true });
+  fs.mkdirSync(path.join(INPUT_DIR, proj.slug), { recursive: true });
+  fs.mkdirSync(path.join(OUTPUT_DIR, proj.slug), { recursive: true });
   res.json({ code: 200, msg: "created", data: proj });
 });
 
@@ -1782,7 +1789,7 @@ app.delete("/api/projects/:id", (req, res) => {
 
   writeJson(PROJECTS_FILE, projects.filter((p) => p.id !== proj.id));
   // remove the now-empty project folders (best-effort)
-  for (const dir of [path.join(IMAGES_DIR, proj.slug), path.join(VIDEO_DIR, proj.slug)]) {
+  for (const dir of [path.join(INPUT_DIR, proj.slug), path.join(OUTPUT_DIR, proj.slug)]) {
     try {
       fs.rmdirSync(dir);
     } catch {}
@@ -1816,8 +1823,8 @@ app.post("/api/upload", (req, res) => {
   const storedName = `${proj.slug}/${id}.${ext}`;
 
   try {
-    fs.mkdirSync(path.join(IMAGES_DIR, proj.slug), { recursive: true });
-    fs.writeFileSync(path.join(IMAGES_DIR, storedName), Buffer.from(rawB64, "base64"));
+    fs.mkdirSync(path.join(INPUT_DIR, proj.slug), { recursive: true });
+    fs.writeFileSync(path.join(INPUT_DIR, storedName), Buffer.from(rawB64, "base64"));
   } catch (err) {
     console.error("Failed to save file:", err);
     return res.status(500).json({ code: 500, msg: "Failed to save file" });
@@ -1830,7 +1837,7 @@ app.post("/api/upload", (req, res) => {
     storedName,
     name: fileName || storedName,
     mime,
-    localUrl: `/images/${storedName}`,
+    localUrl: `/input/${storedName}`,
     createdAt: new Date().toISOString(),
   };
   const images = readJson(IMAGES_FILE);
@@ -1848,7 +1855,7 @@ app.post("/api/reupload", async (req, res) => {
   if (!entry) return res.status(404).json({ code: 404, msg: "file not found" });
 
   try {
-    const buf = fs.readFileSync(path.join(IMAGES_DIR, entry.storedName));
+    const buf = fs.readFileSync(path.join(INPUT_DIR, entry.storedName));
     const up = await uploadToKie(buf, entry.mime, entry.name);
     if (!up.downloadUrl) throw new Error(up.body?.msg || "upload failed");
     res.json({ code: 200, msg: "ok", hostedUrl: up.downloadUrl });
@@ -1892,7 +1899,7 @@ app.delete("/api/images/:id", (req, res) => {
   const entry = images.find((i) => i.id === req.params.id);
   if (!entry) return res.status(404).json({ code: 404, msg: "file not found" });
   try {
-    fs.rmSync(path.join(IMAGES_DIR, entry.storedName), { force: true });
+    fs.rmSync(path.join(INPUT_DIR, entry.storedName), { force: true });
   } catch (err) {
     console.error("Failed to delete file:", err);
   }
@@ -1917,9 +1924,9 @@ async function downloadOutput(resultUrl, proj, id) {
     const ext = (fnameHint.match(/\.(\w+)$/)?.[1] || "mp4").toLowerCase();
     const fileName = `${id}.${ext}`;
     const buf = Buffer.from(await r.arrayBuffer());
-    fs.mkdirSync(path.join(VIDEO_DIR, proj.slug), { recursive: true });
-    fs.writeFileSync(path.join(VIDEO_DIR, proj.slug, fileName), buf);
-    return `/video/${proj.slug}/${fileName}`;
+    fs.mkdirSync(path.join(OUTPUT_DIR, proj.slug), { recursive: true });
+    fs.writeFileSync(path.join(OUTPUT_DIR, proj.slug, fileName), buf);
+    return `/output/${proj.slug}/${fileName}`;
   } catch (err) {
     console.error("Failed to download output:", err);
     return null;
@@ -2062,9 +2069,9 @@ app.delete("/api/history/:id", (req, res) => {
   const entry = entries[idx];
   // Best-effort removal of the saved output file (input gallery media is shared,
   // so it's left alone).
-  if (entry.localVideo?.startsWith("/video/")) {
+  if (entry.localVideo?.startsWith("/output/")) {
     try {
-      fs.unlinkSync(path.join(VIDEO_DIR, entry.localVideo.slice("/video/".length)));
+      fs.unlinkSync(path.join(OUTPUT_DIR, entry.localVideo.slice("/output/".length)));
     } catch (err) {
       if (err.code !== "ENOENT") console.error("Failed to delete output file:", err.message);
     }
@@ -2092,12 +2099,12 @@ app.post("/api/history/:id/to-gallery", (req, res) => {
   const entries = readJson(HISTORY_FILE);
   const entry = entries.find((e) => e.id === req.params.id);
   if (!entry) return res.status(404).json({ code: 404, msg: "history entry not found" });
-  if (!entry.localVideo?.startsWith("/video/")) {
+  if (!entry.localVideo?.startsWith("/output/")) {
     return res.status(400).json({ code: 400, msg: "no saved output file for this entry" });
   }
 
-  const rel = entry.localVideo.slice("/video/".length); // <slug>/<file>
-  const src = path.join(VIDEO_DIR, rel);
+  const rel = entry.localVideo.slice("/output/".length); // <slug>/<file>
+  const src = path.join(OUTPUT_DIR, rel);
   if (!fs.existsSync(src)) {
     return res.status(404).json({ code: 404, msg: "saved output file is missing on disk" });
   }
@@ -2110,8 +2117,8 @@ app.post("/api/history/:id/to-gallery", (req, res) => {
   const storedName = `${proj.slug}/${id}.${ext}`;
 
   try {
-    fs.mkdirSync(path.join(IMAGES_DIR, proj.slug), { recursive: true });
-    fs.copyFileSync(src, path.join(IMAGES_DIR, storedName));
+    fs.mkdirSync(path.join(INPUT_DIR, proj.slug), { recursive: true });
+    fs.copyFileSync(src, path.join(INPUT_DIR, storedName));
   } catch (err) {
     console.error("Failed to copy output into gallery:", err);
     return res.status(500).json({ code: 500, msg: "Failed to add to gallery" });
@@ -2124,7 +2131,7 @@ app.post("/api/history/:id/to-gallery", (req, res) => {
     storedName,
     name: `generated-${entry.id}.${ext}`,
     mime,
-    localUrl: `/images/${storedName}`,
+    localUrl: `/input/${storedName}`,
     createdAt: new Date().toISOString(),
   };
   const images = readJson(IMAGES_FILE);

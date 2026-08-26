@@ -1,11 +1,18 @@
 node_modules/
 .env
 
-# user-generated data (downloaded videos, saved reference images, history)
-video/
-images/
+# user-generated data (generated results, saved reference media, history)
+output/
+input/
 exports/
 history.json
 images.json
 projects.json
 settings/
+
+# legacy folder names (pre-rename) — ignored so old copies don't get committed
+video/
+images/
+
+# migration backups
+*.bak
