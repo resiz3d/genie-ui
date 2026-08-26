@@ -1750,17 +1750,20 @@ function makeComfyLoraControl(loraOptions, offline) {
     addBtn.disabled = true;
   }
 
-  const addRow = (name = "", strength = 1) => {
+  const addRow = (name = "", strength = 1, enabled = true) => {
     const row = document.createElement("div");
     row.className = "lora-row";
-    const sel = document.createElement("select");
-    sel.className = "lora-name";
-    for (const o of loraOptions) sel.appendChild(new Option(o, o));
-    if (name && loraOptions.includes(name)) sel.value = name;
-    else if (name) {
-      sel.appendChild(new Option(`${name} (not installed)`, name));
-      sel.value = name;
-    }
+    // A disabled LoRA stays in the loadout (and is saved) but isn't injected — which
+    // is different from a strength of 0.
+    const chk = document.createElement("input");
+    chk.type = "checkbox";
+    chk.className = "lora-enabled";
+    chk.checked = enabled !== false;
+    chk.title = "Enable this LoRA — unchecked keeps it in the loadout but doesn't apply it";
+    const loraOpts = loraOptions.map((o) => ({ label: o, value: o }));
+    if (name && !loraOptions.includes(name)) loraOpts.push({ label: `${name} (not installed)`, value: name });
+    const sel = makeSearchableSelect(loraOpts, name || "", "Type to filter LoRAs…");
+    sel.classList.add("lora-name");
     const str = document.createElement("input");
     str.type = "number";
     str.className = "lora-strength";
@@ -1775,25 +1778,136 @@ function makeComfyLoraControl(loraOptions, offline) {
     rm.textContent = "×";
     rm.title = "Remove LoRA";
     rm.addEventListener("click", () => row.remove());
-    row.append(sel, str, rm);
+    const syncDim = () => row.classList.toggle("lora-off", !chk.checked);
+    chk.addEventListener("change", syncDim);
+    syncDim();
+    row.append(chk, sel, str, rm);
     rowsEl.appendChild(row);
   };
-  addBtn.addEventListener("click", () => addRow(loraOptions[0] || "", 1));
+  addBtn.addEventListener("click", () => addRow(loraOptions[0] || "", 1, true));
 
   return {
     el: field,
+    // All rows (incl. disabled) with their on/off state — for saving the loadout.
     getLoras: () =>
       [...rowsEl.querySelectorAll(".lora-row")]
         .map((r) => ({
           name: r.querySelector(".lora-name").value,
           strength: Number(r.querySelector(".lora-strength").value),
+          enabled: r.querySelector(".lora-enabled").checked,
         }))
         .filter((l) => l.name),
     setLoras: (arr) => {
       rowsEl.innerHTML = "";
-      for (const l of arr || []) addRow(l.name, typeof l.strength === "number" ? l.strength : 1);
+      for (const l of arr || [])
+        addRow(l.name, typeof l.strength === "number" ? l.strength : 1, l.enabled !== false);
     },
   };
+}
+
+// A type-to-filter single-select for long option lists (models, LoRAs, samplers…).
+// Behaves like a <select> for callers: exposes a `.value` property (get/set) and
+// fires "change", so it drops in wherever a native select's `.value` was read.
+// `options` are strings or { label, value }.
+function makeSearchableSelect(options, initialValue = "", placeholder = "Type to filter…") {
+  const opts = (options || []).map((o) => (typeof o === "string" ? { label: o, value: o } : o));
+  const root = document.createElement("div");
+  root.className = "combo-search";
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "combo-search-input";
+  input.autocomplete = "off";
+  input.spellcheck = false;
+  input.placeholder = placeholder;
+  const list = document.createElement("div");
+  list.className = "combo-search-list hidden";
+  root.append(input, list);
+
+  let current = initialValue || "";
+  let matches = [];
+  let highlight = -1;
+  const labelFor = (v) => opts.find((o) => o.value === v)?.label ?? v ?? "";
+  const isOpen = () => !list.classList.contains("hidden");
+
+  function paint() {
+    list.innerHTML = "";
+    if (!matches.length) {
+      const none = document.createElement("div");
+      none.className = "combo-search-empty";
+      none.textContent = "No matches";
+      list.appendChild(none);
+      return;
+    }
+    matches.forEach((o, i) => {
+      const item = document.createElement("div");
+      item.className = "combo-search-item";
+      if (o.value === current) item.classList.add("selected");
+      if (i === highlight) item.classList.add("active");
+      item.textContent = o.label;
+      item.title = o.label; // full path on hover when the row is truncated
+      item.addEventListener("mousedown", (e) => {
+        e.preventDefault(); // keep input focus, beat the blur
+        pick(o.value);
+      });
+      list.appendChild(item);
+    });
+    if (highlight >= 0) list.children[highlight]?.scrollIntoView({ block: "nearest" });
+  }
+
+  function filter(text) {
+    const f = (text || "").trim().toLowerCase();
+    matches = f ? opts.filter((o) => o.label.toLowerCase().includes(f)) : opts.slice();
+    highlight = -1;
+    paint();
+  }
+  function open() {
+    filter("");
+    list.classList.remove("hidden");
+    input.select();
+  }
+  function close() {
+    list.classList.add("hidden");
+    input.value = labelFor(current); // always fall back to a valid selection
+  }
+  function pick(v) {
+    current = v;
+    input.value = labelFor(v);
+    close();
+    root.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+
+  input.addEventListener("focus", open);
+  input.addEventListener("click", () => { if (!isOpen()) open(); });
+  input.addEventListener("input", () => filter(input.value));
+  input.addEventListener("blur", () => setTimeout(() => { if (isOpen()) close(); }, 100));
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      if (!isOpen()) return open();
+      highlight = Math.min(highlight + 1, matches.length - 1);
+      paint();
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      highlight = Math.max(highlight - 1, 0);
+      paint();
+    } else if (e.key === "Enter") {
+      if (isOpen()) {
+        e.preventDefault();
+        const o = matches[highlight] || matches[0];
+        if (o) pick(o.value);
+      }
+    } else if (e.key === "Escape") {
+      if (isOpen()) { e.preventDefault(); close(); input.blur(); }
+    }
+  });
+
+  input.value = labelFor(current);
+  Object.defineProperty(root, "value", {
+    get: () => current,
+    set: (v) => { current = v ?? ""; input.value = labelFor(current); },
+    configurable: true,
+  });
+  return root;
 }
 
 // Build one scalar control (select / number / text / textarea) and register it,
@@ -1827,9 +1941,15 @@ function renderScalarControl(token, type, container = comfyControlsEl) {
 
   let input;
   if (type === "select") {
-    input = document.createElement("select");
-    for (const o of parsedOptions) input.appendChild(new Option(o.label, o.value));
-    input.value = parsedOptions.some((o) => o.value === token.default) ? token.default : parsedOptions[0]?.value ?? "";
+    const initial = parsedOptions.some((o) => o.value === token.default) ? token.default : parsedOptions[0]?.value ?? "";
+    if (parsedOptions.length > 10) {
+      // Long lists (models, samplers, …) get a type-to-filter dropdown.
+      input = makeSearchableSelect(parsedOptions, initial);
+    } else {
+      input = document.createElement("select");
+      for (const o of parsedOptions) input.appendChild(new Option(o.label, o.value));
+      input.value = initial;
+    }
   } else if (type === "textarea") {
     input = document.createElement("textarea");
     input.rows = 4;
@@ -2096,7 +2216,8 @@ async function submitComfy() {
   hide(errorEl);
   submitBtn.disabled = true;
   const count = comfyQueueCount();
-  const loras = comfyLoraControl ? comfyLoraControl.getLoras() : [];
+  const allLoras = comfyLoraControl ? comfyLoraControl.getLoras() : [];
+  const enabledLoras = allLoras.filter((l) => l.enabled !== false); // only these get injected
   const bypass = comfyBypassControl ? comfyBypassControl.getDisabled() : [];
   try {
     for (let i = 0; i < count; i++) {
@@ -2110,10 +2231,10 @@ async function submitComfy() {
         }
       }
       const input = { model: `comfy:${wf.file}`, workflow: wf.name, values };
-      if (loras.length) input.loras = loras;
+      if (allLoras.length) input.loras = allLoras; // store the full loadout (incl. disabled) for re-import
       if (bypass.length) input.bypass = bypass;
       if (typeof values.prompt === "string" && values.prompt.trim()) input.prompt = values.prompt.trim();
-      await queueComfyRun(wf, values, prune, mediaIds, input, loras, bypass, tails);
+      await queueComfyRun(wf, values, prune, mediaIds, input, enabledLoras, bypass, tails);
       // Advance seeds for the next queued run (no-op when the mode is "fixed").
       for (const f of comfyFields) if (typeof f.advance === "function") f.advance();
     }

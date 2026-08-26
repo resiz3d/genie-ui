@@ -1379,9 +1379,21 @@ img.zoomable {
   gap: 8px;
   align-items: center;
 }
+.lora-row .lora-enabled {
+  flex-shrink: 0;
+  width: auto;
+  margin: 0;
+  cursor: pointer;
+}
 .lora-row .lora-name {
   flex: 1;
   min-width: 0;
+}
+/* Disabled LoRA: kept in the loadout but not applied — dim the fields, keep the
+   checkbox and remove button fully legible. */
+.lora-row.lora-off .lora-name,
+.lora-row.lora-off .lora-strength {
+  opacity: 0.45;
 }
 .lora-row .lora-strength {
   width: 90px;
@@ -1402,6 +1414,63 @@ img.zoomable {
   border-color: var(--error);
 }
 .lora-add {
+  font-size: 0.85rem;
+}
+
+/* Searchable single-select for long option lists (models, LoRAs, samplers…). */
+.combo-search {
+  position: relative;
+  width: 100%;
+}
+.combo-search::after {
+  content: "▾";
+  position: absolute;
+  right: 0.7rem;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--muted);
+  pointer-events: none;
+  font-size: 0.7rem;
+}
+.combo-search-input {
+  width: 100%;
+  padding-right: 1.6rem;
+  text-overflow: ellipsis;
+}
+.combo-search-list {
+  position: absolute;
+  top: calc(100% + 2px);
+  left: 0;
+  right: 0;
+  z-index: 30;
+  max-height: 260px;
+  overflow-y: auto;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  padding: 4px;
+}
+.combo-search-item {
+  padding: 0.4rem 0.5rem;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.combo-search-item:hover,
+.combo-search-item.active {
+  background: var(--accent);
+  color: #fff;
+}
+.combo-search-item.selected {
+  font-weight: 600;
+}
+.combo-search-empty {
+  padding: 0.5rem;
+  color: var(--muted);
   font-size: 0.85rem;
 }
 
