@@ -31,24 +31,10 @@ const PROJECT_KEY = "seedance_project";
 let projects = [];
 let activeProjectId = localStorage.getItem(PROJECT_KEY) || "default";
 
-// History tag settings (per-browser). showHidden reveals hidden-tagged cards;
-// autoDraftMax auto-tags a finished video at/below that resolution as draft.
+// "Show hidden" is a per-browser view preference; the auto-draft MP threshold is a
+// server setting (so the server-side sweep applies the same rule as the client).
 const SHOW_HIDDEN_KEY = "genie_show_hidden";
-const AUTODRAFT_KEY = "genie_autodraft_max";
 let showHidden = localStorage.getItem(SHOW_HIDDEN_KEY) === "1";
-let autoDraftMax = localStorage.getItem(AUTODRAFT_KEY) || "off";
-const RESOLUTION_RANK = { "480p": 1, "720p": 2, "1080p": 3, "4k": 4 };
-
-// Whether a finishing generation should be auto-tagged draft: a kie.ai video whose
-// resolution is at or below the threshold. Images and ComfyUI runs (no resolution
-// field) are never auto-drafted.
-function autoDraftFor(input) {
-  if (autoDraftMax === "off") return false;
-  const model = input?.model || "";
-  if (model.startsWith("comfy:") || isImageOutput(model)) return false;
-  const rank = RESOLUTION_RANK[input?.resolution];
-  return !!rank && rank <= (RESOLUTION_RANK[autoDraftMax] || 0);
-}
 
 const POLL_INTERVAL_MS = 5000;
 
@@ -193,6 +179,91 @@ function makeZoomButton(kind, src, name) {
     openLightbox(kind, src, name);
   });
   return zoom;
+}
+
+// Build a "managed" gallery thumbnail: the media preview plus the same view (⤢),
+// move (⇄) and remove (×) controls the main gallery uses. Shared by the main
+// gallery and the per-field pickers (kie.ai + ComfyUI) so every gallery view
+// offers the same actions. `onPick(item)` runs on a body click (add-to-list or
+// add-to-field, per caller); `refresh()` re-renders the caller's own view after a
+// move/delete; `title` overrides the hover hint.
+function makeGalleryThumb(item, { onPick, refresh, title } = {}) {
+  const kind = item.kind || "image"; // older entries predate the kind field
+  const div = document.createElement("div");
+  div.className = `thumb ready${kind === "audio" ? " audio-thumb" : ""}`;
+  div.title = title || `${item.name} — click to add`;
+  div.appendChild(makeThumbContent(kind, { thumb: item.localUrl, name: item.name }));
+
+  if (kind !== "image") {
+    const badge = document.createElement("span");
+    badge.className = "img-label kind-badge";
+    badge.textContent = kind;
+    div.appendChild(badge);
+  }
+
+  if (onPick) div.addEventListener("click", () => onPick(item));
+
+  // After a move/delete: reload the shared gallery data, then re-render this
+  // caller's own view (the main gallery re-renders via loadGallery itself).
+  const afterChange = async () => { await loadGallery(); refresh?.(); };
+
+  // move to another project (file physically moves)
+  const mv = document.createElement("button");
+  mv.type = "button";
+  mv.className = "mv";
+  mv.textContent = "⇄";
+  mv.title = "Move to another project";
+  mv.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (div.querySelector(".mv-select")) return;
+    const sel = document.createElement("select");
+    sel.className = "mv-select";
+    const ph = new Option("Move to…", "", true, true);
+    ph.disabled = true;
+    sel.appendChild(ph);
+    for (const p of projects) {
+      if (p.id !== (item.projectId || "default")) sel.appendChild(new Option(p.name, p.id));
+    }
+    sel.addEventListener("click", (ev) => ev.stopPropagation());
+    sel.addEventListener("change", async () => {
+      try {
+        const res = await fetch(`/api/images/${item.id}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ projectId: sel.value }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.msg || "Move failed");
+        afterChange();
+      } catch (err) {
+        alert(err.message || String(err));
+        sel.remove();
+      }
+    });
+    sel.addEventListener("blur", () => sel.remove());
+    div.appendChild(sel);
+    sel.focus();
+  });
+  div.appendChild(mv);
+
+  const del = document.createElement("button");
+  del.type = "button";
+  del.className = "del";
+  del.textContent = "×";
+  del.title = "Delete from gallery";
+  del.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    try {
+      await fetch(`/api/images/${item.id}`, { method: "DELETE" });
+      afterChange();
+    } catch (err) {
+      console.error(err);
+    }
+  });
+  div.appendChild(del);
+
+  div.appendChild(makeZoomButton(kind, item.localUrl, item.name));
+  return div;
 }
 
 // ===========================================================================
@@ -541,12 +612,9 @@ function makeMediaList(kind, opts = {}) {
       );
       galleryEmptyEl.classList.toggle("hidden", gitems.length > 0);
       for (const item of gitems) {
-        const div = document.createElement("div");
-        div.className = `thumb ready${mediaType === "audio" ? " audio-thumb" : ""}`;
-        div.title = `${item.name} — click to add`;
-        div.appendChild(makeThumbContent(mediaType, { thumb: item.localUrl, name: item.name }));
-        div.addEventListener("click", () => list.addFromGallery(item));
-        galleryThumbs.appendChild(div);
+        galleryThumbs.appendChild(
+          makeGalleryThumb(item, { onPick: (it) => list.addFromGallery(it), refresh: renderPicker })
+        );
       }
     };
     galleryWrap.addEventListener("toggle", () => { if (galleryWrap.open) renderPicker(); });
@@ -685,20 +753,29 @@ historyFilter.addEventListener("change", () => {
   renderHistory(historyEntries);
 });
 
-// History tag controls: reveal hidden cards, and the low-res-video → draft threshold.
+// History tag controls: reveal hidden cards, and the auto-draft MP threshold (a
+// server setting — the sweep applies it too, so it's fetched/saved server-side).
 const showHiddenEl = document.getElementById("showHidden");
 const autoDraftMaxEl = document.getElementById("autoDraftMax");
 showHiddenEl.checked = showHidden;
-autoDraftMaxEl.value = autoDraftMax;
 showHiddenEl.addEventListener("change", () => {
   showHidden = showHiddenEl.checked;
   localStorage.setItem(SHOW_HIDDEN_KEY, showHidden ? "1" : "0");
   historyPage = 1;
   renderHistory(historyEntries);
 });
+fetch("/api/settings")
+  .then((r) => r.json())
+  .then((d) => { autoDraftMaxEl.value = Number(d.data?.autoDraftMaxMP) || 0; })
+  .catch(() => {});
 autoDraftMaxEl.addEventListener("change", () => {
-  autoDraftMax = autoDraftMaxEl.value;
-  localStorage.setItem(AUTODRAFT_KEY, autoDraftMax);
+  const autoDraftMaxMP = Math.max(0, Number(autoDraftMaxEl.value) || 0);
+  autoDraftMaxEl.value = autoDraftMaxMP;
+  fetch("/api/settings", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ autoDraftMaxMP }),
+  }).catch(() => {});
 });
 
 // Toggle a history entry's tag (hidden/draft) and refresh.
@@ -868,80 +945,9 @@ function renderGallery(items) {
   galleryEmpty.classList.toggle("hidden", visible.length > 0);
 
   for (const item of visible) {
-    const kind = item.kind || "image"; // older entries predate the kind field
-    const div = document.createElement("div");
-    div.className = `thumb ready${kind === "audio" ? " audio-thumb" : ""}`;
-    div.title = `${item.name} — click to add`;
-
-    div.appendChild(makeThumbContent(kind, { thumb: item.localUrl, name: item.name }));
-
-    if (kind !== "image") {
-      const badge = document.createElement("span");
-      badge.className = "img-label kind-badge";
-      badge.textContent = kind;
-      div.appendChild(badge);
-    }
-
-    div.addEventListener("click", () => lists[kind].addFromGallery(item));
-
-    // move to another project (file physically moves)
-    const mv = document.createElement("button");
-    mv.type = "button";
-    mv.className = "mv";
-    mv.textContent = "⇄";
-    mv.title = "Move to another project";
-    mv.addEventListener("click", (e) => {
-      e.stopPropagation();
-      if (div.querySelector(".mv-select")) return;
-      const sel = document.createElement("select");
-      sel.className = "mv-select";
-      const ph = new Option("Move to…", "", true, true);
-      ph.disabled = true;
-      sel.appendChild(ph);
-      for (const p of projects) {
-        if (p.id !== (item.projectId || "default")) sel.appendChild(new Option(p.name, p.id));
-      }
-      sel.addEventListener("click", (ev) => ev.stopPropagation());
-      sel.addEventListener("change", async () => {
-        try {
-          const res = await fetch(`/api/images/${item.id}`, {
-            method: "PUT",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ projectId: sel.value }),
-          });
-          const data = await res.json();
-          if (!res.ok) throw new Error(data.msg || "Move failed");
-          loadGallery();
-        } catch (err) {
-          alert(err.message || String(err));
-          sel.remove();
-        }
-      });
-      sel.addEventListener("blur", () => sel.remove());
-      div.appendChild(sel);
-      sel.focus();
-    });
-    div.appendChild(mv);
-
-    const del = document.createElement("button");
-    del.type = "button";
-    del.className = "del";
-    del.textContent = "×";
-    del.title = "Delete from gallery";
-    del.addEventListener("click", async (e) => {
-      e.stopPropagation();
-      try {
-        await fetch(`/api/images/${item.id}`, { method: "DELETE" });
-        loadGallery();
-      } catch (err) {
-        console.error(err);
-      }
-    });
-    div.appendChild(del);
-
-    div.appendChild(makeZoomButton(kind, item.localUrl, item.name));
-
-    galleryEl.appendChild(div);
+    galleryEl.appendChild(
+      makeGalleryThumb(item, { onPick: (it) => lists[it.kind || "image"].addFromGallery(it) })
+    );
   }
 }
 
@@ -1543,13 +1549,16 @@ function makeComfyMedia(token, mediaKind) {
     );
     galleryEmptyEl.classList.toggle("hidden", items.length > 0);
     for (const item of items) {
-      const div = previewThumb(item.localUrl, item.name);
-      div.title = `${item.name} — click to use`;
-      div.addEventListener("click", () => {
-        setSource({ id: item.id, url: item.localUrl, name: item.name });
-        galleryWrap.open = false;
-      });
-      galleryThumbs.appendChild(div);
+      galleryThumbs.appendChild(
+        makeGalleryThumb(item, {
+          title: `${item.name} — click to use`,
+          onPick: (it) => {
+            setSource({ id: it.id, url: it.localUrl, name: it.name });
+            galleryWrap.open = false;
+          },
+          refresh: renderGalleryPicker,
+        })
+      );
     }
   };
 
@@ -2845,14 +2854,13 @@ async function createHistoryEntry(input, taskId, mediaLocalIds, projectId, refSe
 async function attachHistoryResult(job, result, costCredits, runtimeMs) {
   const resultUrls = Array.isArray(result) ? result : [result].filter(Boolean);
   const resultUrl = resultUrls[0] || null;
-  const draft = autoDraftFor(job.input); // low-res video → draft (once, at finish)
   try {
     let entry = null;
     if (job.historyId) {
       const r = await fetch(`/api/history/${job.historyId}/result`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ resultUrls, resultUrl, costCredits, runtimeMs, draft }),
+        body: JSON.stringify({ resultUrls, resultUrl, costCredits, runtimeMs }),
       });
       entry = (await r.json().catch(() => ({})))?.data;
     } else {
@@ -2864,7 +2872,6 @@ async function attachHistoryResult(job, result, costCredits, runtimeMs) {
           taskId: job.taskId,
           resultUrl,
           costCredits,
-          draft,
           mediaLocalIds: job.mediaLocalIds,
           refVideoSeconds: typeof job.refSecs === "number" ? job.refSecs : 0,
           projectId: job.projectId || activeProjectId,

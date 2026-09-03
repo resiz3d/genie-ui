@@ -112,17 +112,39 @@ function moveGalleryEntry(entry, targetSlug) {
   entry.localUrl = `/input/${newStored}`;
 }
 
-// Move a history entry's saved video into another project's subfolder.
+// Where an entry's saved output file(s) live inside their project folder:
+//   image outputs  -> images/   (always; images have no draft split)
+//   draft videos   -> draft/
+//   other videos   -> the project root
+// Returned as a leading-slash path fragment ("" for the project root).
+function outputSubfolder(entry) {
+  if (entryIsImage(entry)) return "/images";
+  return entry.draft ? "/draft" : "";
+}
+
+// Move a history entry's saved output file(s) into the target project's subfolder,
+// nesting images under images/ and draft videos under draft/ (so they stay out of
+// the way of the hi-def videos on disk). Handles batch runs (several outputs) and
+// keeps the mirrored entry.localVideo pointing at the first. Idempotent in place.
 function moveHistoryVideo(entry, targetSlug) {
-  if (!entry.localVideo?.startsWith("/output/")) return;
-  const rel = entry.localVideo.slice("/output/".length);
-  const fileName = path.basename(rel);
-  const from = path.join(OUTPUT_DIR, rel);
-  const to = path.join(OUTPUT_DIR, targetSlug, fileName);
-  if (from === to) return;
-  fs.mkdirSync(path.dirname(to), { recursive: true });
-  if (fs.existsSync(from)) fs.renameSync(from, to);
-  entry.localVideo = `/output/${targetSlug}/${fileName}`;
+  const sub = outputSubfolder(entry);
+  const moveOne = (url) => {
+    if (!url?.startsWith("/output/")) return url;
+    const fileName = path.basename(url);
+    const from = path.join(OUTPUT_DIR, url.slice("/output/".length));
+    const to = path.join(OUTPUT_DIR, targetSlug + sub, fileName);
+    if (from !== to) {
+      fs.mkdirSync(path.dirname(to), { recursive: true });
+      if (fs.existsSync(from)) fs.renameSync(from, to);
+    }
+    return `/output/${targetSlug}${sub}/${fileName}`;
+  };
+  if (Array.isArray(entry.outputs) && entry.outputs.length) {
+    for (const o of entry.outputs) o.localVideo = moveOne(o.localVideo);
+    entry.localVideo = entry.outputs[0]?.localVideo || null;
+  } else {
+    entry.localVideo = moveOne(entry.localVideo);
+  }
 }
 
 // One-time migration: stamp pre-project data with the Default project and move
@@ -1500,6 +1522,44 @@ function entryTagSet(entry) {
   return tags;
 }
 
+// Output size of a generation in megapixels, best-effort from its inputs: ComfyUI
+// width×height, else a ComfyUI megapixels token (already MP), else an approximate
+// value for a kie.ai resolution tier (16:9 nominal). null when unknown.
+const KIE_RES_MP = { "480p": 0.41, "720p": 0.92, "1080p": 2.07, "4k": 8.29 };
+function entryMegapixels(input) {
+  const v = (input && input.values) || {};
+  const w = Number(v.width);
+  const h = Number(v.height);
+  if (Number.isFinite(w) && w > 0 && Number.isFinite(h) && h > 0) return (w * h) / 1e6;
+  const mp = Number(v.megapixels);
+  if (Number.isFinite(mp) && mp > 0) return mp;
+  const r = input && input.resolution;
+  return r && KIE_RES_MP[r] != null ? KIE_RES_MP[r] : null;
+}
+
+// Global app settings (currently just the auto-draft MP threshold), stored in the
+// git-ignored settings/ folder so it's shared across devices like the comfy config.
+const APP_SETTINGS_FILE = path.join(COMFY_SETTINGS_DIR, "..", "app.json");
+function readAppSettings() {
+  try {
+    return JSON.parse(fs.readFileSync(APP_SETTINGS_FILE, "utf8")) || {};
+  } catch {
+    return {};
+  }
+}
+function writeAppSettings(s) {
+  fs.mkdirSync(path.dirname(APP_SETTINGS_FILE), { recursive: true });
+  fs.writeFileSync(APP_SETTINGS_FILE, JSON.stringify(s, null, 2));
+}
+// Auto-draft decision (server-side so the sweep and the client path agree): true
+// when a finished generation's megapixels are at or below the configured threshold.
+function computeAutoDraft(input) {
+  const maxMP = Number(readAppSettings().autoDraftMaxMP) || 0;
+  if (maxMP <= 0) return false;
+  const mp = entryMegapixels(input);
+  return mp != null && mp <= maxMP;
+}
+
 function escapeHtml(s) {
   return String(s ?? "").replace(
     /[&<>"']/g,
@@ -1974,6 +2034,11 @@ async function attachOutputs(entry, urls) {
   entry.outputs = outputs;
   entry.resultUrl = urls[0] || null;
   entry.localVideo = outputs[0]?.localVideo || null;
+  // Auto-draft low-megapixel runs (once, at finish) — server-side so the sweep and
+  // the client finalize path agree. A manual toggle can change it afterward.
+  if (!entry.draft && computeAutoDraft(entry.input)) entry.draft = true;
+  // Place the saved file(s) under draft/ or the project root to match the flag.
+  moveHistoryVideo(entry, proj.slug);
 }
 
 // Build a history entry object (output fields may be null for a pending entry).
@@ -2008,7 +2073,7 @@ function makeHistoryEntry({ id, taskId, projectId, input, resultUrl, localVideo,
 
 // --- save a finished generation to history (+ download the video) -------
 app.post("/api/save", async (req, res) => {
-  const { input, taskId, resultUrl, costCredits, imageLocalIds, mediaLocalIds, projectId, refVideoSeconds, startedAt, draft } =
+  const { input, taskId, resultUrl, costCredits, imageLocalIds, mediaLocalIds, projectId, refVideoSeconds, startedAt } =
     req.body || {};
   if (!resultUrl) return res.status(400).json({ code: 400, msg: "resultUrl is required" });
 
@@ -2018,7 +2083,8 @@ app.post("/api/save", async (req, res) => {
   // No pending entry existed, so runtime comes from the client's job start time.
   const runtimeMs = typeof startedAt === "number" ? Date.now() - startedAt : null;
   const entry = makeHistoryEntry({
-    id, taskId, projectId: proj.id, input, resultUrl, localVideo, costCredits, refVideoSeconds, imageLocalIds, mediaLocalIds, runtimeMs, draft,
+    id, taskId, projectId: proj.id, input, resultUrl, localVideo, costCredits, refVideoSeconds, imageLocalIds, mediaLocalIds, runtimeMs,
+    draft: computeAutoDraft(input),
   });
   const entries = readJson(HISTORY_FILE);
   entries.unshift(entry);
@@ -2043,7 +2109,7 @@ app.post("/api/history", (req, res) => {
 
 // --- attach the finished output to a pending entry (downloads the file) -------
 app.post("/api/history/:id/result", async (req, res) => {
-  const { resultUrl, resultUrls, costCredits, runtimeMs, draft } = req.body || {};
+  const { resultUrl, resultUrls, costCredits, runtimeMs } = req.body || {};
   const entries = readJson(HISTORY_FILE);
   const entry = entries.find((e) => e.id === req.params.id);
   if (!entry) return res.status(404).json({ code: 404, msg: "history entry not found" });
@@ -2056,8 +2122,7 @@ app.post("/api/history/:id/result", async (req, res) => {
 
   // A ComfyUI batch can return several files; kie.ai always one.
   const urls = (resultUrls && resultUrls.length ? resultUrls : resultUrl ? [resultUrl] : []).filter(Boolean);
-  if (urls.length) await attachOutputs(entry, urls);
-  if (draft === true) entry.draft = true; // auto-draft (low-res video), decided client-side at finish
+  if (urls.length) await attachOutputs(entry, urls); // also applies server-side auto-draft
   if (typeof costCredits === "number") entry.costCredits = costCredits;
   entry.status = "done";
   // Prefer a caller-supplied run time (ComfyUI's real per-prompt execution time);
@@ -2110,6 +2175,17 @@ app.put("/api/history/:id", (req, res) => {
   res.json({ code: 200, msg: "updated", data: entry });
 });
 
+// --- global app settings (auto-draft MP threshold) ------------------------
+app.get("/api/settings", (req, res) => {
+  res.json({ code: 200, msg: "success", data: { autoDraftMaxMP: Number(readAppSettings().autoDraftMaxMP) || 0 } });
+});
+app.put("/api/settings", (req, res) => {
+  const s = readAppSettings();
+  if (req.body?.autoDraftMaxMP != null) s.autoDraftMaxMP = Math.max(0, Number(req.body.autoDraftMaxMP) || 0);
+  writeAppSettings(s);
+  res.json({ code: 200, msg: "updated", data: { autoDraftMaxMP: Number(s.autoDraftMaxMP) || 0 } });
+});
+
 // --- toggle an entry's tags (hidden / draft) ------------------------------
 app.post("/api/history/:id/tags", (req, res) => {
   const { hidden, draft } = req.body || {};
@@ -2117,7 +2193,16 @@ app.post("/api/history/:id/tags", (req, res) => {
   const entry = entries.find((e) => e.id === req.params.id);
   if (!entry) return res.status(404).json({ code: 404, msg: "history entry not found" });
   if (typeof hidden === "boolean") entry.hidden = hidden;
-  if (typeof draft === "boolean") entry.draft = draft;
+  if (typeof draft === "boolean" && draft !== entry.draft) {
+    entry.draft = draft;
+    // Relocate the saved file(s) into / out of the project's draft/ subfolder.
+    try {
+      moveHistoryVideo(entry, resolveProject(entry.projectId).slug);
+    } catch (err) {
+      console.error("Failed to move output for draft toggle:", err);
+      return res.status(409).json({ code: 409, msg: "Failed to move the output file (is it playing?)" });
+    }
+  }
   writeJson(HISTORY_FILE, entries);
   res.json({ code: 200, msg: "updated", data: entry });
 });

@@ -228,22 +228,20 @@
         <div class="hist-head">
           <h2>History</h2>
           <div class="hist-head-actions">
-            <label class="inline hist-toggle" title="Show cards tagged hidden">
-              <input type="checkbox" id="showHidden" /> Show hidden
-            </label>
-            <label class="inline hist-toggle" title="Auto-tag a finished video as draft when its resolution is at or below this">
-              Auto-draft ≤
-              <select id="autoDraftMax">
-                <option value="off" selected>Off</option>
-                <option value="480p">480p</option>
-                <option value="720p">720p</option>
-                <option value="1080p">1080p</option>
-              </select>
-            </label>
             <button type="button" id="openFolder" class="btn-secondary" title="Open the output folder in Explorer">📂 Open folder</button>
             <button type="button" id="exportHistory" class="btn-secondary" title="Export the shown history to a shareable, zippable folder">📦 Export</button>
             <select id="historyFilter" title="Filter history by project"></select>
           </div>
+        </div>
+        <div class="hist-head-toggles">
+          <label class="inline hist-toggle" title="Show cards tagged hidden">
+            <input type="checkbox" id="showHidden" /> Show hidden
+          </label>
+          <label class="inline hist-toggle" title="Auto-tag a finished generation as draft when its output is at or below this many megapixels (0 = off)">
+            Auto-draft ≤
+            <input type="number" id="autoDraftMax" min="0" step="0.1" value="0" />
+            MP
+          </label>
         </div>
         <div id="history" class="history"></div>
         <div id="historyPager" class="hist-pager hidden"></div>
