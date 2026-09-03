@@ -1638,3 +1638,11 @@ img.zoomable {
   justify-content: flex-end;
   gap: 0.5rem;
 }
+
+/* Reference tags: the literal <Picture N> / <Video N> / <Audio N> strings to cite
+   in a prompt, in the order the model presents them. */
+.ref-tags {
+  margin: 0.1rem 0 0.3rem;
+  font-size: 0.82rem;
+  line-height: 1.5;
+}

@@ -400,6 +400,7 @@ function makeMediaList(kind, opts = {}) {
       clearBtn.classList.toggle("hidden", list.items.length === 0);
       list.renderTails();
       updateEstimate();
+      opts.onChange?.(); // reference labels depend on what's filled across all fields
     },
 
     // One tail row per ready file, numbered like its thumbnail. Lengths are probed
@@ -1385,6 +1386,60 @@ const randomSeed = () => Math.floor(Math.random() * 2 ** 31);
 // included in exports; you can also pick an existing gallery item of that kind.
 // At generate time the chosen file is pushed into ComfyUI's input folder by id.
 const MEDIA_ARTICLE = { image: "an image", video: "a video", audio: "an audio file" };
+// --- reference labels --------------------------------------------------------
+// MiniMax H3 labels references by *presentation* order, not by field: images, then
+// for each reference video its soundtrack's <Audio j> (only when that loader's
+// soundtrack is wired) immediately before its <Video k>, then standalone audio. So a
+// wired soundtrack claims an audio number and a separately attached audio file is
+// <Audio 2> — which is invisible in the form unless we show it. Server sends
+// `refLabelScheme` so this node-specific rule is only applied where it holds.
+let comfyRefTagsEl = null;
+let comfyRefLabelScheme = null;
+
+// Tags in presentation order, plus the per-slot tag for each media field.
+function comfyRefTags() {
+  const counts = { picture: 0, video: 0, audio: 0 };
+  const perField = new Map(); // field -> [tag, …] aligned with its filled slots
+  const summary = [];
+  const fieldsOfKind = (kind) => comfyFields.filter((f) => f.mediaKind === kind && f.filledMedia);
+
+  for (const f of fieldsOfKind("image")) {
+    const tags = f.filledMedia().map(() => `<Picture ${++counts.picture}>`);
+    perField.set(f, tags);
+    tags.forEach((t, i) => summary.push(`${t} ${f.filledMedia()[i].name || ""}`.trim()));
+  }
+  for (const f of fieldsOfKind("video")) {
+    const tags = [];
+    f.filledMedia().forEach((item, i) => {
+      if (f.soundtrackAt?.(i)) summary.push(`<Audio ${++counts.audio}> = Video ${counts.video + 1}'s soundtrack`);
+      const tag = `<Video ${++counts.video}>`;
+      tags.push(tag);
+      summary.push(`${tag} ${item.name || ""}`.trim());
+    });
+    perField.set(f, tags);
+  }
+  for (const f of fieldsOfKind("audio")) {
+    const tags = f.filledMedia().map(() => `<Audio ${++counts.audio}>`);
+    perField.set(f, tags);
+    tags.forEach((t, i) => summary.push(`${t} ${f.filledMedia()[i].name || ""}`.trim()));
+  }
+  return { perField, summary };
+}
+
+// Write the real tags onto the thumbnails and refresh the summary line. Called from
+// every media field's render, so it must not itself trigger a re-render.
+function refreshComfyRefTags() {
+  if (comfyRefLabelScheme !== "minimax_h3") return;
+  const { perField, summary } = comfyRefTags();
+  for (const [f, tags] of perField) {
+    const labels = f.el.querySelectorAll(".dropzone .thumb.ready .img-label");
+    tags.forEach((t, i) => { if (labels[i]) labels[i].textContent = t; });
+  }
+  if (!comfyRefTagsEl) return;
+  comfyRefTagsEl.textContent = summary.length ? `Prompt tags — ${summary.join(" · ")}` : "";
+  comfyRefTagsEl.classList.toggle("hidden", !summary.length);
+}
+
 // --- reference-video tails ---------------------------------------------------
 // "Use only the last N seconds of this reference." Reference frames are re-injected
 // on every sampling step, so trimming a reference to the part that matters (its tail,
@@ -1484,10 +1539,16 @@ function makeComfyMedia(token, mediaKind) {
   // there first). uploadedRef caches the ComfyUI filename after one upload.
   let source = null, uploadedRef = null;
 
-  const previewThumb = (url, name) => {
+  const previewThumb = (url, name, withLabel = false) => {
     const div = document.createElement("div");
     div.className = `thumb ready${mediaKind === "audio" ? " audio-thumb" : ""}`;
     div.appendChild(makeThumbContent(mediaKind, { thumb: url, name }));
+    if (withLabel) {
+      // filled by refreshComfyRefTags when the workflow uses a known label scheme
+      const lab = document.createElement("span");
+      lab.className = "img-label";
+      div.appendChild(lab);
+    }
     return div;
   };
   // Per-file "use last N sec", when this reference's loader can skip frames.
@@ -1513,8 +1574,9 @@ function makeComfyMedia(token, mediaKind) {
   const render = () => {
     thumbs.innerHTML = "";
     clearBtn.classList.toggle("hidden", !source);
-    if (source) thumbs.appendChild(previewThumb(source.url, source.name));
+    if (source) thumbs.appendChild(previewThumb(source.url, source.name, true));
     renderTail();
+    refreshComfyRefTags();
   };
   const setSource = (s) => { source = s; uploadedRef = null; probe = undefined; render(); };
 
@@ -1580,6 +1642,8 @@ function makeComfyMedia(token, mediaKind) {
     isMedia: true,
     mediaKind,
     mediaKey: token.name,
+    filledMedia: () => (source ? [{ name: source.name }] : []),
+    soundtrackAt: () => !!token.soundtrack,
     capacity: 1,
     hasDefault: token.default !== "",
     set() {}, // a scalar value can't fill a media control — skip on scalar prefill
@@ -1626,6 +1690,8 @@ async function renderComfyControls() {
   comfyFields = [];
   comfyLoraControl = null;
   comfyBypassControl = null;
+  comfyRefTagsEl = null;
+  comfyRefLabelScheme = null;
   const wf = comfyWorkflows.find((w) => w.file === comfyFile());
   if (!wf) {
     comfyControlsEl.innerHTML = `<p class="muted">Workflow not found — try reloading.</p>`;
@@ -1701,11 +1767,15 @@ async function renderComfyControls() {
   // (e.g. Sage Attention). Plain enum combos like sampler_name / scheduler are
   // generation params and stay in the main form next to steps/seed/duration.
   const bypassIds = new Set((meta.bypassable || []).map((b) => String(b.id)));
+  comfyRefLabelScheme = meta.refLabelScheme || null; // null → keep each field's own numbering
   const settingsScalars = [];
   for (const it of items) {
     if (it.kind === "series") {
       const entries = it.entries.sort((a, b) => a.index - b.index);
-      const ctrl = makeComfyMediaMulti(it.base, it.type, entries.map((e) => e.token.name), entries[0].token.tail);
+      const ctrl = makeComfyMediaMulti(
+        it.base, it.type, entries.map((e) => e.token.name), entries[0].token.tail,
+        entries.map((e) => e.token.soundtrack),
+      );
       ctrl.el.style.gridColumn = `span ${WIDTH_SPAN[entries[0].token.width] || 12}`;
       comfyControlsEl.appendChild(ctrl.el);
       comfyFields.push(ctrl);
@@ -1749,6 +1819,13 @@ async function renderComfyControls() {
   if (comfyBypassControl) comfyBypassControl.mountRemaining(body); // toggles with no controls
   comfyLoraControl = makeComfyLoraControl(meta.loraOptions || [], !!meta.offline);
   body.appendChild(comfyLoraControl.el);
+  if (comfyRefLabelScheme) {
+    // The literal strings to cite in the prompt, in the order the model presents them.
+    comfyRefTagsEl = document.createElement("p");
+    comfyRefTagsEl.className = "ref-tags hint hidden";
+    comfyRefTagsEl.style.gridColumn = "span 12";
+    comfyControlsEl.appendChild(comfyRefTagsEl);
+  }
   comfyControlsEl.appendChild(details);
 
   // Overlay this workflow's saved config (server-side settings file) so the form
@@ -1758,6 +1835,7 @@ async function renderComfyControls() {
     if (seq !== comfyRenderSeq) return;
     const settings = s?.data || {};
     prefillComfyControls(settings);
+    refreshComfyRefTags();
     if (comfyLoraControl && Array.isArray(settings.loras)) comfyLoraControl.setLoras(settings.loras);
     if (comfyBypassControl && Array.isArray(settings.bypass)) comfyBypassControl.setDisabled(settings.bypass);
   } catch {
@@ -2099,7 +2177,7 @@ function renderScalarControl(token, type, container = comfyControlsEl) {
 // badges ("Picture 1, 2…"). The Nth file fills the Nth token; unfilled tokens are
 // pruned at submit.
 let comfyListSeq = 0;
-function makeComfyMediaMulti(base, mediaKind, tokenNames, tail = null) {
+function makeComfyMediaMulti(base, mediaKind, tokenNames, tail = null, soundtracks = []) {
   const label = prettyLabel(base);
   const max = tokenNames.length;
   const list = makeMediaList(`comfy-${base}-${comfyListSeq++}`, {
@@ -2114,6 +2192,7 @@ function makeComfyMediaMulti(base, mediaKind, tokenNames, tail = null) {
     hint: `(up to ${max}, in order — drag to reorder)`,
     tail: !!tail, // loader can skip frames → offer a per-file "use last N sec"
     tailGrid: tail?.grid || null,
+    onChange: refreshComfyRefTags, // reference tags depend on what's filled
   });
 
   const ready = () => list.items.filter((i) => i.status === "ready");
@@ -2122,6 +2201,10 @@ function makeComfyMediaMulti(base, mediaKind, tokenNames, tail = null) {
     el: list.el,
     isMultiMedia: true,
     mediaKind,
+    // Filled slots in order, and whether slot i's loader carries its own soundtrack
+    // (which claims an <Audio j> label ahead of that video's <Video k>).
+    filledMedia: () => ready().map((i) => ({ name: i.name })),
+    soundtrackAt: (i) => !!soundtracks[i],
     mediaKey: base,
     capacity: max,
     // Restore previously-used files (last-used defaults, or history re-import).

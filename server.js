@@ -582,7 +582,12 @@ app.get("/api/comfy/workflow-meta", async (req, res) => {
   // Video references whose loader can skip frames get a per-file "use the last N
   // seconds" control (see tailSupport).
   const withTail = (list) =>
-    list.map((t) => (t.inputKey === "video" && t.nodeId ? { ...t, tail: tailSupport(workflow, t.nodeId) } : t));
+    list.map((t) =>
+      t.inputKey === "video" && t.nodeId
+        ? { ...t, tail: tailSupport(workflow, t.nodeId), soundtrack: videoHasSoundtrack(workflow, t.nodeId) }
+        : t
+    );
+  const scheme = refLabelScheme(workflow);
   let objectInfo;
   try {
     objectInfo = await getObjectInfo();
@@ -590,14 +595,20 @@ app.get("/api/comfy/workflow-meta", async (req, res) => {
     return res.json({
       code: 200,
       msg: "success",
-      data: { offline: true, tokens: withTail(withKeys), loraOptions: [], bypassable },
+      data: { offline: true, tokens: withTail(withKeys), loraOptions: [], bypassable, refLabelScheme: scheme },
     });
   }
   const enriched = withKeys.map((t) => enrichToken(t, nodeMap, objectInfo));
   res.json({
     code: 200,
     msg: "success",
-    data: { offline: false, tokens: withTail(enriched), loraOptions: loraOptionsFrom(objectInfo), bypassable },
+    data: {
+      offline: false,
+      tokens: withTail(enriched),
+      loraOptions: loraOptionsFrom(objectInfo),
+      bypassable,
+      refLabelScheme: scheme,
+    },
   });
 });
 
@@ -885,7 +896,12 @@ function bypassNode(workflow, id) {
   const node = workflow[id];
   if (!node) return;
   const linkInputs = Object.entries(node.inputs || {}).filter(([, v]) => Array.isArray(v) && v.length === 2);
+  // Which input carries the signal that should survive the node's removal. Inferring it
+  // works for single-in/single-out patches (a `model` input, or the only link input), but
+  // a node with several link inputs has to name it: `_meta.bypass_passthrough: "positive"`.
+  const named = node._meta?.bypass_passthrough;
   const src =
+    (named && Array.isArray(node.inputs?.[named]) && node.inputs[named]) ||
     (Array.isArray(node.inputs?.model) && node.inputs.model) ||
     (linkInputs.length === 1 ? linkInputs[0][1] : null);
   for (const n of Object.values(workflow)) {
@@ -931,6 +947,29 @@ function tailSupport(workflow, nodeId) {
   const g = node._meta?.tail_frame_grid;
   const grid = Array.isArray(g) && g.length === 2 && g.every((n) => Number.isInteger(n) && n > 0) ? g : null;
   return { input, grid };
+}
+
+// --- reference labels -------------------------------------------------------
+// MiniMaxH3ReferenceToVideo presents its references to the text encoder in a fixed
+// order — images, then for each video its soundtrack's <Audio j> label immediately
+// before that video's <Video k>, then standalone audio. So a wired soundtrack
+// *claims an audio number*, and a separately attached audio file becomes <Audio 2>.
+// The UI can only show the real tags if it knows which video loaders have their
+// soundtrack connected, which is per-workflow: report it per video token.
+function videoHasSoundtrack(workflow, nodeId) {
+  for (const node of Object.values(workflow || {})) {
+    for (const [k, v] of Object.entries(node?.inputs || {})) {
+      if (k.startsWith("ref_video_audios.") && Array.isArray(v) && String(v[0]) === String(nodeId)) return true;
+    }
+  }
+  return false;
+}
+
+// Which label scheme the client should apply, or null to leave its own numbering
+// alone. Node-specific by nature, so it's named rather than assumed.
+function refLabelScheme(workflow) {
+  const has = Object.values(workflow || {}).some((n) => n?.class_type === "MiniMaxH3ReferenceToVideo");
+  return has ? "minimax_h3" : null;
 }
 
 // Frame count / fps of a local video, for turning seconds-of-tail into an exact
@@ -1257,18 +1296,21 @@ app.post("/api/comfy/generate", async (req, res) => {
 // Collect a ComfyUI history entry's output files as viewable /view URLs (video/
 // animation first, then stills).
 function collectComfyOutputs(entry) {
-  const urls = [];
+  // Moving/still outputs are collected separately so a workflow that also saves a still
+  // (e.g. a final-frame PNG for chaining) still reports the video as its result.
+  const moving = [];
+  const stills = [];
   for (const out of Object.values(entry.outputs || {})) {
     for (const key of ["videos", "gifs", "images"]) {
       for (const f of out[key] || []) {
-        urls.push(
+        (key === "images" ? stills : moving).push(
           `${COMFYUI_URL}/view?filename=${encodeURIComponent(f.filename)}` +
             `&subfolder=${encodeURIComponent(f.subfolder || "")}&type=${encodeURIComponent(f.type || "output")}`
         );
       }
     }
   }
-  return urls;
+  return moving.concat(stills);
 }
 
 // Actual execution time for a finished prompt, from ComfyUI's own timestamps in
