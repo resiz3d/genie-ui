@@ -50,6 +50,19 @@ const WORKFLOWS_DEFAULT_DIR = path.join(WORKFLOWS_DIR, "default");
 // Per-workflow config (chosen model/LoRA/VAE/sampler + the dynamic LoRA list),
 // stored server-side so it's shared across devices (incl. the phone over LAN).
 const COMFY_SETTINGS_DIR = path.resolve(__dirname, process.env.COMFY_SETTINGS_DIR || "settings/comfy");
+// Live latent previews. ComfyUI honors extra_data.preview_method per prompt, so
+// previews work on any workflow with no workflow-JSON edits and no ComfyUI launch
+// flags. COMFY_PREVIEW_METHOD=off is a hard kill switch whatever a browser asks for.
+const COMFY_PREVIEW_METHOD = (process.env.COMFY_PREVIEW_METHOD || "auto").toLowerCase();
+const PREVIEW_METHODS = new Set(["none", "auto", "latent2rgb", "taesd"]);
+
+function comfyPreviewMethod(requested) {
+  if (COMFY_PREVIEW_METHOD === "off" || COMFY_PREVIEW_METHOD === "none") return "none";
+  const want = String(requested || "").toLowerCase();
+  if (want === "off") return "none";
+  if (PREVIEW_METHODS.has(want)) return want;
+  return PREVIEW_METHODS.has(COMFY_PREVIEW_METHOD) ? COMFY_PREVIEW_METHOD : "auto";
+}
 
 if (!API_KEY) {
   console.error(
@@ -1105,12 +1118,48 @@ let comfyWsConnecting = false;
 let comfyCurrentPrompt = null;
 const comfyProgress = new Map(); // promptId -> { value, max, updatedAt }
 
+// Latent preview frames. ComfyUI's binary frame is [4B big-endian event type]
+// [4B big-endian image type][image bytes] and names no prompt — but the JSON
+// `progress` message naming one is broadcast immediately before it, and ComfyUI
+// executes one prompt at a time, so the frame belongs to comfyCurrentPrompt.
+// Only the newest frame per prompt is kept.
+const PREVIEW_EVENT_IMAGE = 1;
+const PREVIEW_MIME = { 1: "image/jpeg", 2: "image/png" };
+const PREVIEW_MAX_PROMPTS = 8; // ~30-80 KB each — a hard ceiling on this cache
+const comfyPreview = new Map(); // promptId -> { buf, mime, seq, updatedAt }
+let previewSeq = 0;
+
+function capturePreview(data) {
+  if (!(data instanceof ArrayBuffer) || data.byteLength < 8) return;
+  const view = new DataView(data);
+  if (view.getUint32(0) !== PREVIEW_EVENT_IMAGE) return; // some other binary event
+  const mime = PREVIEW_MIME[view.getUint32(4)];
+  const pid = comfyCurrentPrompt;
+  if (!mime || !pid) return;
+  // Buffer.from(arrayBuffer, 8) is a view, not a copy — the socket hands us a fresh
+  // buffer per message, so there's nothing to clone.
+  comfyPreview.set(pid, { buf: Buffer.from(data, 8), mime, seq: ++previewSeq, updatedAt: Date.now() });
+  if (comfyPreview.size > PREVIEW_MAX_PROMPTS) pruneComfyPreview(true);
+  broadcastPreview(pid, previewSeq);
+}
+
+// Frames go stale far faster than progress, hence the shorter TTL. `force` also
+// evicts the oldest prompt so a burst of abandoned runs can't pile up.
+function pruneComfyPreview(force) {
+  const cutoff = Date.now() - 2 * 60 * 1000;
+  for (const [pid, f] of comfyPreview) if (f.updatedAt < cutoff) comfyPreview.delete(pid);
+  while (force && comfyPreview.size > PREVIEW_MAX_PROMPTS) comfyPreview.delete(comfyPreview.keys().next().value);
+}
+
 function ensureComfyWs() {
   if (comfyWs || comfyWsConnecting) return;
   comfyWsConnecting = true;
   let ws;
   try {
     ws = new WebSocket(COMFY_WS_URL);
+    // Preview frames then arrive as ArrayBuffers, in order. The default ("blob")
+    // would force an await per frame and let two frames land out of order.
+    ws.binaryType = "arraybuffer";
   } catch {
     comfyWsConnecting = false;
     return;
@@ -1118,12 +1167,19 @@ function ensureComfyWs() {
   const drop = () => {
     if (comfyWs === ws) comfyWs = null;
     comfyWsConnecting = false;
+    comfyCurrentPrompt = null; // stale after a reconnect — don't misattribute frames
   };
   ws.addEventListener("open", () => { comfyWs = ws; comfyWsConnecting = false; });
   ws.addEventListener("close", drop);
   ws.addEventListener("error", drop);
   ws.addEventListener("message", (ev) => {
-    if (typeof ev.data !== "string") return; // ignore binary preview frames
+    if (typeof ev.data !== "string") {
+      // Binary = a latent preview frame. binaryType is "arraybuffer" above; the Blob
+      // branch only guards against that ever not being honored.
+      if (ev.data instanceof ArrayBuffer) capturePreview(ev.data);
+      else ev.data?.arrayBuffer?.().then(capturePreview).catch(() => {});
+      return;
+    }
     let msg;
     try { msg = JSON.parse(ev.data); } catch { return; }
     const { type, data } = msg || {};
@@ -1131,6 +1187,7 @@ function ensureComfyWs() {
       if (data?.prompt_id) comfyCurrentPrompt = data.prompt_id;
     } else if (type === "progress") {
       const pid = data?.prompt_id || comfyCurrentPrompt;
+      if (pid) comfyCurrentPrompt = pid; // the preview frame that follows belongs to this prompt
       if (pid && Number.isFinite(data?.value) && Number.isFinite(data?.max)) {
         comfyProgress.set(pid, { value: data.value, max: data.max, updatedAt: Date.now() });
       }
@@ -1141,6 +1198,9 @@ function ensureComfyWs() {
       type === "execution_interrupted"
     ) {
       if (data?.prompt_id) comfyProgress.delete(data.prompt_id);
+      // Previews survive `executed` (that fires per output node) — only a finished
+      // or failed run drops one.
+      if (data?.prompt_id && type !== "executed") comfyPreview.delete(data.prompt_id);
     }
   });
 }
@@ -1227,7 +1287,7 @@ async function comfyVram() {
 // orphan the run).
 app.post("/api/comfy/generate", async (req, res) => {
   ensureComfyWs(); // start listening for progress before the run begins
-  const { file, values, prune, loras, bypass, tails, input, mediaLocalIds, projectId, refVideoSeconds } =
+  const { file, values, prune, loras, bypass, tails, input, mediaLocalIds, projectId, refVideoSeconds, previewMethod } =
     req.body || {};
   const wfPath = workflowPath(file);
   if (!wfPath || !fs.existsSync(wfPath)) {
@@ -1251,7 +1311,12 @@ app.post("/api/comfy/generate", async (req, res) => {
     const r = await fetch(`${COMFYUI_URL}/prompt`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt: workflow }),
+      // Ask for latent previews on this prompt. We deliberately send no client_id:
+      // that would make ComfyUI unicast this run's messages to us and hide it from
+      // ComfyUI's own web UI. Without one, preview frames are broadcast to every
+      // socket — ours included. (ComfyUI applies the method to a process-global
+      // setting, so it persists until the next prompt sets its own. Harmless.)
+      body: JSON.stringify({ prompt: workflow, extra_data: { preview_method: comfyPreviewMethod(previewMethod) } }),
     });
     const body = await r.json().catch(() => ({}));
     if (!r.ok || !body.prompt_id) {
@@ -1519,6 +1584,64 @@ app.get("/api/comfy/stats", async (req, res) => {
     vram = await comfyVram(); // GPU % unavailable without nvidia-smi
   }
   res.json({ code: 200, msg: "success", data: { cpu, gpu, vram, ram } });
+});
+
+// --- live preview frames to the browser ---------------------------------------
+// One shared SSE stream per tab: every ping carries a promptId, so however many runs
+// are queued they share one connection. The frame itself is a normal GET (raw JPEG —
+// no base64 inflation, and paid for only by the tab that owns the run). The password
+// gate above covers both routes; EventSource is same-origin and sends the cookie.
+const previewClients = new Set();
+const PREVIEW_CLIENT_MAX = 20; // a runaway tab/proxy can't grow this without bound
+
+function broadcastPreview(promptId, seq) {
+  const line = `data: ${JSON.stringify({ promptId, seq })}\n\n`;
+  for (const res of previewClients) {
+    try {
+      res.write(line);
+    } catch {
+      previewClients.delete(res);
+    }
+  }
+}
+
+app.get("/api/comfy/preview-stream", (req, res) => {
+  if (previewClients.size >= PREVIEW_CLIENT_MAX) return res.status(503).end();
+  ensureComfyWs(); // someone is watching a run — make sure we're listening for frames
+  res.set({
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no", // stop a reverse proxy buffering the stream
+  });
+  res.flushHeaders();
+  res.write("retry: 3000\n\n");
+  previewClients.add(res);
+  // Catch a late joiner up (a reload mid-run): without this the card stays blank
+  // until the next sampler step, which on a video workflow is a long time.
+  pruneComfyPreview();
+  for (const [pid, f] of comfyPreview) res.write(`data: ${JSON.stringify({ promptId: pid, seq: f.seq })}\n\n`);
+  // Comment heartbeat: keeps idle proxies and socket timeouts from closing the stream.
+  const beat = setInterval(() => {
+    try {
+      res.write(": ping\n\n");
+    } catch {
+      /* the close handler below cleans up */
+    }
+  }, 20000);
+  req.on("close", () => {
+    clearInterval(beat);
+    previewClients.delete(res);
+  });
+});
+
+// The newest frame for a prompt. `seq` in the query is only a cache-buster — we always
+// answer with the latest frame we have, so a client that raced a newer ping still gets
+// a valid (slightly newer) image instead of a 404.
+app.get("/api/comfy/preview", (req, res) => {
+  const frame = comfyPreview.get(String(req.query.promptId || ""));
+  if (!frame) return res.status(404).end();
+  res.set("Cache-Control", "no-store").type(frame.mime).send(frame.buf);
 });
 
 // --- open the output folder in the OS file explorer -----------------------

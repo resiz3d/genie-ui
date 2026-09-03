@@ -309,6 +309,35 @@ restart. If ComfyUI itself is restarted before a finished run is copied, its
 in-memory record is gone: after a short grace the entry is marked failed with a note
 (the output still sits in ComfyUI's output folder) — re-run to regenerate it.
 
+### Live preview frames
+
+While a run samples, its pending History card shows a **live preview** of the frame
+being formed, updating every sampler step, in the slot the finished output will take.
+
+This needs nothing per workflow: GENie asks for previews on each queued prompt
+(`extra_data.preview_method`), so it works whatever ComfyUI was launched with. The
+server picks the frames off ComfyUI's `/ws` and pushes them to the browser over
+`/api/comfy/preview-stream` (server-sent events); the frames themselves are fetched
+from `/api/comfy/preview`.
+
+The **Preview** dropdown next to the ×N queue counter picks the decoder, per browser:
+
+- **fast** (default) — `latent2rgb`. No downloads, near-zero cost, but coarse:
+  impressionistic colour blocks that sharpen as sampling proceeds.
+- **sharp** — `taesd`. Needs an approx-VAE in ComfyUI's `models/vae_approx/`:
+  `taesd_decoder.pth` for SD/SDXL, or the matching video TAE (`taehv`,
+  `lighttaew2_2`, `lighttaew2_1`, `lighttaehy1_5`, `taeltx_2`, `taeh3`). Without one,
+  ComfyUI logs a warning and quietly falls back to `latent2rgb`.
+- **off** — no previews requested, no stream opened.
+
+`COMFY_PREVIEW_METHOD` in `.env` sets the default and, set to `off`, disables
+previews server-side whatever a browser asks for.
+
+Two limits: a video latent previews as **one frame** (frame 0), not motion; and only
+samplers that use ComfyUI's standard preview callback emit frames — the core
+`KSampler` family does, but a custom-node sampler may not, in which case the card
+just looks the way it did before this feature.
+
 ## Notes & limits
 
 - Local models are labelled **Experimental** in the UI — the token/control layer is

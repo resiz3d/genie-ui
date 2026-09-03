@@ -36,6 +36,11 @@ let activeProjectId = localStorage.getItem(PROJECT_KEY) || "default";
 const SHOW_HIDDEN_KEY = "genie_show_hidden";
 let showHidden = localStorage.getItem(SHOW_HIDDEN_KEY) === "1";
 
+// Live latent previews during a local ComfyUI run (per-browser). "off" also skips
+// opening the preview stream entirely.
+const PREVIEW_KEY = "genie_preview_method";
+let previewMethod = localStorage.getItem(PREVIEW_KEY) || "auto";
+
 const POLL_INTERVAL_MS = 5000;
 
 // Persisted in-flight tasks so a tab reload can resume polling instead of losing
@@ -779,6 +784,15 @@ autoDraftMaxEl.addEventListener("change", () => {
   }).catch(() => {});
 });
 
+// Live preview method for local runs — sent with each queued prompt.
+const previewMethodEl = document.getElementById("previewMethod");
+previewMethodEl.value = previewMethod;
+previewMethodEl.addEventListener("change", () => {
+  previewMethod = previewMethodEl.value;
+  localStorage.setItem(PREVIEW_KEY, previewMethod);
+  if (previewMethod === "off") closePreviewStream();
+});
+
 // Toggle a history entry's tag (hidden/draft) and refresh.
 async function toggleHistoryTag(entry, tag) {
   const next = !entry[tag];
@@ -1177,6 +1191,7 @@ function applyModelUI() {
   cc.classList.toggle("hidden", !comfy);
   cc.classList.toggle("comfy-grid", comfy);
   document.getElementById("comfyCountField").classList.toggle("hidden", !comfy);
+  document.getElementById("previewMethodField").classList.toggle("hidden", !comfy);
   if (comfy) {
     // Swap the whole kie.ai form for token-driven workflow controls.
     for (const id of KIE_FIELDS) document.getElementById(id).classList.add("hidden");
@@ -2442,6 +2457,7 @@ async function queueComfyRun(wf, values, prune, mediaIds, input, loras, bypass, 
         mediaLocalIds: job.mediaLocalIds,
         projectId: job.projectId,
         refVideoSeconds: 0,
+        previewMethod,
       }),
     });
     const data = await res.json();
@@ -2458,6 +2474,7 @@ async function queueComfyRun(wf, values, prune, mediaIds, input, loras, bypass, 
     if (job.historyId) liveStatus.set(job.historyId, live);
     wireComfyCancel(job);
     addInflight(job);
+    ensurePreviewStream(); // start listening for this run's preview frames
     loadHistory(); // renders the pending entry with the live status inside
     pollComfyJob(job);
   } catch (err) {
@@ -2493,11 +2510,15 @@ async function pollComfyJob(job) {
   const state = data.data?.state;
   if (state === "success") {
     removeInflight(job.taskId);
-    finishLive(job);
+    finishLive(job, { hold: true }); // keep the last preview frame up while we save
     const urls = JSON.parse(data.data.resultJson || "{}").resultUrls || [];
-    if (!urls.length) return failJob(job, "Finished, but ComfyUI returned no output file.");
+    if (!urls.length) {
+      releaseLive(job);
+      return failJob(job, "Finished, but ComfyUI returned no output file.");
+    }
     // Pass every output (a batch can be several) and ComfyUI's real per-prompt run time.
     await attachHistoryResult(job, urls, null, data.data.runtimeMs); // downloads, marks done, refreshes History
+    releaseLive(job); // the card now renders the real output — drop the held frame
     return;
   }
   if (state === "fail") {
@@ -2595,8 +2616,15 @@ function createLiveStatus(job) {
   const progressBar = document.createElement("div");
   progressBar.className = "job-progress-bar";
   progressWrap.appendChild(progressBar);
-  el.append(line, progressWrap);
+  // The status/progress column is wrapped so a live preview frame can sit beside it
+  // in a 200px thumb, matching the layout of a finished card.
+  const col = document.createElement("div");
+  col.className = "hist-live-col";
+  col.append(line, progressWrap);
+  el.appendChild(col);
 
+  let previewImg = null;
+  let previewToken = 0;
   let baseStatus = "Generating…";
   let progInfo = null; // { value, max, anchorT, anchorValue }
   const progStartedAt = job.startedAt || Date.now();
@@ -2618,6 +2646,7 @@ function createLiveStatus(job) {
     el,
     running: true,
     isComfy: (job.input?.model || "").startsWith("comfy:"),
+    promptId: job.taskId || null,
     setStatus(text) { baseStatus = text; paint(); },
     setProgress(value, max) {
       if (!max || max <= 0) return;
@@ -2627,6 +2656,27 @@ function createLiveStatus(job) {
       progressWrap.classList.remove("hidden");
       paint();
       if (!progTicker) progTicker = setInterval(paint, 1000);
+    },
+    // Latest latent-preview frame. The <img> hangs off this controller's element, so
+    // renderHistory's re-parenting keeps it on screen across refreshes.
+    setPreview(url) {
+      if (!previewImg) {
+        previewImg = document.createElement("img");
+        previewImg.className = "hist-preview-img";
+        previewImg.alt = "";
+        previewImg.decoding = "async";
+        const wrap = document.createElement("div");
+        wrap.className = "hist-live-thumb";
+        wrap.appendChild(previewImg);
+        el.prepend(wrap);
+        el.classList.add("has-preview");
+      }
+      // Decode off-screen and swap only on load — assigning src directly can blank
+      // the card between frames. A frame that lands after a newer one is dropped.
+      const token = ++previewToken;
+      const pre = new Image();
+      pre.onload = () => { if (token === previewToken) previewImg.src = pre.src; };
+      pre.src = url;
     },
     // Show a Cancel button; `fn` runs once on click.
     enableCancel(fn) {
@@ -2642,9 +2692,18 @@ function createLiveStatus(job) {
 }
 
 const liveOf = (job) => (job.historyId ? liveStatus.get(job.historyId) : null);
-function finishLive(job) {
+// Stop the clock. With `hold`, the controller stays mounted so the card keeps showing
+// its last preview frame until attachHistoryResult re-renders it with the real output
+// — dropping it here would flash the ⏳ placeholder in between.
+function finishLive(job, { hold = false } = {}) {
   const l = liveOf(job);
-  if (l) { l.stop(); liveStatus.delete(job.historyId); }
+  if (!l) return;
+  l.stop();
+  if (hold) return l.setStatus("Saving output…");
+  liveStatus.delete(job.historyId);
+}
+function releaseLive(job) {
+  if (job.historyId) liveStatus.delete(job.historyId);
 }
 // Persist a definitive failure/cancel to the pending History entry, then refresh.
 async function failJob(job, msg) {
@@ -2682,6 +2741,37 @@ function wireComfyCancel(job) {
     }
     await failJob(job, "Cancelled — re-run from History any time.");
   });
+}
+
+// --- live preview frames (ComfyUI latent previews) ------------------------------
+// One EventSource for the whole page: the server tags each ping with the promptId, so
+// however many runs are queued they share this stream. Only the ping crosses it; the
+// frame itself is fetched as a plain JPEG, so a tab that doesn't own the run pays
+// nothing for it.
+let previewES = null;
+let previewDead = false; // 401 / route missing — stop trying for this page load
+
+function ensurePreviewStream() {
+  if (previewES || previewDead || previewMethod === "off") return;
+  const es = (previewES = new EventSource("/api/comfy/preview-stream"));
+  es.addEventListener("message", (ev) => {
+    let d;
+    try { d = JSON.parse(ev.data); } catch { return; }
+    // Route by promptId: frames for another tab's run — or for a prompt queued
+    // straight from ComfyUI's own UI — simply match nothing here.
+    const live = [...liveStatus.values()].find((l) => l.isComfy && l.promptId === d.promptId);
+    live?.setPreview(`/api/comfy/preview?promptId=${encodeURIComponent(d.promptId)}&seq=${d.seq}`);
+  });
+  es.addEventListener("error", () => {
+    // Per spec a non-2xx response closes the stream for good (signed out, or a server
+    // without the route) — accept that and go quiet. A merely dropped connection
+    // reconnects on its own and doesn't land here as CLOSED.
+    if (es.readyState === EventSource.CLOSED) { previewDead = true; previewES = null; }
+  });
+}
+
+function closePreviewStream() {
+  if (previewES) { previewES.close(); previewES = null; }
 }
 
 function collectInput(resolved) {
@@ -3731,9 +3821,11 @@ function resumeInflight() {
     if (job.historyId) liveStatus.set(job.historyId, live);
     // Route resumed jobs to the matching poller (ComfyUI vs kie.ai).
     const isComfyJob = (pending.input?.model || "").startsWith("comfy:");
-    if (isComfyJob) wireComfyCancel(job);
-    if (isComfyJob) pollComfyJob(job);
-    else pollJob(job);
+    if (isComfyJob) {
+      wireComfyCancel(job);
+      ensurePreviewStream();
+      pollComfyJob(job);
+    } else pollJob(job);
   }
   loadHistory(); // render pending cards with their freshly-attached live status
 }
@@ -3784,6 +3876,7 @@ function scheduleComfyStats(delay) {
 
 async function comfyStatsTick() {
   const running = [...liveStatus.values()].some((l) => l.isComfy && l.running);
+  if (!running) closePreviewStream(); // no run in flight — don't hold an idle stream open
   if (running || isComfy()) {
     try {
       const r = await fetch("/api/comfy/stats");

@@ -215,6 +215,14 @@
           <label class="queue-count hidden" id="comfyCountField" title="Queue this many generations">
             ×<input id="comfyCount" type="number" min="1" max="20" step="1" value="1" />
           </label>
+          <label class="queue-count hidden" id="previewMethodField" title="Show a live preview of the frame forming as it samples">
+            👁
+            <select id="previewMethod">
+              <option value="auto">Preview: fast</option>
+              <option value="taesd">Preview: sharp</option>
+              <option value="off">Preview: off</option>
+            </select>
+          </label>
           <span class="estimate" id="estimate"></span>
         </div>
       </form>
