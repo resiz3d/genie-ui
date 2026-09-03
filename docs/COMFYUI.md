@@ -153,11 +153,37 @@ A workflow can wire many reference-loader nodes (e.g. all 9 image / 3 video /
 Media tokens that share a base name and end in a number are **grouped into one
 multi-upload field** — the *same* component as the kie.ai reference-images dropzone,
 so it supports **drag-to-reorder**, **view full size** (⤢), and **Pick from
-gallery**. Add several files; they're numbered in order (Picture 1, Picture 2, …),
-matching the `<Picture N>` prompt tags, and you can drag them to re-sort. The Nth
+gallery**. Add several files; each thumbnail is labelled with the **exact tag to cite
+in the prompt** (see *Reference labels* below), and you can drag them to re-sort. The Nth
 file fills the Nth token; the field's width/order come from the first token in the
 series (`picture1`). URL drops aren't accepted here — ComfyUI needs a real file, so
 drop or browse a file (it's saved to the gallery first).
+
+### Reference labels
+
+MiniMax H3 numbers references by **presentation order, not by field**: images first,
+then for each reference video its soundtrack's `<Audio j>` label immediately *before*
+that video's `<Video k>`, then standalone audio. A wired soundtrack therefore **claims
+an audio number**, so with a picture, a reference video carrying sound, and your own
+audio file all loaded, the tags are:
+
+```
+<Picture 1>  your image
+<Audio 1>    the reference video's soundtrack   ← easy to miss
+<Video 1>    the reference video
+<Audio 2>    your audio file
+```
+
+Because it depends on what's loaded *and* on whether the workflow wires
+`ref_video_audios.ref_video_audio_N`, the numbering shifts between workflows and
+between runs. So the form shows the real tag on each thumbnail and lists the whole
+mapping in one line beneath the reference fields, updating as you add, remove or
+reorder files. A workflow that drops the soundtrack link makes your audio file
+`<Audio 1>` — same files, different tag.
+
+The server reports `refLabelScheme: "minimax_h3"` for workflows containing a
+`MiniMaxH3ReferenceToVideo` node, plus a per-video-token `soundtrack` flag; other
+workflows keep each field's own numbering.
 
 Media is **optional**: any slot you leave empty has its **loader node pruned** from
 the submitted workflow (with its now-dangling connections), so you only fill the
@@ -206,6 +232,50 @@ depends on ffmpeg for `VHS_VideoCombine` and reference-audio extraction, so it's
 normally there). Without it the run still queues — it just uses the whole clip and
 says so on the run.
 
+### Pinned guide clips (continuation)
+
+A plain reference video is positioned *before* the target on the model's shared time
+axis, which gives context but no frame-level tie to the target's first frame — so a
+"continue this shot" run tends to re-establish the scene instead of resuming.
+`MiniMaxH3AddGuide` is the hard mechanism: it writes `minimax_keyframes` into the
+conditioning, and those rows sit at the **same time coordinates as the target**, so the
+frames you anchor at `frame_idx 0` condition the opening of the generated clip.
+
+The local `Minimax H3 (Continue)` workflow wires this from the reference loader itself,
+so there's no second upload and the guide always comes from whatever the reference tail
+left:
+
+```jsonc
+"503": { "inputs": { "value": "{{guide_len=22}}" }, "class_type": "PrimitiveInt" },
+// batch_index must be -guide_len; derive it so the two can't drift apart
+"501": { "inputs": { "expression": "-a", "values.a": ["503", 0] },
+         "class_type": "ComfyMathExpression" },                       // output 1 is the INT
+"502": { "inputs": { "image": ["144", 0], "batch_index": ["501", 1], "length": ["503", 0] },
+         "class_type": "ImageFromBatch" },                            // negative index = from the end
+"500": { "inputs": { "positive": ["136", 0], "latent": ["136", 1], "vae": ["119", 0],
+                     "image": ["502", 0], "frame_idx": 0 },
+         "class_type": "MiniMaxH3AddGuide" }
+```
+
+`BasicGuider`'s `conditioning` then reads `["500", 0]`; the sampler's `latent_image`
+still reads `["136", 1]`, since a guide only alters conditioning.
+
+- **Guide length** must land on the model's grid — 5, 22, 39, 56 … (`% 17 == 5`).
+  `nodes_minimax_h3.py` crops *down* to it, and anything under 5 collapses to a single
+  frame. 22 frames ≈ 0.9s ≈ 7 latent frames, ~3,640 tokens at 640×832.
+- **One frame pins position, not motion.** A multi-frame guide encodes real movement, so
+  velocity carries across the seam — usually what you want when continuing a shot.
+- **Guide frames are not copied through verbatim.** Condition rows and target rows are
+  packed side by side and the output is read from the target rows, so the opening frames
+  are regenerated under strong conditioning — near-identical, not byte-identical.
+- **Aspect must match the source clip.** Guide frames are resized with a *centre crop*
+  to the target's dimensions, so a mismatched `aspect_ratio`/`megapixels` crops them and
+  the seam jumps.
+- **The reference video is required** in that workflow: leaving it empty prunes its
+  loader and strands the guide chain's `image` input.
+- The `audio` anchor is left unwired. At `frame_idx 0` it pins up to the whole remaining
+  track, so it needs its own trimmed clip to be useful rather than the reference's.
+
 ## How a run works
 
 1. Image inputs are saved to the gallery, then pushed to ComfyUI (`/upload/image`).
@@ -238,6 +308,35 @@ is just the pending ComfyUI entries in `history.json`, so it survives an app-ser
 restart. If ComfyUI itself is restarted before a finished run is copied, its
 in-memory record is gone: after a short grace the entry is marked failed with a note
 (the output still sits in ComfyUI's output folder) — re-run to regenerate it.
+
+### Live preview frames
+
+While a run samples, its pending History card shows a **live preview** of the frame
+being formed, updating every sampler step, in the slot the finished output will take.
+
+This needs nothing per workflow: GENie asks for previews on each queued prompt
+(`extra_data.preview_method`), so it works whatever ComfyUI was launched with. The
+server picks the frames off ComfyUI's `/ws` and pushes them to the browser over
+`/api/comfy/preview-stream` (server-sent events); the frames themselves are fetched
+from `/api/comfy/preview`.
+
+The **Preview** dropdown next to the ×N queue counter picks the decoder, per browser:
+
+- **fast** (default) — `latent2rgb`. No downloads, near-zero cost, but coarse:
+  impressionistic colour blocks that sharpen as sampling proceeds.
+- **sharp** — `taesd`. Needs an approx-VAE in ComfyUI's `models/vae_approx/`:
+  `taesd_decoder.pth` for SD/SDXL, or the matching video TAE (`taehv`,
+  `lighttaew2_2`, `lighttaew2_1`, `lighttaehy1_5`, `taeltx_2`, `taeh3`). Without one,
+  ComfyUI logs a warning and quietly falls back to `latent2rgb`.
+- **off** — no previews requested, no stream opened.
+
+`COMFY_PREVIEW_METHOD` in `.env` sets the default and, set to `off`, disables
+previews server-side whatever a browser asks for.
+
+Two limits: a video latent previews as **one frame** (frame 0), not motion; and only
+samplers that use ComfyUI's standard preview callback emit frames — the core
+`KSampler` family does, but a custom-node sampler may not, in which case the card
+just looks the way it did before this feature.
 
 ## Notes & limits
 

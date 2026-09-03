@@ -36,6 +36,11 @@ let activeProjectId = localStorage.getItem(PROJECT_KEY) || "default";
 const SHOW_HIDDEN_KEY = "genie_show_hidden";
 let showHidden = localStorage.getItem(SHOW_HIDDEN_KEY) === "1";
 
+// Live latent previews during a local ComfyUI run (per-browser). "off" also skips
+// opening the preview stream entirely.
+const PREVIEW_KEY = "genie_preview_method";
+let previewMethod = localStorage.getItem(PREVIEW_KEY) || "auto";
+
 const POLL_INTERVAL_MS = 5000;
 
 // Persisted in-flight tasks so a tab reload can resume polling instead of losing
@@ -400,6 +405,7 @@ function makeMediaList(kind, opts = {}) {
       clearBtn.classList.toggle("hidden", list.items.length === 0);
       list.renderTails();
       updateEstimate();
+      opts.onChange?.(); // reference labels depend on what's filled across all fields
     },
 
     // One tail row per ready file, numbered like its thumbnail. Lengths are probed
@@ -776,6 +782,15 @@ autoDraftMaxEl.addEventListener("change", () => {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ autoDraftMaxMP }),
   }).catch(() => {});
+});
+
+// Live preview method for local runs — sent with each queued prompt.
+const previewMethodEl = document.getElementById("previewMethod");
+previewMethodEl.value = previewMethod;
+previewMethodEl.addEventListener("change", () => {
+  previewMethod = previewMethodEl.value;
+  localStorage.setItem(PREVIEW_KEY, previewMethod);
+  if (previewMethod === "off") closePreviewStream();
 });
 
 // Toggle a history entry's tag (hidden/draft) and refresh.
@@ -1176,6 +1191,7 @@ function applyModelUI() {
   cc.classList.toggle("hidden", !comfy);
   cc.classList.toggle("comfy-grid", comfy);
   document.getElementById("comfyCountField").classList.toggle("hidden", !comfy);
+  document.getElementById("previewMethodField").classList.toggle("hidden", !comfy);
   if (comfy) {
     // Swap the whole kie.ai form for token-driven workflow controls.
     for (const id of KIE_FIELDS) document.getElementById(id).classList.add("hidden");
@@ -1385,6 +1401,60 @@ const randomSeed = () => Math.floor(Math.random() * 2 ** 31);
 // included in exports; you can also pick an existing gallery item of that kind.
 // At generate time the chosen file is pushed into ComfyUI's input folder by id.
 const MEDIA_ARTICLE = { image: "an image", video: "a video", audio: "an audio file" };
+// --- reference labels --------------------------------------------------------
+// MiniMax H3 labels references by *presentation* order, not by field: images, then
+// for each reference video its soundtrack's <Audio j> (only when that loader's
+// soundtrack is wired) immediately before its <Video k>, then standalone audio. So a
+// wired soundtrack claims an audio number and a separately attached audio file is
+// <Audio 2> — which is invisible in the form unless we show it. Server sends
+// `refLabelScheme` so this node-specific rule is only applied where it holds.
+let comfyRefTagsEl = null;
+let comfyRefLabelScheme = null;
+
+// Tags in presentation order, plus the per-slot tag for each media field.
+function comfyRefTags() {
+  const counts = { picture: 0, video: 0, audio: 0 };
+  const perField = new Map(); // field -> [tag, …] aligned with its filled slots
+  const summary = [];
+  const fieldsOfKind = (kind) => comfyFields.filter((f) => f.mediaKind === kind && f.filledMedia);
+
+  for (const f of fieldsOfKind("image")) {
+    const tags = f.filledMedia().map(() => `<Picture ${++counts.picture}>`);
+    perField.set(f, tags);
+    tags.forEach((t, i) => summary.push(`${t} ${f.filledMedia()[i].name || ""}`.trim()));
+  }
+  for (const f of fieldsOfKind("video")) {
+    const tags = [];
+    f.filledMedia().forEach((item, i) => {
+      if (f.soundtrackAt?.(i)) summary.push(`<Audio ${++counts.audio}> = Video ${counts.video + 1}'s soundtrack`);
+      const tag = `<Video ${++counts.video}>`;
+      tags.push(tag);
+      summary.push(`${tag} ${item.name || ""}`.trim());
+    });
+    perField.set(f, tags);
+  }
+  for (const f of fieldsOfKind("audio")) {
+    const tags = f.filledMedia().map(() => `<Audio ${++counts.audio}>`);
+    perField.set(f, tags);
+    tags.forEach((t, i) => summary.push(`${t} ${f.filledMedia()[i].name || ""}`.trim()));
+  }
+  return { perField, summary };
+}
+
+// Write the real tags onto the thumbnails and refresh the summary line. Called from
+// every media field's render, so it must not itself trigger a re-render.
+function refreshComfyRefTags() {
+  if (comfyRefLabelScheme !== "minimax_h3") return;
+  const { perField, summary } = comfyRefTags();
+  for (const [f, tags] of perField) {
+    const labels = f.el.querySelectorAll(".dropzone .thumb.ready .img-label");
+    tags.forEach((t, i) => { if (labels[i]) labels[i].textContent = t; });
+  }
+  if (!comfyRefTagsEl) return;
+  comfyRefTagsEl.textContent = summary.length ? `Prompt tags — ${summary.join(" · ")}` : "";
+  comfyRefTagsEl.classList.toggle("hidden", !summary.length);
+}
+
 // --- reference-video tails ---------------------------------------------------
 // "Use only the last N seconds of this reference." Reference frames are re-injected
 // on every sampling step, so trimming a reference to the part that matters (its tail,
@@ -1484,10 +1554,16 @@ function makeComfyMedia(token, mediaKind) {
   // there first). uploadedRef caches the ComfyUI filename after one upload.
   let source = null, uploadedRef = null;
 
-  const previewThumb = (url, name) => {
+  const previewThumb = (url, name, withLabel = false) => {
     const div = document.createElement("div");
     div.className = `thumb ready${mediaKind === "audio" ? " audio-thumb" : ""}`;
     div.appendChild(makeThumbContent(mediaKind, { thumb: url, name }));
+    if (withLabel) {
+      // filled by refreshComfyRefTags when the workflow uses a known label scheme
+      const lab = document.createElement("span");
+      lab.className = "img-label";
+      div.appendChild(lab);
+    }
     return div;
   };
   // Per-file "use last N sec", when this reference's loader can skip frames.
@@ -1513,8 +1589,9 @@ function makeComfyMedia(token, mediaKind) {
   const render = () => {
     thumbs.innerHTML = "";
     clearBtn.classList.toggle("hidden", !source);
-    if (source) thumbs.appendChild(previewThumb(source.url, source.name));
+    if (source) thumbs.appendChild(previewThumb(source.url, source.name, true));
     renderTail();
+    refreshComfyRefTags();
   };
   const setSource = (s) => { source = s; uploadedRef = null; probe = undefined; render(); };
 
@@ -1580,6 +1657,8 @@ function makeComfyMedia(token, mediaKind) {
     isMedia: true,
     mediaKind,
     mediaKey: token.name,
+    filledMedia: () => (source ? [{ name: source.name }] : []),
+    soundtrackAt: () => !!token.soundtrack,
     capacity: 1,
     hasDefault: token.default !== "",
     set() {}, // a scalar value can't fill a media control — skip on scalar prefill
@@ -1626,6 +1705,8 @@ async function renderComfyControls() {
   comfyFields = [];
   comfyLoraControl = null;
   comfyBypassControl = null;
+  comfyRefTagsEl = null;
+  comfyRefLabelScheme = null;
   const wf = comfyWorkflows.find((w) => w.file === comfyFile());
   if (!wf) {
     comfyControlsEl.innerHTML = `<p class="muted">Workflow not found — try reloading.</p>`;
@@ -1701,11 +1782,15 @@ async function renderComfyControls() {
   // (e.g. Sage Attention). Plain enum combos like sampler_name / scheduler are
   // generation params and stay in the main form next to steps/seed/duration.
   const bypassIds = new Set((meta.bypassable || []).map((b) => String(b.id)));
+  comfyRefLabelScheme = meta.refLabelScheme || null; // null → keep each field's own numbering
   const settingsScalars = [];
   for (const it of items) {
     if (it.kind === "series") {
       const entries = it.entries.sort((a, b) => a.index - b.index);
-      const ctrl = makeComfyMediaMulti(it.base, it.type, entries.map((e) => e.token.name), entries[0].token.tail);
+      const ctrl = makeComfyMediaMulti(
+        it.base, it.type, entries.map((e) => e.token.name), entries[0].token.tail,
+        entries.map((e) => e.token.soundtrack),
+      );
       ctrl.el.style.gridColumn = `span ${WIDTH_SPAN[entries[0].token.width] || 12}`;
       comfyControlsEl.appendChild(ctrl.el);
       comfyFields.push(ctrl);
@@ -1749,6 +1834,13 @@ async function renderComfyControls() {
   if (comfyBypassControl) comfyBypassControl.mountRemaining(body); // toggles with no controls
   comfyLoraControl = makeComfyLoraControl(meta.loraOptions || [], !!meta.offline);
   body.appendChild(comfyLoraControl.el);
+  if (comfyRefLabelScheme) {
+    // The literal strings to cite in the prompt, in the order the model presents them.
+    comfyRefTagsEl = document.createElement("p");
+    comfyRefTagsEl.className = "ref-tags hint hidden";
+    comfyRefTagsEl.style.gridColumn = "span 12";
+    comfyControlsEl.appendChild(comfyRefTagsEl);
+  }
   comfyControlsEl.appendChild(details);
 
   // Overlay this workflow's saved config (server-side settings file) so the form
@@ -1758,6 +1850,7 @@ async function renderComfyControls() {
     if (seq !== comfyRenderSeq) return;
     const settings = s?.data || {};
     prefillComfyControls(settings);
+    refreshComfyRefTags();
     if (comfyLoraControl && Array.isArray(settings.loras)) comfyLoraControl.setLoras(settings.loras);
     if (comfyBypassControl && Array.isArray(settings.bypass)) comfyBypassControl.setDisabled(settings.bypass);
   } catch {
@@ -2099,7 +2192,7 @@ function renderScalarControl(token, type, container = comfyControlsEl) {
 // badges ("Picture 1, 2…"). The Nth file fills the Nth token; unfilled tokens are
 // pruned at submit.
 let comfyListSeq = 0;
-function makeComfyMediaMulti(base, mediaKind, tokenNames, tail = null) {
+function makeComfyMediaMulti(base, mediaKind, tokenNames, tail = null, soundtracks = []) {
   const label = prettyLabel(base);
   const max = tokenNames.length;
   const list = makeMediaList(`comfy-${base}-${comfyListSeq++}`, {
@@ -2114,6 +2207,7 @@ function makeComfyMediaMulti(base, mediaKind, tokenNames, tail = null) {
     hint: `(up to ${max}, in order — drag to reorder)`,
     tail: !!tail, // loader can skip frames → offer a per-file "use last N sec"
     tailGrid: tail?.grid || null,
+    onChange: refreshComfyRefTags, // reference tags depend on what's filled
   });
 
   const ready = () => list.items.filter((i) => i.status === "ready");
@@ -2122,6 +2216,10 @@ function makeComfyMediaMulti(base, mediaKind, tokenNames, tail = null) {
     el: list.el,
     isMultiMedia: true,
     mediaKind,
+    // Filled slots in order, and whether slot i's loader carries its own soundtrack
+    // (which claims an <Audio j> label ahead of that video's <Video k>).
+    filledMedia: () => ready().map((i) => ({ name: i.name })),
+    soundtrackAt: (i) => !!soundtracks[i],
     mediaKey: base,
     capacity: max,
     // Restore previously-used files (last-used defaults, or history re-import).
@@ -2359,6 +2457,7 @@ async function queueComfyRun(wf, values, prune, mediaIds, input, loras, bypass, 
         mediaLocalIds: job.mediaLocalIds,
         projectId: job.projectId,
         refVideoSeconds: 0,
+        previewMethod,
       }),
     });
     const data = await res.json();
@@ -2375,6 +2474,7 @@ async function queueComfyRun(wf, values, prune, mediaIds, input, loras, bypass, 
     if (job.historyId) liveStatus.set(job.historyId, live);
     wireComfyCancel(job);
     addInflight(job);
+    ensurePreviewStream(); // start listening for this run's preview frames
     loadHistory(); // renders the pending entry with the live status inside
     pollComfyJob(job);
   } catch (err) {
@@ -2410,11 +2510,15 @@ async function pollComfyJob(job) {
   const state = data.data?.state;
   if (state === "success") {
     removeInflight(job.taskId);
-    finishLive(job);
+    finishLive(job, { hold: true }); // keep the last preview frame up while we save
     const urls = JSON.parse(data.data.resultJson || "{}").resultUrls || [];
-    if (!urls.length) return failJob(job, "Finished, but ComfyUI returned no output file.");
+    if (!urls.length) {
+      releaseLive(job);
+      return failJob(job, "Finished, but ComfyUI returned no output file.");
+    }
     // Pass every output (a batch can be several) and ComfyUI's real per-prompt run time.
     await attachHistoryResult(job, urls, null, data.data.runtimeMs); // downloads, marks done, refreshes History
+    releaseLive(job); // the card now renders the real output — drop the held frame
     return;
   }
   if (state === "fail") {
@@ -2512,8 +2616,15 @@ function createLiveStatus(job) {
   const progressBar = document.createElement("div");
   progressBar.className = "job-progress-bar";
   progressWrap.appendChild(progressBar);
-  el.append(line, progressWrap);
+  // The status/progress column is wrapped so a live preview frame can sit beside it
+  // in a 200px thumb, matching the layout of a finished card.
+  const col = document.createElement("div");
+  col.className = "hist-live-col";
+  col.append(line, progressWrap);
+  el.appendChild(col);
 
+  let previewImg = null;
+  let previewToken = 0;
   let baseStatus = "Generating…";
   let progInfo = null; // { value, max, anchorT, anchorValue }
   const progStartedAt = job.startedAt || Date.now();
@@ -2535,6 +2646,7 @@ function createLiveStatus(job) {
     el,
     running: true,
     isComfy: (job.input?.model || "").startsWith("comfy:"),
+    promptId: job.taskId || null,
     setStatus(text) { baseStatus = text; paint(); },
     setProgress(value, max) {
       if (!max || max <= 0) return;
@@ -2544,6 +2656,27 @@ function createLiveStatus(job) {
       progressWrap.classList.remove("hidden");
       paint();
       if (!progTicker) progTicker = setInterval(paint, 1000);
+    },
+    // Latest latent-preview frame. The <img> hangs off this controller's element, so
+    // renderHistory's re-parenting keeps it on screen across refreshes.
+    setPreview(url) {
+      if (!previewImg) {
+        previewImg = document.createElement("img");
+        previewImg.className = "hist-preview-img";
+        previewImg.alt = "";
+        previewImg.decoding = "async";
+        const wrap = document.createElement("div");
+        wrap.className = "hist-live-thumb";
+        wrap.appendChild(previewImg);
+        el.prepend(wrap);
+        el.classList.add("has-preview");
+      }
+      // Decode off-screen and swap only on load — assigning src directly can blank
+      // the card between frames. A frame that lands after a newer one is dropped.
+      const token = ++previewToken;
+      const pre = new Image();
+      pre.onload = () => { if (token === previewToken) previewImg.src = pre.src; };
+      pre.src = url;
     },
     // Show a Cancel button; `fn` runs once on click.
     enableCancel(fn) {
@@ -2559,9 +2692,18 @@ function createLiveStatus(job) {
 }
 
 const liveOf = (job) => (job.historyId ? liveStatus.get(job.historyId) : null);
-function finishLive(job) {
+// Stop the clock. With `hold`, the controller stays mounted so the card keeps showing
+// its last preview frame until attachHistoryResult re-renders it with the real output
+// — dropping it here would flash the ⏳ placeholder in between.
+function finishLive(job, { hold = false } = {}) {
   const l = liveOf(job);
-  if (l) { l.stop(); liveStatus.delete(job.historyId); }
+  if (!l) return;
+  l.stop();
+  if (hold) return l.setStatus("Saving output…");
+  liveStatus.delete(job.historyId);
+}
+function releaseLive(job) {
+  if (job.historyId) liveStatus.delete(job.historyId);
 }
 // Persist a definitive failure/cancel to the pending History entry, then refresh.
 async function failJob(job, msg) {
@@ -2599,6 +2741,37 @@ function wireComfyCancel(job) {
     }
     await failJob(job, "Cancelled — re-run from History any time.");
   });
+}
+
+// --- live preview frames (ComfyUI latent previews) ------------------------------
+// One EventSource for the whole page: the server tags each ping with the promptId, so
+// however many runs are queued they share this stream. Only the ping crosses it; the
+// frame itself is fetched as a plain JPEG, so a tab that doesn't own the run pays
+// nothing for it.
+let previewES = null;
+let previewDead = false; // 401 / route missing — stop trying for this page load
+
+function ensurePreviewStream() {
+  if (previewES || previewDead || previewMethod === "off") return;
+  const es = (previewES = new EventSource("/api/comfy/preview-stream"));
+  es.addEventListener("message", (ev) => {
+    let d;
+    try { d = JSON.parse(ev.data); } catch { return; }
+    // Route by promptId: frames for another tab's run — or for a prompt queued
+    // straight from ComfyUI's own UI — simply match nothing here.
+    const live = [...liveStatus.values()].find((l) => l.isComfy && l.promptId === d.promptId);
+    live?.setPreview(`/api/comfy/preview?promptId=${encodeURIComponent(d.promptId)}&seq=${d.seq}`);
+  });
+  es.addEventListener("error", () => {
+    // Per spec a non-2xx response closes the stream for good (signed out, or a server
+    // without the route) — accept that and go quiet. A merely dropped connection
+    // reconnects on its own and doesn't land here as CLOSED.
+    if (es.readyState === EventSource.CLOSED) { previewDead = true; previewES = null; }
+  });
+}
+
+function closePreviewStream() {
+  if (previewES) { previewES.close(); previewES = null; }
 }
 
 function collectInput(resolved) {
@@ -3648,9 +3821,11 @@ function resumeInflight() {
     if (job.historyId) liveStatus.set(job.historyId, live);
     // Route resumed jobs to the matching poller (ComfyUI vs kie.ai).
     const isComfyJob = (pending.input?.model || "").startsWith("comfy:");
-    if (isComfyJob) wireComfyCancel(job);
-    if (isComfyJob) pollComfyJob(job);
-    else pollJob(job);
+    if (isComfyJob) {
+      wireComfyCancel(job);
+      ensurePreviewStream();
+      pollComfyJob(job);
+    } else pollJob(job);
   }
   loadHistory(); // render pending cards with their freshly-attached live status
 }
@@ -3701,6 +3876,7 @@ function scheduleComfyStats(delay) {
 
 async function comfyStatsTick() {
   const running = [...liveStatus.values()].some((l) => l.isComfy && l.running);
+  if (!running) closePreviewStream(); // no run in flight — don't hold an idle stream open
   if (running || isComfy()) {
     try {
       const r = await fetch("/api/comfy/stats");
