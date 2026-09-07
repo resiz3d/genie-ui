@@ -126,11 +126,13 @@ function moveGalleryEntry(entry, targetSlug) {
 }
 
 // Where an entry's saved output file(s) live inside their project folder:
-//   image outputs  -> images/   (always; images have no draft split)
+//   favorites      -> favorites/ (always wins, image or video)
+//   image outputs  -> images/    (images have no draft split)
 //   draft videos   -> draft/
 //   other videos   -> the project root
 // Returned as a leading-slash path fragment ("" for the project root).
 function outputSubfolder(entry) {
+  if (entry.favorite) return "/favorites";
   if (entryIsImage(entry)) return "/images";
   return entry.draft ? "/draft" : "";
 }
@@ -1211,7 +1213,7 @@ function pruneComfyProgress() {
   for (const [pid, p] of comfyProgress) if (p.updatedAt < cutoff) comfyProgress.delete(pid);
 }
 
-// --- system stats (CPU / GPU / VRAM) -----------------------------------------
+// --- system stats (CPU / RAM / GPU / VRAM) -----------------------------------
 // CPU % is derived from host cpu-time deltas between calls (non-blocking). GPU
 // utilization + VRAM come from `nvidia-smi` when present; if it isn't (no NVIDIA
 // GPU / not on PATH), VRAM falls back to ComfyUI's /system_stats and GPU % is null.
@@ -1568,11 +1570,17 @@ async function sweepPendingComfy() {
 setInterval(sweepPendingComfy, COMFY_WATCH_INTERVAL_MS);
 setTimeout(sweepPendingComfy, 4000); // an early pass shortly after startup
 
-// Host CPU % + GPU util % + VRAM usage, for the live readout during local runs.
+// Host CPU % + system RAM + GPU util % + VRAM usage, for the live readout during local runs.
 app.get("/api/comfy/stats", async (req, res) => {
   const cpu = cpuPercent();
+  // System RAM usage, in MiB to match the vram shape (used/total/pct).
   const ramTotal = os.totalmem();
-  const ram = Math.round((1 - os.freemem() / ramTotal) * 100);
+  const ramUsed = ramTotal - os.freemem();
+  const ram = {
+    used: Math.round(ramUsed / 1048576),
+    total: Math.round(ramTotal / 1048576),
+    pct: Math.round((ramUsed / ramTotal) * 100),
+  };
   let gpu = null;
   let vram = null;
   const gpus = await nvidiaSmi();
@@ -1679,9 +1687,11 @@ function entryIsImage(entry) {
   return isImageOutputModel(input.model);
 }
 
-// The tag set for an entry: derived kind (image/video) + the stored draft/hidden.
+// The tag set for an entry: derived kind (image/video) + the stored
+// favorite/draft/hidden.
 function entryTagSet(entry) {
   const tags = new Set([entryIsImage(entry) ? "image" : "video"]);
+  if (entry.favorite) tags.add("favorite");
   if (entry.draft) tags.add("draft");
   if (entry.hidden) tags.add("hidden");
   return tags;
@@ -2207,7 +2217,7 @@ async function attachOutputs(entry, urls) {
 }
 
 // Build a history entry object (output fields may be null for a pending entry).
-function makeHistoryEntry({ id, taskId, projectId, input, resultUrl, localVideo, costCredits, refVideoSeconds, imageLocalIds, mediaLocalIds, status, runtimeMs, draft, hidden }) {
+function makeHistoryEntry({ id, taskId, projectId, input, resultUrl, localVideo, costCredits, refVideoSeconds, imageLocalIds, mediaLocalIds, status, runtimeMs, draft, hidden, favorite }) {
   return {
     id,
     createdAt: new Date().toISOString(),
@@ -2224,10 +2234,12 @@ function makeHistoryEntry({ id, taskId, projectId, input, resultUrl, localVideo,
     // wall time from submit to finished output (ms); null until done
     runtimeMs: typeof runtimeMs === "number" ? runtimeMs : null,
     // user tags: hidden (excluded from the list + export by default), draft
-    // (auto-set at creation for low-res video, then toggleable). image/video are
-    // derived from the output, not stored.
+    // (auto-set at creation for low-res video, then toggleable), favorite
+    // (starred; its file lives under favorites/). image/video are derived from
+    // the output, not stored.
     hidden: hidden === true,
     draft: draft === true,
+    favorite: favorite === true,
     // total seconds of reference video inputs (video refs bill by combined duration)
     refVideoSeconds: typeof refVideoSeconds === "number" ? refVideoSeconds : 0,
     imageLocalIds: Array.isArray(imageLocalIds) ? imageLocalIds : [],
@@ -2351,20 +2363,26 @@ app.put("/api/settings", (req, res) => {
   res.json({ code: 200, msg: "updated", data: { autoDraftMaxMP: Number(s.autoDraftMaxMP) || 0 } });
 });
 
-// --- toggle an entry's tags (hidden / draft) ------------------------------
+// --- toggle an entry's tags (hidden / draft / favorite) -------------------
 app.post("/api/history/:id/tags", (req, res) => {
-  const { hidden, draft } = req.body || {};
+  const { hidden, draft, favorite } = req.body || {};
   const entries = readJson(HISTORY_FILE);
   const entry = entries.find((e) => e.id === req.params.id);
   if (!entry) return res.status(404).json({ code: 404, msg: "history entry not found" });
   if (typeof hidden === "boolean") entry.hidden = hidden;
-  if (typeof draft === "boolean" && draft !== entry.draft) {
-    entry.draft = draft;
-    // Relocate the saved file(s) into / out of the project's draft/ subfolder.
+  // draft and favorite both change where the file lives (see outputSubfolder), so
+  // relocate whenever either flips.
+  const relocates =
+    (typeof draft === "boolean" && draft !== entry.draft) ||
+    (typeof favorite === "boolean" && favorite !== entry.favorite);
+  if (typeof draft === "boolean") entry.draft = draft;
+  if (typeof favorite === "boolean") entry.favorite = favorite;
+  if (relocates) {
+    // Relocate the saved file(s) into / out of the project's subfolder.
     try {
       moveHistoryVideo(entry, resolveProject(entry.projectId).slug);
     } catch (err) {
-      console.error("Failed to move output for draft toggle:", err);
+      console.error("Failed to move output for tag toggle:", err);
       return res.status(409).json({ code: 409, msg: "Failed to move the output file (is it playing?)" });
     }
   }

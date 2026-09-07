@@ -1449,6 +1449,22 @@ img.zoomable {
 .lora-add {
   font-size: 0.85rem;
 }
+/* On a phone the name is too cramped beside the weight + ×, so let the row wrap:
+   the name fills line 1 (next to its checkbox) and the weight + remove button drop
+   to line 2. Placed after the base .lora-row rules above so these win — a @media
+   block adds no specificity, so source order decides. */
+@media (max-width: 540px) {
+  .lora-row {
+    flex-wrap: wrap;
+  }
+  .lora-row .lora-name {
+    flex: 1 1 calc(100% - 40px); /* fill line 1; forces weight + × onto line 2 */
+  }
+  .lora-row .lora-strength {
+    flex: 1; /* weight grows to fill line 2, × stays pinned at its end */
+    width: auto; /* override the base 90px so flex-grow can take effect */
+  }
+}
 
 /* Searchable single-select for long option lists (models, LoRAs, samplers…). */
 .combo-search {
@@ -1595,6 +1611,12 @@ img.zoomable {
   font-size: 0.8rem;
   gap: 0.3rem;
 }
+/* "Hide:" label preceding the tag-filter checkboxes. */
+.hist-toggle-label {
+  font-size: 0.8rem;
+  color: var(--muted);
+  margin-right: -0.5rem; /* pull the first checkbox closer than the 1rem flex gap */
+}
 .hist-toggle select,
 .hist-toggle input[type="number"] {
   padding: 0.25rem 0.4rem;
@@ -1621,10 +1643,11 @@ img.zoomable {
 }
 .hist-tag-image { color: #6cc4ff; border-color: #35617d; }
 .hist-tag-video { color: #b79cff; border-color: #574d7d; }
+.hist-tag-favorite { color: #ffd24a; border-color: #7d6a2f; }
 .hist-tag-draft { color: #ffce6c; border-color: #7d6a35; }
 .hist-tag-hidden { color: var(--muted); }
 
-/* Active state for the hide / draft toggle buttons. */
+/* Active state for the favorite / hide / draft toggle buttons. */
 .hist-tag-toggle.active {
   border-color: var(--accent);
   color: var(--text);

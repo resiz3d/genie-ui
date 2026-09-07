@@ -31,10 +31,19 @@ const PROJECT_KEY = "seedance_project";
 let projects = [];
 let activeProjectId = localStorage.getItem(PROJECT_KEY) || "default";
 
-// "Show hidden" is a per-browser view preference; the auto-draft MP threshold is a
-// server setting (so the server-side sweep applies the same rule as the client).
-const SHOW_HIDDEN_KEY = "genie_show_hidden";
-let showHidden = localStorage.getItem(SHOW_HIDDEN_KEY) === "1";
+// Which tags to hide from the History list — a per-browser view preference (a set
+// of "video"/"image"/"draft"/"favorite"). The auto-draft MP threshold is a server
+// setting (so the server-side sweep applies the same rule as the client).
+const HIDE_TAGS_KEY = "genie_hist_hide_tags";
+let hiddenTags = new Set(
+  (() => {
+    try {
+      return JSON.parse(localStorage.getItem(HIDE_TAGS_KEY) || "[]");
+    } catch {
+      return [];
+    }
+  })(),
+);
 
 // Live latent previews during a local ComfyUI run (per-browser). "off" also skips
 // opening the preview stream entirely.
@@ -759,17 +768,21 @@ historyFilter.addEventListener("change", () => {
   renderHistory(historyEntries);
 });
 
-// History tag controls: reveal hidden cards, and the auto-draft MP threshold (a
-// server setting — the sweep applies it too, so it's fetched/saved server-side).
-const showHiddenEl = document.getElementById("showHidden");
+// History tag controls: the "Hide:" checkboxes (which tags to drop from the list),
+// and the auto-draft MP threshold (a server setting — the sweep applies it too, so
+// it's fetched/saved server-side).
+const hideTagEls = [...document.querySelectorAll(".hist-hide-tag")];
 const autoDraftMaxEl = document.getElementById("autoDraftMax");
-showHiddenEl.checked = showHidden;
-showHiddenEl.addEventListener("change", () => {
-  showHidden = showHiddenEl.checked;
-  localStorage.setItem(SHOW_HIDDEN_KEY, showHidden ? "1" : "0");
-  historyPage = 1;
-  renderHistory(historyEntries);
-});
+for (const el of hideTagEls) {
+  el.checked = hiddenTags.has(el.value);
+  el.addEventListener("change", () => {
+    if (el.checked) hiddenTags.add(el.value);
+    else hiddenTags.delete(el.value);
+    localStorage.setItem(HIDE_TAGS_KEY, JSON.stringify([...hiddenTags]));
+    historyPage = 1;
+    renderHistory(historyEntries);
+  });
+}
 fetch("/api/settings")
   .then((r) => r.json())
   .then((d) => { autoDraftMaxEl.value = Number(d.data?.autoDraftMaxMP) || 0; })
@@ -793,7 +806,7 @@ previewMethodEl.addEventListener("change", () => {
   if (previewMethod === "off") closePreviewStream();
 });
 
-// Toggle a history entry's tag (hidden/draft) and refresh.
+// Toggle a history entry's tag (draft/favorite) and refresh.
 async function toggleHistoryTag(entry, tag) {
   const next = !entry[tag];
   try {
@@ -836,6 +849,7 @@ document.getElementById("exportHistory").addEventListener("click", () => {
   }
   const opts = [
     { tag: "hidden", label: "Hidden", checked: true },
+    { tag: "favorite", label: "Favorites", checked: false },
     { tag: "draft", label: "Draft", checked: false },
     { tag: "video", label: "Videos", checked: false },
     { tag: "image", label: "Images", checked: false },
@@ -3076,15 +3090,21 @@ async function loadHistory() {
 
 // The history entries the current filter keeps, in display order — shared by
 // the rendered list and the lightbox's ‹ › navigation so they stay in sync.
-// Hidden-tagged entries are dropped unless "Show hidden" is on.
+// Entries carrying any tag checked in the "Hide:" controls are dropped. The
+// "cancelled" checkbox isn't a card tag — it drops failed/cancelled runs (both
+// land on status "failed"), so it's handled here rather than via entryTags.
 function filterHistory(entries) {
   const filter = historyFilter.value || "all";
   const byProject = filter === "all" ? entries : entries.filter((e) => (e.projectId || "default") === filter);
-  return showHidden ? byProject : byProject.filter((e) => !e.hidden);
+  if (!hiddenTags.size) return byProject;
+  return byProject.filter((e) => {
+    if (hiddenTags.has("cancelled") && e.status === "failed") return false;
+    return !entryTags(e).some((t) => hiddenTags.has(t));
+  });
 }
 
 // A history entry's tags: derived kind (image/video, only once there's an output)
-// + the stored draft/hidden.
+// + the stored favorite/draft.
 function entryTags(entry) {
   const tags = [];
   const src = entry.localVideo || entry.resultUrl || "";
@@ -3093,8 +3113,8 @@ function entryTags(entry) {
     const isImg = (input.model || "").startsWith("comfy:") ? isImageFile(src) : isImageOutput(input.model);
     tags.push(isImg ? "image" : "video");
   }
+  if (entry.favorite) tags.push("favorite");
   if (entry.draft) tags.push("draft");
-  if (entry.hidden) tags.push("hidden");
   return tags;
 }
 
@@ -3680,16 +3700,17 @@ function renderHistory(entries) {
     });
     actions.appendChild(del);
 
-    // Hidden (eyeball) and draft toggles — tags kept on the entry either way.
-    const hideBtn = document.createElement("button");
-    hideBtn.type = "button";
-    hideBtn.className = "btn-secondary hist-tag-toggle" + (entry.hidden ? " active" : "");
-    hideBtn.innerHTML = entry.hidden ? "🙈 Hidden" : "👁 Hide";
-    hideBtn.title = entry.hidden
-      ? "Un-hide this card"
-      : "Hide this card (kept in history, excluded from export by default)";
-    hideBtn.addEventListener("click", () => toggleHistoryTag(entry, "hidden"));
-    actions.appendChild(hideBtn);
+    // Favorite (star) and draft toggles — tags kept on the entry either way;
+    // both also relocate the saved file server-side.
+    const favBtn = document.createElement("button");
+    favBtn.type = "button";
+    favBtn.className = "btn-secondary hist-tag-toggle" + (entry.favorite ? " active" : "");
+    favBtn.innerHTML = entry.favorite ? "★ Favorite" : "☆ Favorite";
+    favBtn.title = entry.favorite
+      ? "Remove from favorites (moves the file out of favorites/)"
+      : "Mark as favorite (moves the file into favorites/)";
+    favBtn.addEventListener("click", () => toggleHistoryTag(entry, "favorite"));
+    actions.appendChild(favBtn);
 
     const draftBtn = document.createElement("button");
     draftBtn.type = "button";
@@ -3699,7 +3720,7 @@ function renderHistory(entries) {
     draftBtn.addEventListener("click", () => toggleHistoryTag(entry, "draft"));
     actions.appendChild(draftBtn);
 
-    // Tag chips (kind + draft/hidden), shown at the top of the card body.
+    // Tag chips (kind + favorite/draft), shown at the top of the card body.
     const tagsRow = document.createElement("div");
     tagsRow.className = "hist-tags";
     for (const t of entryTags(entry)) {
@@ -3847,7 +3868,7 @@ async function checkServer() {
 setInterval(checkServer, PING_INTERVAL_MS);
 window.addEventListener("focus", checkServer);
 
-// --- host stats readout (CPU / GPU / VRAM) --------------------------------------
+// --- host stats readout (CPU / RAM / GPU / VRAM) --------------------------------
 // Shown whenever a ComfyUI workflow is selected or a local run is in flight:
 // polls every 2s during an active run, every 5s while idle. Hidden (and not polled)
 // otherwise, so we don't shell out to nvidia-smi when ComfyUI isn't in play.
@@ -3859,9 +3880,15 @@ let comfyStatsTimer = null;
 function renderComfyStats(d) {
   if (!d) return;
   const pct = (v) => (v == null ? "–" : `${v}%`);
-  const parts = [`CPU ${pct(d.cpu)}`, `GPU ${pct(d.gpu)}`];
+  const gb = (mib) => (mib / 1024).toFixed(1);
+  const parts = [`CPU ${pct(d.cpu)}`];
+  if (d.ram) {
+    parts.push(`RAM ${d.ram.pct}% (${gb(d.ram.used)}/${gb(d.ram.total)} GB)`);
+  } else {
+    parts.push("RAM –");
+  }
+  parts.push(`GPU ${pct(d.gpu)}`);
   if (d.vram) {
-    const gb = (mib) => (mib / 1024).toFixed(1);
     parts.push(`VRAM ${d.vram.pct}% (${gb(d.vram.used)}/${gb(d.vram.total)} GB)`);
   } else {
     parts.push("VRAM –");

@@ -242,9 +242,12 @@
           </div>
         </div>
         <div class="hist-head-toggles">
-          <label class="inline hist-toggle" title="Show cards tagged hidden">
-            <input type="checkbox" id="showHidden" /> Show hidden
-          </label>
+          <span class="hist-toggle-label" id="histHideLabel">Hide:</span>
+          <label class="inline hist-toggle" title="Hide video results"><input type="checkbox" class="hist-hide-tag" value="video" /> Video</label>
+          <label class="inline hist-toggle" title="Hide image results"><input type="checkbox" class="hist-hide-tag" value="image" /> Image</label>
+          <label class="inline hist-toggle" title="Hide cards tagged draft"><input type="checkbox" class="hist-hide-tag" value="draft" /> Draft</label>
+          <label class="inline hist-toggle" title="Hide cards tagged favorite"><input type="checkbox" class="hist-hide-tag" value="favorite" /> Favorite</label>
+          <label class="inline hist-toggle" title="Hide cancelled / failed runs"><input type="checkbox" class="hist-hide-tag" value="cancelled" /> Cancelled</label>
           <label class="inline hist-toggle" title="Auto-tag a finished generation as draft when its output is at or below this many megapixels (0 = off)">
             Auto-draft ≤
             <input type="number" id="autoDraftMax" min="0" step="0.1" value="0" />

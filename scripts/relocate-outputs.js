@@ -2,9 +2,10 @@
 // subfolder of its project, matching the going-forward behavior in server.js
 // (see outputSubfolder / moveHistoryVideo). Files land at:
 //
-//     output/<project-slug>/images/<file>   for image outputs (always)
-//     output/<project-slug>/draft/<file>    for drafted video outputs
-//     output/<project-slug>/<file>          for other (hi-def) video outputs
+//     output/<project-slug>/favorites/<file> for favorited outputs (image or video)
+//     output/<project-slug>/images/<file>    for image outputs
+//     output/<project-slug>/draft/<file>     for drafted video outputs
+//     output/<project-slug>/<file>           for other (hi-def) video outputs
 //
 // i.e. always nested inside the project's folder — never a top-level output/images
 // or output/draft. Also repairs older layouts, including draft *images* that an
@@ -59,6 +60,7 @@ function entryIsImage(entry) {
 }
 // Leading-slash fragment ("" for the project root).
 function outputSubfolder(entry) {
+  if (entry.favorite) return "/favorites";
   if (entryIsImage(entry)) return "/images";
   return entry.draft ? "/draft" : "";
 }
