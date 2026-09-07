@@ -815,8 +815,12 @@ async function toggleHistoryTag(entry, tag) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ [tag]: next }),
     });
-    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).msg || "Update failed");
-    entry[tag] = next; // keep local copy in sync before re-render
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.msg || "Update failed");
+    // draft/favorite relocate the file server-side, so the entry's saved paths
+    // change. Sync them from the response (not just the tag flag) so the re-render
+    // points the <video>/<img> at the new URL instead of the now-moved old one.
+    Object.assign(entry, body.data || { [tag]: next });
     renderHistory(historyEntries);
   } catch (err) {
     alert(err.message || String(err));
