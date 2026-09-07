@@ -23,6 +23,12 @@ builds a form for them automatically.
 3. Reload the app. Each workflow appears in the **Model** dropdown under
    **Local · ComfyUI**.
 
+4. *Optional.* A video's live preview shows only frame 0. A separate ComfyUI custom
+   node, [ComfyUI-GENie-Filmstrip](https://github.com/hittatsu/ComfyUI-GENie-Filmstrip),
+   turns it into a grid of frames across the clip. See
+   [Filmstrip previews](#filmstrip-previews) below. GENie doesn't require it — skip this
+   and everything else works exactly the same.
+
 ## Tokens
 
 Replace any value in the workflow JSON with a token to expose it as a control:
@@ -327,16 +333,68 @@ The **Preview** dropdown next to the ×N queue counter picks the decoder, per br
 - **sharp** — `taesd`. Needs an approx-VAE in ComfyUI's `models/vae_approx/`:
   `taesd_decoder.pth` for SD/SDXL, or the matching video TAE (`taehv`,
   `lighttaew2_2`, `lighttaew2_1`, `lighttaehy1_5`, `taeltx_2`, `taeh3`). Without one,
-  ComfyUI logs a warning and quietly falls back to `latent2rgb`.
+  ComfyUI logs a warning and quietly falls back to `latent2rgb`. The video ones come
+  from [madebyollin/taehv](https://github.com/madebyollin/taehv) — e.g. `taeh3.pth`
+  for MiniMax H3. The filename must **start with** the name above, since that's what
+  ComfyUI matches on. Take care where you get them: other "taeh3" files exist that are
+  built for a specific node pack rather than ComfyUI core, and core doesn't reject
+  them gracefully — it raises `'NoneType' object has no attribute
+  'show_progress_bar'` mid-run. A core-compatible video TAE has `decoder.`-prefixed
+  keys; a file whose keys start at `1.weight` is not one.
 - **off** — no previews requested, no stream opened.
 
 `COMFY_PREVIEW_METHOD` in `.env` sets the default and, set to `off`, disables
 previews server-side whatever a browser asks for.
 
-Two limits: a video latent previews as **one frame** (frame 0), not motion; and only
-samplers that use ComfyUI's standard preview callback emit frames — the core
-`KSampler` family does, but a custom-node sampler may not, in which case the card
-just looks the way it did before this feature.
+Two limits: a video latent previews as **one frame** (frame 0), not motion — unless
+you install the optional [filmstrip node](#filmstrip-previews) below, which turns it
+into several frames across the clip; and only samplers that use ComfyUI's standard
+preview callback emit frames — the core `KSampler` family does, but a custom-node
+sampler may not, in which case the card just looks the way it did before this feature.
+
+### Filmstrip previews
+
+*Optional, and a separate project.* Ordinarily a video's preview is a single frame,
+because ComfyUI's previewers take frame 0 of the latent and throw the rest away — for a
+97-frame MiniMax H3 render that's one of about 25 frames sitting in the tensor handed to
+them every step.
+
+[**ComfyUI-GENie-Filmstrip**](https://github.com/hittatsu/ComfyUI-GENie-Filmstrip) is a
+small ComfyUI custom node that pastes four of them into one image as a 2×2 grid, in time
+order: the first, two through the middle, and the last. Install it like any other node
+pack and restart ComfyUI:
+
+```
+cd ComfyUI/custom_nodes
+git clone https://github.com/hittatsu/ComfyUI-GENie-Filmstrip
+```
+
+Not sure where that folder is? With ComfyUI running, open
+<http://127.0.0.1:8188/internal/folder_paths> and look for `custom_nodes` — under ComfyUI
+Desktop it is often *not* inside the install directory.
+
+To confirm it loaded, look for this line in ComfyUI's console on startup:
+
+```
+[genie-filmstrip] v1.1.0 active -- video latent previews will show 4 frames (max strip 2048px)
+```
+
+If it says `NOT active`, or nothing at all, previews simply stay single-frame — the node
+is designed to fail that way rather than break anything.
+
+**GENie neither requires it nor knows whether it's installed.** There's no setting and no
+detection: install it and previews become grids, skip it and everything works exactly as
+described above. The node itself is fail-soft too — if a decode throws, or a future
+ComfyUI moves the internals it patches, previews quietly revert to the stock single frame.
+
+Either way, **click the preview in a card to open it full size**. At 200 px wide a 2×2 is
+about 100 px per tile, enough to read motion but not detail.
+
+The cost is GPU contention rather than arithmetic — a preview decode competes with the
+sampler. Four tiles is roughly 4× a normal preview, which against a 90 s H3 step is about
+**2.4% on sharp and 0.05% on fast**. (A single *sharp* preview already costs ~870 ms
+mid-run; that's stock ComfyUI, not the node.) Its `GENIE_PREVIEW_*` environment variables
+tune the frame count, the image size and a cheaper one-tile-per-step mode — see its README.
 
 ## Notes & limits
 
