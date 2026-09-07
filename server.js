@@ -42,8 +42,11 @@ const PROJECTS_FILE = path.join(__dirname, "projects.json");
 // with {{name=default|opt|opt}} placeholders. See docs/COMFYUI.md.
 // Workflows load from two places: WORKFLOWS_DIR itself (the user's custom
 // workflows) and its `default/` subfolder (the ones GENie ships). A custom file
-// overrides a shipped default of the same name; both are addressed by bare
-// filename everywhere else (generate, meta, settings).
+// overrides a shipped default of the same name. Workflows in *subfolders* of
+// WORKFLOWS_DIR — e.g. a workflow repo cloned into workflows/<repo>/ — are listed
+// too and addressed by their relative path, while top-level and shipped ones keep
+// their bare filename, which is what every history entry written before subfolders
+// existed uses.
 const COMFYUI_URL = (process.env.COMFYUI_URL || "http://127.0.0.1:8188").replace(/\/+$/, "");
 const WORKFLOWS_DIR = path.resolve(__dirname, process.env.WORKFLOWS_DIR || "workflows");
 const WORKFLOWS_DEFAULT_DIR = path.join(WORKFLOWS_DIR, "default");
@@ -520,36 +523,100 @@ function substituteWorkflow(node, values) {
   return node;
 }
 
-// Resolve a bare workflow filename to its file path. A custom workflow in
-// WORKFLOWS_DIR takes precedence over a shipped one of the same name in
-// `default/`. Only a plain filename (no traversal) ending in .json is accepted.
-function workflowPath(file) {
+// Split a workflow id into path segments, or null if it isn't a usable id. Ids are
+// POSIX-separated and relative to WORKFLOWS_DIR. This is a sanity filter, not the
+// security boundary — that's the containment check below, which also catches a
+// Windows-separated "..\..\x.json" that this segment test never sees.
+function workflowIdSegments(file) {
   if (!file || typeof file !== "string") return null;
-  if (file !== path.basename(file)) return null; // basename only — no traversal
   if (!file.toLowerCase().endsWith(".json")) return null;
-  const custom = path.join(WORKFLOWS_DIR, file);
-  if (fs.existsSync(custom)) return custom;
-  const shipped = path.join(WORKFLOWS_DEFAULT_DIR, file);
-  if (fs.existsSync(shipped)) return shipped;
-  return null;
+  if (file.startsWith("/") || /^[a-zA-Z]:/.test(file)) return null; // absolute
+  if (file.includes("\\")) return null; // ids are POSIX-separated; "..\..\x.json" is not one
+  const segs = file.split("/");
+  if (segs.some((s) => !s || s === "." || s === "..")) return null;
+  return segs;
 }
 
-// The .json workflows available, custom (WORKFLOWS_DIR) overriding shipped
-// (default/) by name. Each entry is { file, label }: `file` is the bare filename
-// used as the identity everywhere (workflowPath resolves it), `label` is the
-// display path — shipped workflows are shown folder-qualified (e.g.
-// "default/Minimax H3.json") to make their source clear.
-function listWorkflowFiles() {
-  const jsonIn = (dir) => {
+// True when `p` is an existing file whose *real* path sits inside WORKFLOWS_DIR.
+// realpath rather than the lexical path, so neither "../" nor a symlink planted in a
+// cloned workflow repo can point out of the folder.
+function insideWorkflowsDir(p) {
+  try {
+    const real = fs.realpathSync(p);
+    const rel = path.relative(fs.realpathSync(WORKFLOWS_DIR), real);
+    if (!rel || rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) return false;
+    return fs.statSync(real).isFile();
+  } catch {
+    return false; // missing, unreadable, or a bad path
+  }
+}
+
+// Resolve a workflow id to its file path. A bare filename means a workflow directly in
+// WORKFLOWS_DIR, falling back to the shipped copy in `default/` — the pre-subfolder
+// form, and the only form any saved history entry uses. An id containing "/" is a path
+// relative to WORKFLOWS_DIR (a workflow in a subfolder, e.g. a cloned repo).
+function workflowPath(file) {
+  if (!file || typeof file !== "string") return null;
+  if (!file.toLowerCase().endsWith(".json")) return null;
+  if (file === path.basename(file)) {
+    // Bare name — unchanged since before subfolders; cannot traverse by construction.
+    const custom = path.join(WORKFLOWS_DIR, file);
+    if (fs.existsSync(custom)) return custom;
+    const shipped = path.join(WORKFLOWS_DEFAULT_DIR, file);
+    if (fs.existsSync(shipped)) return shipped;
+    return null;
+  }
+  const segs = workflowIdSegments(file);
+  if (!segs) return null;
+  const p = path.join(WORKFLOWS_DIR, ...segs);
+  return insideWorkflowsDir(p) ? p : null; // must land inside workflows/, symlinks included
+}
+
+// Directories the workflow walk never descends into. Dot-dirs cover the .git a cloned
+// workflow repo brings with it (plus .github, .venv, …) in one rule.
+const WORKFLOW_SKIP_DIRS = new Set(["node_modules", "__pycache__", "venv"]);
+const WORKFLOW_MAX_DEPTH = 5; // deep enough for any sane repo layout, still bounded
+
+// Every .json under `dir`, as POSIX-separated paths relative to it. Recursive, so a
+// workflow repo cloned into workflows/<repo>/ is picked up whole. Symlinks are not
+// followed — no cycles, and nothing outside the folder. depth 0 = flat, as before.
+function jsonUnder(dir, { skipTop = [], depth = WORKFLOW_MAX_DEPTH } = {}) {
+  const out = [];
+  const walk = (abs, rel, left) => {
+    let entries;
     try {
-      return fs.readdirSync(dir).filter((f) => f.toLowerCase().endsWith(".json"));
+      entries = fs.readdirSync(abs, { withFileTypes: true });
     } catch {
-      return []; // dir missing — treated as empty
+      return; // dir missing — treated as empty
+    }
+    for (const d of entries) {
+      if (d.isSymbolicLink()) continue;
+      if (d.isDirectory()) {
+        if (left <= 0 || d.name.startsWith(".") || WORKFLOW_SKIP_DIRS.has(d.name)) continue;
+        if (!rel && skipTop.includes(d.name)) continue; // `default/` is listed separately
+        walk(path.join(abs, d.name), rel ? `${rel}/${d.name}` : d.name, left - 1);
+      } else if (d.isFile() && d.name.toLowerCase().endsWith(".json")) {
+        out.push(rel ? `${rel}/${d.name}` : d.name);
+      }
     }
   };
-  const custom = jsonIn(WORKFLOWS_DIR).map((file) => ({ file, label: file }));
-  const taken = new Set(custom.map((e) => e.file.toLowerCase()));
-  const shipped = jsonIn(WORKFLOWS_DEFAULT_DIR)
+  walk(dir, "", depth);
+  return out;
+}
+
+// The .json workflows available. Each entry is { file, label }: `file` is the identity
+// used everywhere (workflowPath resolves it), `label` is the display path. A workflow
+// directly in WORKFLOWS_DIR keeps its bare filename; one in a subfolder is identified
+// and shown by its relative path ("my-repo/Cool Thing.json"); a shipped one keeps its
+// bare filename but is shown folder-qualified ("default/…") to make its source clear.
+// Only a top-level custom overrides a shipped default of the same name — a nested id is
+// a distinct path and can't collide with the bare-name space history entries use.
+// `default/` itself is listed flat: a nested shipped file would get a path id, which
+// workflowPath resolves against WORKFLOWS_DIR rather than `default/`.
+function listWorkflowFiles() {
+  const custom = jsonUnder(WORKFLOWS_DIR, { skipTop: ["default"] }).map((file) => ({ file, label: file }));
+  const taken = new Set(custom.filter((e) => !e.file.includes("/")).map((e) => e.file.toLowerCase()));
+  const shipped = jsonUnder(WORKFLOWS_DEFAULT_DIR, { depth: 0 })
     .filter((f) => !taken.has(f.toLowerCase()))
     .map((file) => ({ file, label: `default/${file}` }));
   return [...custom, ...shipped].sort((a, b) => a.label.localeCompare(b.label));
@@ -629,9 +696,18 @@ app.get("/api/comfy/workflow-meta", async (req, res) => {
 
 // Per-workflow saved config (chosen values + LoRA list), stored server-side so
 // it's shared across devices. Read {} when nothing saved yet.
+// The key mirrors the workflow's own path: a top-level or shipped workflow is one
+// segment and keeps the exact settings/comfy/<name>.json file it has always had, while
+// one in a subfolder gets settings/comfy/<repo>/<name>.json — so two repos can ship a
+// same-named workflow without treading on each other. Every segment is sanitized to
+// [A-Za-z0-9._-], so no separator survives and the result can't leave the folder.
 function comfySettingsPath(file) {
-  const base = path.basename(String(file || ""), ".json").replace(/[^a-zA-Z0-9._-]/g, "_");
-  return base ? path.join(COMFY_SETTINGS_DIR, `${base}.json`) : null;
+  const segs = workflowIdSegments(file);
+  if (!segs) return null;
+  const parts = segs.map((s, i) =>
+    (i === segs.length - 1 ? s.replace(/\.json$/i, "") : s).replace(/[^a-zA-Z0-9._-]/g, "_")
+  );
+  return parts[parts.length - 1] ? `${path.join(COMFY_SETTINGS_DIR, ...parts)}.json` : null;
 }
 app.get("/api/comfy/settings", (req, res) => {
   const p = comfySettingsPath(req.query.file);
