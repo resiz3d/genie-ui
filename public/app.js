@@ -2662,9 +2662,28 @@ function createLiveStatus(job) {
     setPreview(url) {
       if (!previewImg) {
         previewImg = document.createElement("img");
-        previewImg.className = "hist-preview-img";
+        previewImg.className = "hist-preview-img zoomable";
         previewImg.alt = "";
         previewImg.decoding = "async";
+        previewImg.title = "Click to see this preview full size";
+        // The card's slot is narrow, so a multi-frame preview is small there. Open the
+        // pixels already decoded in this <img> rather than its URL: /api/comfy/preview
+        // is served no-store and the server drops the frame when the run ends, so
+        // handing the lightbox the URL would refetch and 404 exactly when you want a
+        // last look at it.
+        previewImg.addEventListener("click", () => {
+          let src = previewImg.src;
+          try {
+            const canvas = document.createElement("canvas");
+            canvas.width = previewImg.naturalWidth;
+            canvas.height = previewImg.naturalHeight;
+            canvas.getContext("2d").drawImage(previewImg, 0, 0);
+            src = canvas.toDataURL("image/jpeg", 0.92);
+          } catch {
+            /* canvas unavailable — fall back to the URL, fine while the run is live */
+          }
+          openLightbox("image", src, "Live preview");
+        });
         const wrap = document.createElement("div");
         wrap.className = "hist-live-thumb";
         wrap.appendChild(previewImg);
