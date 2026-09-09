@@ -1297,7 +1297,54 @@ function updateModelChrome() {
   submitBtn.textContent = image ? "Generate Image" : "Generate Video";
 }
 const MODEL_KEY = "seedance_last_model";
+// --- continuation --------------------------------------------------------------
+// A workflow can tag two tokens `; continue.in` / `; continue.out`; the server then
+// hands each run an opaque integer and records which run it continued. GENie never
+// learns what the number means — that's the workflow's business.
+//
+// `armedContinuation` is the intent for the *next* Generate, set by a history card's
+// Continue or Re-roll. Cleared whenever the form is repopulated from elsewhere, so a
+// plain Re-import can't leave one attached to an unrelated run.
+const continueBanner = document.getElementById("continueBanner");
+let armedContinuation = null; // { parentId, from, into|null, file, label }
+
+function renderContinueBanner() {
+  if (!armedContinuation) return hide(continueBanner);
+  continueBanner.textContent = armedContinuation.into
+    ? `↻ Redoing ${armedContinuation.label} in place — a new seed was rolled. `
+    : `⛓ Continuing from ${armedContinuation.label} — a new seed was rolled. `;
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "btn-secondary";
+  cancel.textContent = "Cancel";
+  cancel.addEventListener("click", disarmContinuation);
+  continueBanner.appendChild(cancel);
+  show(continueBanner);
+}
+
+function disarmContinuation() {
+  if (!armedContinuation) return;
+  armedContinuation = null;
+  for (const f of comfyFields) f.lock?.(false);
+  renderContinueBanner();
+}
+
+// Arm after the form has been repopulated: reroll the seed (reusing it under
+// near-identical conditioning just reproduces the parent), then lock any pinned
+// values the parent recorded so they can't drift between the two runs.
+function armContinuation(state, parentValues) {
+  armedContinuation = state;
+  for (const f of comfyFields) {
+    if (typeof f.advance === "function" && typeof f.set === "function") f.set(randomSeed());
+  }
+  for (const f of comfyFields) {
+    if (f.pin && f.name in (parentValues || {})) f.lock?.(true);
+  }
+  renderContinueBanner();
+}
+
 modelSelect.addEventListener("change", () => {
+  disarmContinuation(); // the controls it referred to are about to be rebuilt
   applyModelUI();
   scheduleComfyStats(0); // show/hide the host-stats strip promptly on model switch
   try {
@@ -1777,6 +1824,7 @@ async function renderComfyControls() {
   const items = [];
   const seriesByKey = new Map();
   tokens.forEach((token, scanIndex) => {
+    if (token.role) return; // continuation state — the server fills it; not a control
     const type = comfyControlType(token);
     if (MEDIA_TYPES.has(type)) {
       const m = token.name.match(/^(.*?)(\d+)$/);
@@ -2144,6 +2192,7 @@ function renderScalarControl(token, type, container = comfyControlsEl) {
   // A dropdown whose option values are all numbers should send a number (never for
   // a combo, whose values are filenames/choices).
   const numericSelect =
+    token.type !== "str" &&
     type === "select" && !token.combo && parsedOptions.length > 0 &&
     parsedOptions.every((o) => o.value !== "" && !Number.isNaN(Number(o.value)));
 
@@ -2198,6 +2247,10 @@ function renderScalarControl(token, type, container = comfyControlsEl) {
     getValue: async () => readValue(),
     peek: readValue, // sync read, for saving last-used defaults
     set: (v) => { input.value = v; },
+    // Declared "; pin": must not drift between a run and its continuation, so the
+    // form locks it while one is armed.
+    pin: !!token.pin,
+    lock: (on) => { input.disabled = !!on; field.classList.toggle("locked", !!on); },
   };
   if (afterMode) {
     ctrl.advance = () => {
@@ -2428,7 +2481,11 @@ async function submitComfy() {
   if (!wf) return setError("Workflow not found — try reloading.");
   hide(errorEl);
   submitBtn.disabled = true;
-  const count = comfyQueueCount();
+  if (armedContinuation && armedContinuation.file !== wf.file) disarmContinuation();
+  const cont = armedContinuation;
+  // Redoing a run in place writes one fixed slot; queueing several would stamp the
+  // same one N times.
+  const count = cont?.into ? 1 : comfyQueueCount();
   const allLoras = comfyLoraControl ? comfyLoraControl.getLoras() : [];
   const enabledLoras = allLoras.filter((l) => l.enabled !== false); // only these get injected
   const bypass = comfyBypassControl ? comfyBypassControl.getDisabled() : [];
@@ -2447,11 +2504,12 @@ async function submitComfy() {
       if (allLoras.length) input.loras = allLoras; // store the full loadout (incl. disabled) for re-import
       if (bypass.length) input.bypass = bypass;
       if (typeof values.prompt === "string" && values.prompt.trim()) input.prompt = values.prompt.trim();
-      await queueComfyRun(wf, values, prune, mediaIds, input, enabledLoras, bypass, tails);
+      await queueComfyRun(wf, values, prune, mediaIds, input, enabledLoras, bypass, tails, cont);
       // Advance seeds for the next queued run (no-op when the mode is "fixed").
       for (const f of comfyFields) if (typeof f.advance === "function") f.advance();
     }
     saveComfySettings(wf.file); // remember the final values + LoRAs (server-side)
+    disarmContinuation(); // one arm, one submit
   } finally {
     submitBtn.disabled = false;
   }
@@ -2460,7 +2518,7 @@ async function submitComfy() {
 // Queue one ComfyUI run: one request queues it AND creates the pending History
 // entry server-side (so a dropped connection can't orphan it — the sweep finishes
 // it). Then attach a live status to that pending card, wire Cancel, and poll.
-async function queueComfyRun(wf, values, prune, mediaIds, input, loras, bypass, tails) {
+async function queueComfyRun(wf, values, prune, mediaIds, input, loras, bypass, tails, cont) {
   const job = {
     jobId: nextJobId++,
     taskId: null,
@@ -2485,6 +2543,7 @@ async function queueComfyRun(wf, values, prune, mediaIds, input, loras, bypass, 
         projectId: job.projectId,
         refVideoSeconds: 0,
         previewMethod,
+        ...(cont ? { continueFrom: { parentId: cont.parentId, from: cont.from, slot: cont.into } } : {}),
       }),
     });
     const data = await res.json();
@@ -3610,6 +3669,54 @@ function renderHistory(entries) {
     });
     actions.appendChild(reimport);
 
+    // Continue / Re-roll, for a workflow that declares the continuation tokens and a
+    // run that carries a slot. The workflow list is already in memory, so this
+    // self-heals: drop the tags from the .json and the buttons disappear.
+    const cont = entry.continuation;
+    const wfMeta = comfyEntry
+      ? comfyWorkflows.find((w) => w.file === (input.model || "").slice("comfy:".length))
+      : null;
+    const roles = {};
+    for (const t of wfMeta?.tokens || []) if (t.role) roles[t.role] = t.name;
+    const when = new Date(entry.createdAt || Number(entry.id)).toLocaleString();
+
+    if (cont?.slot && roles["continue.in"] && roles["continue.out"] && output) {
+      const contBtn = document.createElement("button");
+      contBtn.type = "button";
+      contBtn.className = "btn-secondary";
+      contBtn.innerHTML = '<span class="btn-ico">⛓</span> Continue';
+      contBtn.title = "Start a new run that continues from this one";
+      contBtn.addEventListener("click", async () => {
+        await applyEntry(entry); // reselects the workflow and prefills everything
+        armContinuation(
+          { parentId: entry.id, from: cont.slot, into: null, file: wfMeta.file, label: when },
+          input.values || {}
+        );
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      });
+      actions.appendChild(contBtn);
+    }
+
+    if (cont && roles["continue.out"]) {
+      // Redo this run in place, keeping its position so anything continuing from it
+      // stays valid. Plain Re-run below deliberately forks instead — it never
+      // overwrites, which keeps the safe default safe.
+      const rollBtn = document.createElement("button");
+      rollBtn.type = "button";
+      rollBtn.className = "btn-secondary";
+      rollBtn.innerHTML = '<span class="btn-ico">↻</span> Re-roll';
+      rollBtn.title = "Regenerate this run in place, keeping its place in the chain";
+      rollBtn.addEventListener("click", async () => {
+        await applyEntry(entry);
+        armContinuation(
+          { parentId: cont.parentId, from: cont.from, into: cont.slot, file: wfMeta.file, label: when },
+          input.values || {}
+        );
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      });
+      actions.appendChild(rollBtn);
+    }
+
     const rerun = document.createElement("button");
     rerun.type = "button";
     rerun.className = "btn-secondary";
@@ -3775,6 +3882,7 @@ function renderHistory(entries) {
 
 // Populate the form from a saved history entry (local files re-host at generate).
 async function applyEntry(entry) {
+  disarmContinuation(); // Re-import/Re-run start clean; Continue re-arms after this
   const input = entry.input || {};
 
   // ComfyUI entries: reselect the workflow and prefill its controls (images can't

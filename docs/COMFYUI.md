@@ -20,6 +20,10 @@ builds a form for them automatically.
    flat `{ "<nodeId>": { "inputs": …, "class_type": … } }` shape, not the editor's
    graph export.
 
+   Subfolders count: `git clone` a workflow repo into `workflows/<repo>/` and its
+   files are listed as `<repo>/<name>` (`.git` and friends are skipped). See
+   [`workflows/README.md`](../workflows/README.md).
+
 3. Reload the app. Each workflow appears in the **Model** dropdown under
    **Local · ComfyUI**.
 
@@ -51,10 +55,15 @@ for that node input. In brief:
   under `settings/comfy/<name>.json`) override it — delete that file to reset.
 - **Layout hints** `; 1/2` … `; full` (width) and `; #N` (order) arrange the grid.
 
+- **Continuations** let a workflow carry state from one run to the next: tag two
+  tokens `; continue.in` / `; continue.out` and each run gets an opaque integer plus a
+  **Continue** button on its History card. GENie never interprets the number — see
+  [Continuations](workflows/tokens.md#continuations).
+
 > 📖 **Full authoring reference:** [workflows/tokens.md](workflows/tokens.md) — the
 > complete `{{token}}` guide (grammar, the control-inference rules, media series,
-> forcing dropdowns, the worked example, and gotchas) for anyone writing their own
-> workflows. The rest of this page covers the surrounding behavior.
+> forcing dropdowns, continuations, the worked example, and gotchas) for anyone writing
+> their own workflows. The rest of this page covers the surrounding behavior.
 
 ## Models, LoRAs, VAEs & samplers (from ComfyUI)
 
@@ -136,6 +145,11 @@ in `settings/comfy/<name>.json`
 same config is shared across every device that opens the app — including your phone
 over LAN — and it survives a browser-cache clear. Re-selecting the workflow (or
 re-importing a run from History) reloads it.
+
+A workflow in a subfolder keys on its path (`settings/comfy/<repo>/<name>.json`), so
+two repos can ship a same-named workflow without treading on each other. Move a
+workflow between folders and it starts from its token defaults again — its old
+settings file stays where it was.
 
 ## Image inputs & the gallery
 
@@ -405,6 +419,11 @@ tune the frame count, the image size and a cheaper one-tile-per-step mode — se
 - Re-import from History reselects the workflow, refills text/number/dropdown
   values, and re-populates the media fields from the run's saved gallery files
   (any file since deleted from the gallery is skipped).
+- A workflow's **identity is its path** under `workflows/`, and that's what History
+  records — move or rename one and older runs can't re-import it (the same has always
+  been true of a rename). The workflows GENie ships in `default/` are the exception:
+  they're addressed by bare filename, so runs made before subfolders existed keep
+  working.
 - Errors from ComfyUI surface on the run's History card in readable form: a
   validation rejection (e.g. a model that isn't installed) is parsed from `node_errors` into
   lines like `CheckpointLoaderSimple (node 12): Value not in list — ckpt_name: '…'

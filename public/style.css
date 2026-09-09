@@ -1693,3 +1693,25 @@ img.zoomable {
   font-size: 0.82rem;
   line-height: 1.5;
 }
+
+/* An armed continuation: the next Generate continues a finished run. */
+.continue-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 0 0 0.6rem;
+  padding: 0.5rem 0.7rem;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  font-size: 0.9rem;
+}
+/* A "; pin" control, held still while a continuation is armed. */
+.field.locked label,
+.field.locked .hint {
+  opacity: 0.55;
+}
+.field.locked input,
+.field.locked select {
+  cursor: not-allowed;
+}
