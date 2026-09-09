@@ -55,10 +55,15 @@ for that node input. In brief:
   under `settings/comfy/<name>.json`) override it — delete that file to reset.
 - **Layout hints** `; 1/2` … `; full` (width) and `; #N` (order) arrange the grid.
 
+- **Continuations** let a workflow carry state from one run to the next: tag two
+  tokens `; continue.in` / `; continue.out` and each run gets an opaque integer plus a
+  **Continue** button on its History card. GENie never interprets the number — see
+  [Continuations](workflows/tokens.md#continuations).
+
 > 📖 **Full authoring reference:** [workflows/tokens.md](workflows/tokens.md) — the
 > complete `{{token}}` guide (grammar, the control-inference rules, media series,
-> forcing dropdowns, the worked example, and gotchas) for anyone writing their own
-> workflows. The rest of this page covers the surrounding behavior.
+> forcing dropdowns, continuations, the worked example, and gotchas) for anyone writing
+> their own workflows. The rest of this page covers the surrounding behavior.
 
 ## Models, LoRAs, VAEs & samplers (from ComfyUI)
 

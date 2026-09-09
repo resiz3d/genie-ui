@@ -56,10 +56,18 @@ Requirements:
 | `\| option \| option` | — | Explicit dropdown choices. Their presence **forces a dropdown**. Use `Label=value` to show a friendly label but send a different value. |
 | `; width` | — | Column span in the form's 12-column grid: `full`, `1`, `1/2`, `1/3`, `1/4`, `2/3`, `3/4`. |
 | `; #order` | — | Sort position (ascending integer). Lower numbers appear first. |
+| `; str` | — | Keep the value a string, even when it looks numeric. |
+| `; pin` | — | Must not change while a continuation is armed — the form locks it. |
+| `; continue.in` / `; continue.out` | — | Marks this token as carrying continuation state. See [Continuations](#continuations). |
 
 The `; width` and `; #order` hints are **layout only** — they're stripped before the
-value is sent to ComfyUI, and can appear in either order. Everything before the
-first layout `;` is the value spec.
+value is sent to ComfyUI, and can appear in any order. Everything before the first
+hint `;` is the value spec.
+
+`; str` exists because ComfyUI matches a dropdown's choices **by identity**: a node
+whose options are the strings `["22","5","39","56"]` rejects the number `22` with
+*Value not in list*. GENie normally sends a number when every option looks numeric,
+so tag such a token `; str` and it stays quoted.
 
 Examples:
 
@@ -257,6 +265,65 @@ ComfyUI), a **Model** checkpoint picker in the Settings drawer, a **Prompt** tex
 box, and a **Picture** upload — all from tokens, no code.
 
 ---
+
+## Continuations
+
+Some workflows can carry state from one run to the next — a sampler that writes
+something to disk and reads it back on the following run, so a second clip continues
+the first. GENie supports that without knowing anything about the mechanism: it hands
+each run an **opaque integer**, remembers which run each one continued, and gives you
+a **Continue** button. What the number *means* is entirely the workflow's business.
+
+Tag two tokens:
+
+```jsonc
+"610": { "inputs": { "value": "{{prev=0 ; continue.in}}"  }, "class_type": "PrimitiveInt" },
+"611": { "inputs": { "value": "{{cur=0 ; continue.out}}"  }, "class_type": "PrimitiveInt" }
+```
+
+- **`continue.out`** receives a fresh integer for this run — unique, never reused.
+- **`continue.in`** receives the integer that was given to the run you're continuing
+  from, or `0` when there is no parent. `0` is the natural "nothing to continue"
+  value, so make it the token's default too.
+
+Wire those two inputs into whatever writes and reads your state, and that's it. Neither
+token appears in the form — GENie fills them, so there's nothing to set by hand and
+nothing to get wrong.
+
+Run the workflow once and its History card grows two buttons:
+
+- **⛓ Continue** — a new run that continues this one. Everything is re-imported, and
+  the **seed is re-rolled**, because reusing the parent's seed with near-identical
+  conditioning just reproduces the parent.
+- **↻ Re-roll** — redo *this* run into its own slot, keeping its place so anything
+  continuing from it stays valid. Plain **Re-run** deliberately forks instead: it
+  allocates a new integer and never overwrites.
+
+A banner shows while a continuation is armed, with a Cancel. Re-importing anything else
+clears it.
+
+### Values that must not drift
+
+If your mechanism can't tolerate a value changing between a run and its continuation —
+a resolution that has to match, say — tag it `; pin`:
+
+```jsonc
+"115": { "inputs": { "aspect_ratio": "{{aspect=16:9|16:9|1:1 ; pin}}" } }
+```
+
+Continue already carries every value across; `; pin` additionally **locks the control**
+while a continuation is armed, so it can't be changed by accident.
+
+### What GENie records
+
+A continued run's History entry carries `continuation: { parentId, from, slot }` —
+who it continued, the integer it read, and the integer it was given. Ordinary runs, and
+runs of workflows that don't declare these tokens, have `continuation: null` and behave
+exactly as before.
+
+> **Older GENie versions:** a `; continue.in` hint on a build that doesn't know it is
+> not an error, but it isn't ignored either — it becomes part of the token's default
+> value. Workflows using continuations therefore need a GENie new enough to parse it.
 
 ## Gotchas
 

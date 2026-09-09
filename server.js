@@ -453,11 +453,22 @@ app.get("/api/status", (req, res) => {
 // a width ("; 1/4") and/or an order ("; #8"). Returns {name, default, options,
 // width, order}. Hints are layout-only and ignored when substituting values.
 const WIDTH_RE = /^(full|1|1\/2|1\/3|1\/4|2\/3|3\/4)$/;
+// A token may carry this run's continuation state. GENie assigns the integers and
+// never interprets them — the workflow supplies the meaning.
+const ROLE_RE = /^continue\.(in|out)$/;
+// "; str" keeps a value a string. ComfyUI matches a COMBO by identity, so a node whose
+// choices are the strings ["22","5",…] rejects the number 22.
+const TYPE_RE = /^str(ing)?$/i;
 function parseTokenSpec(inner) {
   inner = String(inner);
   let width = null;
   let order = null;
-  // Strip trailing "; <hint>" segments (a width like "1/4" and/or an order "#8").
+  let role = null;
+  let type = null;
+  let pin = false;
+  // Strip trailing "; <hint>" segments (a width like "1/4", an order "#8", a role, a
+  // type, or "pin"). An unrecognised hint stops the scan, so it stays part of the
+  // value rather than being silently dropped.
   for (;;) {
     const semi = inner.lastIndexOf(";");
     if (semi < 0) break;
@@ -465,6 +476,9 @@ function parseTokenSpec(inner) {
     const orderMatch = h.match(/^#(\d+)$/);
     if (WIDTH_RE.test(h)) width = h;
     else if (orderMatch) order = Number(orderMatch[1]);
+    else if (ROLE_RE.test(h)) role = h;
+    else if (TYPE_RE.test(h)) type = "str";
+    else if (h === "pin") pin = true;
     else break;
     inner = inner.slice(0, semi);
   }
@@ -474,7 +488,25 @@ function parseTokenSpec(inner) {
   const eq = head.indexOf("=");
   const name = (eq >= 0 ? head.slice(0, eq) : head).trim();
   const def = eq >= 0 ? head.slice(eq + 1).trim() : "";
-  return { name, default: def, options, width, order };
+  return { name, default: def, options, width, order, role, type, pin };
+}
+
+// Token names a workflow has tagged with a continuation role. `{}` for every workflow
+// that doesn't opt in — which is what keeps the whole feature inert.
+function continuationRoles(workflow) {
+  const roles = {};
+  for (const node of Object.values(workflow || {})) {
+    for (const v of Object.values(node?.inputs || {})) {
+      if (typeof v !== "string") continue;
+      const re = /\{\{([\s\S]*?)\}\}/g;
+      let m;
+      while ((m = re.exec(v)) !== null) {
+        const spec = parseTokenSpec(m[1]);
+        if (spec.role && spec.name && !roles[spec.role]) roles[spec.role] = spec.name;
+      }
+    }
+  }
+  return roles; // e.g. { "continue.in": "prev_state", "continue.out": "this_state" }
 }
 
 // All distinct tokens in a workflow's raw text, first occurrence wins.
@@ -1365,20 +1397,39 @@ async function comfyVram() {
 // orphan the run).
 app.post("/api/comfy/generate", async (req, res) => {
   ensureComfyWs(); // start listening for progress before the run begins
-  const { file, values, prune, loras, bypass, tails, input, mediaLocalIds, projectId, refVideoSeconds, previewMethod } =
+  const { file, values, prune, loras, bypass, tails, input, mediaLocalIds, projectId, refVideoSeconds, previewMethod, continueFrom } =
     req.body || {};
   const wfPath = workflowPath(file);
   if (!wfPath || !fs.existsSync(wfPath)) {
     return res.status(400).json({ code: 400, msg: "Unknown workflow file" });
   }
   let workflow, tailResult;
+  let continuation = null; // null unless this workflow declares the continuation tokens
+  let continuationValues = null; // just the role tokens GENie filled, for the record
+  let runValues = values || {};
   try {
     workflow = JSON.parse(fs.readFileSync(wfPath, "utf8"));
     // Token → node map from the untouched workflow: substitution erases the tokens,
     // and reference-video tails are addressed by token name.
     const tokenNodes = mapTokenNodes(workflow);
     workflow = pruneWorkflow(workflow, prune); // drop empty optional reference loaders
-    workflow = substituteWorkflow(workflow, values || {});
+    // Continuation: the workflow says which tokens carry the state integers, GENie
+    // fills them and records what it gave. A caller-supplied slot is a deliberate
+    // redo of an existing run into its own slot; otherwise allocate a fresh one.
+    const roles = continuationRoles(workflow);
+    if (roles["continue.out"]) {
+      const c = (continueFrom && typeof continueFrom === "object") ? continueFrom : {};
+      const slot = Number.isInteger(c.slot) && c.slot > 0 ? c.slot : allocateContinuationSlot();
+      const from = Number.isInteger(c.from) && c.from > 0 ? c.from : null;
+      // Always fill both, as numbers: 0 is the no-parent case. Leaving continue.in to
+      // its token default would substitute the literal string "0" into what is almost
+      // certainly an INT input, since the role tokens are never form controls.
+      continuationValues = { [roles["continue.out"]]: slot };
+      if (roles["continue.in"]) continuationValues[roles["continue.in"]] = from || 0;
+      runValues = { ...runValues, ...continuationValues };
+      continuation = { parentId: c.parentId ? String(c.parentId) : null, from, slot };
+    }
+    workflow = substituteWorkflow(workflow, runValues);
     tailResult = await applyTails(workflow, tokenNodes, tails); // trim references to their last N seconds
     for (const id of Array.isArray(bypass) ? bypass : []) bypassNode(workflow, String(id)); // disabled patch nodes
     workflow = injectLoras(workflow, loras); // splice in any dynamically-added LoRAs
@@ -1405,7 +1456,12 @@ app.post("/api/comfy/generate", async (req, res) => {
     let historyId = null;
     try {
       const proj = resolveProject(projectId);
-      const baseInput = input || { model: `comfy:${file}`, values };
+      const baseInput = input || { model: `comfy:${file}`, values: runValues };
+      // Record the slots that actually ran, not the placeholders the client sent —
+      // that's what re-import reads back.
+      if (continuationValues && baseInput.values) {
+        baseInput.values = { ...baseInput.values, ...continuationValues };
+      }
       const entry = makeHistoryEntry({
         id: `${Date.now()}`,
         taskId: body.prompt_id,
@@ -1416,6 +1472,7 @@ app.post("/api/comfy/generate", async (req, res) => {
         mediaLocalIds,
         refVideoSeconds,
         imageLocalIds: mediaLocalIds?.image || [],
+        continuation,
         status: "pending",
       });
       const entries = readJson(HISTORY_FILE);
@@ -1428,7 +1485,7 @@ app.post("/api/comfy/generate", async (req, res) => {
     res.json({
       code: 200,
       msg: "success",
-      data: { promptId: body.prompt_id, historyId, warnings: tailResult.warnings },
+      data: { promptId: body.prompt_id, historyId, continuation, warnings: tailResult.warnings },
     });
   } catch (err) {
     console.error("ComfyUI generate error:", err);
@@ -1801,6 +1858,30 @@ function readAppSettings() {
 function writeAppSettings(s) {
   fs.mkdirSync(path.dirname(APP_SETTINGS_FILE), { recursive: true });
   fs.writeFileSync(APP_SETTINGS_FILE, JSON.stringify(s, null, 2));
+}
+
+// An opaque per-run integer for a workflow that declares a `continue.out` token.
+// Monotonic, starts at 1, never reused: gaps are free (a rejected /prompt burns one),
+// while re-issuing a number would silently repoint an older run's continuation at new
+// data. Only the workflow knows what the number means. The read-modify-write has no
+// await in it, so on Node's single thread it can't interleave with another request.
+let slotFloorChecked = false;
+function allocateContinuationSlot() {
+  const s = readAppSettings();
+  let next = Math.floor(Number(s.continuationSlot)) || 0;
+  if (!slotFloorChecked) {
+    // settings/ is gitignored and hand-editable; never re-issue a number history
+    // already records. One scan per process.
+    for (const e of readJson(HISTORY_FILE)) {
+      const v = e?.continuation?.slot;
+      if (Number.isInteger(v) && v > next) next = v;
+    }
+    slotFloorChecked = true;
+  }
+  next += 1;
+  s.continuationSlot = next;
+  writeAppSettings(s);
+  return next;
 }
 // Auto-draft decision (server-side so the sweep and the client path agree): true
 // when a finished generation's megapixels are at or below the configured threshold.
@@ -2293,7 +2374,7 @@ async function attachOutputs(entry, urls) {
 }
 
 // Build a history entry object (output fields may be null for a pending entry).
-function makeHistoryEntry({ id, taskId, projectId, input, resultUrl, localVideo, costCredits, refVideoSeconds, imageLocalIds, mediaLocalIds, status, runtimeMs, draft, hidden, favorite }) {
+function makeHistoryEntry({ id, taskId, projectId, input, resultUrl, localVideo, costCredits, refVideoSeconds, imageLocalIds, mediaLocalIds, status, runtimeMs, draft, hidden, favorite, continuation }) {
   return {
     id,
     createdAt: new Date().toISOString(),
@@ -2321,6 +2402,11 @@ function makeHistoryEntry({ id, taskId, projectId, input, resultUrl, localVideo,
     imageLocalIds: Array.isArray(imageLocalIds) ? imageLocalIds : [],
     // per-kind local ids: { image: [], video: [], audio: [] }
     mediaLocalIds: mediaLocalIds && typeof mediaLocalIds === "object" ? mediaLocalIds : null,
+    // Links this run to the one it continues, for a workflow that declares the
+    // continuation tokens: `from` is the opaque integer it was given to read, `slot`
+    // the one it was given to write. null for every ordinary run — nothing else about
+    // a normal generation changes shape.
+    continuation: continuation && typeof continuation === "object" ? continuation : null,
   };
 }
 
