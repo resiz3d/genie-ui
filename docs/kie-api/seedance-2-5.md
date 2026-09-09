@@ -18,7 +18,7 @@ Docs page: <https://kie.ai/seedance-2-5>
 | `reference_audio_urls` | string[] | No | — | ≤15MB each; **total ≤ 30s**. mpeg/wav/aac/mp4/ogg. |
 | `generate_audio` | boolean | No | `true` | Generate AI audio synced to the video. |
 | `return_last_frame` | boolean | No | — | Return the output's last frame. **Cannot be `true` when `draft=true`.** |
-| `resolution` | string | No | `720p` | `480p` \| `720p`. |
+| `resolution` | string | No | `720p` | `480p` \| `720p` \| `1080p`. (1080p added after the original 2026-08-18 capture; confirmed live 2026-09-08. Despite kie.ai's "4K" marketing, the resolution enum stops at 1080p.) |
 | `aspect_ratio` | string | No | `adaptive` | `16:9` \| `4:3` \| `1:1` \| `3:4` \| `9:16` \| `21:9` \| `adaptive`. |
 | `duration` | number | No | `5` | Seconds. Range −1..30 (step 1). |
 | `output_format` | string | No | `mp4` | `mp4` \| `mov`. |

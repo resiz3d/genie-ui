@@ -1,0 +1,94 @@
+{
+  "_comment": "GENie library of known ComfyUI node types. A curated reference so GENie can understand third-party/custom nodes without querying a live ComfyUI /object_info. Keyed by ComfyUI class_type. This is hand-maintained; add an entry per node you want GENie to know about. See docs/COMFYUI.md and docs/workflows/tokens.md for how these map to form controls.",
+  "version": 1,
+  "nodes": {
+    "ApplyVDNH3": {
+      "display_name": "Apply VDN-H3 (MiniMax-H3 Hybrid Attention)",
+      "category": "model_patch/video",
+      "package": {
+        "name": "ComfyUI-VDN-H3",
+        "custom_node": true,
+        "install_path": "ComfyUI/custom_nodes/ComfyUI-VDN-H3",
+        "reference": "github.com/OpenVDN/vdn-minimax-h3",
+        "license": "Apache-2.0"
+      },
+      "description": "VDN-H3: hybrid attention for MiniMax-H3. Nearby frames keep exact softmax attention; distant context goes through the checkpoint's linear Video Delta Attention branch. Applied as a MODEL patch between the diffusion-model loader and the sampler.",
+      "requires": {
+        "base_model": "A MiniMax-H3 diffusion model (blocks[].attn.qkv_proj); connect a MiniMax-H3 UNETLoader upstream.",
+        "assets": "A VDN stage directory under ComfyUI/models/vdn (from OpenVDN/vdn-minimax-h3), holding the linear-branch weights + spec. Must match the loaded base (stage-dmd-* = 8-step distilled)."
+      },
+      "chain_once": true,
+      "inputs": {
+        "model": { "type": "MODEL", "kind": "link", "required": true, "tooltip": "The MiniMax-H3 diffusion model to patch. Chain once, between the model loader and the sampler." },
+        "vdn_checkpoint": { "type": "COMBO", "kind": "combo", "required": true, "options_source": "spec.list_vdn_checkpoints() (directories under models/vdn)", "tooltip": "The VDN stage directory holding the linear-branch weights and spec. Must match the loaded base." },
+        "apply_turbo_adapter": { "type": "BOOLEAN", "required": true, "default": true, "tooltip": "Apply the 'turbo' adapter when the checkpoint carries one (stage-dmd = 8-step model). OFF gives the 50-step model it was distilled from. Use 8 sampler steps with it ON, 50 with it OFF." },
+        "strength": { "type": "FLOAT", "required": true, "default": 1.0, "min": 0.0, "max": 2.0, "step": 0.05, "tooltip": "Adapter strength. 1.0 is the released model." },
+        "lora_mode": { "type": "COMBO", "kind": "combo", "required": true, "options": ["bypass", "merge"], "default": "merge", "tooltip": "merge: adapters folded into the weights, reproducing the validated model exactly. REQUIRED for 8-step DMD checkpoints (stage-dmd-*)." },
+        "branch_weights": { "type": "COMBO", "kind": "combo", "required": true, "options": ["auto", "stream", "cache_gpu"], "default": "auto", "tooltip": "auto: cache_gpu when free VRAM after the base load exceeds 1.5x stage size + 4 GiB headroom, else stream. stream: ~4.3 GB of branch weights moved to GPU per block per step (safe on small cards). cache_gpu: resident on GPU (faster; keep ~4.3 GB free)." },
+        "retain_buffers": { "type": "COMBO", "kind": "combo", "required": true, "options": ["auto", "on", "off"], "default": "auto", "tooltip": "Retained branch scratch/banks trade ~0.5-1 GiB VRAM for churn-free steps. auto: retain when free VRAM >= stage + 10 GiB headroom, else transient." },
+        "verbose": { "type": "BOOLEAN", "required": true, "default": false, "tooltip": "Log the applied adapters and the per-forward layout to the console." },
+        "attention_backend": { "type": "COMBO", "kind": "combo", "required": true, "options": ["grouped", "flex"], "default": "grouped", "tooltip": "How the windowed softmax runs. grouped: one dense SDPA per window group (portable, exact). flex: the whole pattern as one compiled FlexAttention kernel (faster on long clips; falls back to grouped if compile fails)." }
+      },
+      "outputs": [ { "type": "MODEL", "name": "MODEL" } ],
+      "genie": {
+        "slot": "MODEL patch between the diffusion-model loader and the sampler; place after the model, before any LoRAs.",
+        "recommend_bypassable": true,
+        "recommend_bypassed_by_default": true,
+        "bypass_passthrough_input": "model",
+        "tokenize": {
+          "note": "Only object_info-COMBO inputs group under a bypassable node's enable/disable toggle in GENie's ComfyUI Settings drawer (a token needs combo:true, which inline |a|b options do NOT set — so expose combos WITHOUT inline options and let /object_info populate them). Numbers and BOOLEANs are not combos, so bake them at defaults or accept that they render in the main form.",
+          "as_combo_tokens": ["vdn_checkpoint", "lora_mode", "branch_weights", "attention_backend"],
+          "bake_at_default": ["apply_turbo_adapter", "strength", "retain_buffers", "verbose"]
+        }
+      }
+    },
+    "ApplyVDNH3Advanced": {
+      "display_name": "Apply VDN-H3 Advanced (Ablations & Fast Kernels)",
+      "category": "model_patch/video",
+      "package": {
+        "name": "ComfyUI-VDN-H3",
+        "custom_node": true,
+        "install_path": "ComfyUI/custom_nodes/ComfyUI-VDN-H3",
+        "reference": "github.com/OpenVDN/vdn-minimax-h3",
+        "license": "Apache-2.0"
+      },
+      "description": "Everything ApplyVDNH3 does, plus per-adapter strengths (Stage-B and turbo), ablation knobs that deviate from the released spec (window radius/chunk, anchor frames, text state, linear branch), and compile-fused branch kernels (fast_kernels). Defaults reproduce the released model exactly.",
+      "requires": {
+        "base_model": "A MiniMax-H3 diffusion model (blocks[].attn.qkv_proj); connect a MiniMax-H3 UNETLoader upstream.",
+        "assets": "A VDN stage directory under ComfyUI/models/vdn (from OpenVDN/vdn-minimax-h3). Must match the loaded base."
+      },
+      "chain_once": true,
+      "inputs": {
+        "model": { "type": "MODEL", "kind": "link", "required": true, "tooltip": "The MiniMax-H3 diffusion model to patch. Chain once, between the model loader and the sampler." },
+        "vdn_checkpoint": { "type": "COMBO", "kind": "combo", "required": true, "options_source": "spec.list_vdn_checkpoints() (directories under models/vdn)", "tooltip": "The VDN stage directory holding the linear-branch weights and spec. Must match the loaded base." },
+        "apply_turbo_adapter": { "type": "BOOLEAN", "required": true, "default": true, "tooltip": "Apply the 'turbo' adapter when the checkpoint carries one (8-step model)." },
+        "stage_b_strength": { "type": "FLOAT", "required": true, "default": 1.0, "min": 0.0, "max": 2.0, "step": 0.05, "tooltip": "Strength of the 'default' (Stage-B) adapter." },
+        "turbo_strength": { "type": "FLOAT", "required": true, "default": 1.0, "min": 0.0, "max": 2.0, "step": 0.05, "tooltip": "Strength of the 'turbo' (8-step DMD) adapter." },
+        "lora_mode": { "type": "COMBO", "kind": "combo", "required": true, "options": ["bypass", "merge"], "default": "merge", "tooltip": "merge required for 8-step DMD checkpoints." },
+        "branch_weights": { "type": "COMBO", "kind": "combo", "required": true, "options": ["auto", "stream", "cache_gpu"], "default": "auto", "tooltip": "auto/stream/cache_gpu VRAM policy for the linear-branch weights; see ApplyVDNH3." },
+        "retain_buffers": { "type": "COMBO", "kind": "combo", "required": true, "options": ["auto", "on", "off"], "default": "auto", "tooltip": "Retained branch scratch/banks; see ApplyVDNH3." },
+        "verbose": { "type": "BOOLEAN", "required": true, "default": false, "tooltip": "Log the applied adapters and the per-forward layout to the console." },
+        "attention_backend": { "type": "COMBO", "kind": "combo", "required": true, "options": ["grouped", "flex"], "default": "grouped", "tooltip": "How the windowed softmax runs; see ApplyVDNH3." },
+        "window_radius": { "type": "INT", "required": false, "default": 1, "min": 0, "max": 8, "tooltip": "Softmax window radius in chunks. Trained: 1." },
+        "window_chunk": { "type": "INT", "required": false, "default": 5, "min": 0, "max": 64, "tooltip": "Chunk size for the aligned window; 0 = per-frame centered window. Trained: 5." },
+        "anchor_frames": { "type": "COMBO", "kind": "combo", "required": false, "options": ["both", "columns", "rows", "none"], "default": "both", "tooltip": "Boundary-frame anchors. Trained: both." },
+        "text_state": { "type": "BOOLEAN", "required": false, "default": true, "tooltip": "Write the prompt into the linear branch's states at init. Trained: on." },
+        "linear_branch": { "type": "BOOLEAN", "required": false, "default": true, "tooltip": "Off = window-only ablation (debug; then lacks all long-range context on clips longer than the window)." },
+        "fast_kernels": { "type": "BOOLEAN", "required": false, "default": false, "tooltip": "torch.compile the branch's hot spots. Same math; falls back to eager if compile fails. Known to drift on 8-step DMD stages (stage-dmd-*) on torch 2.10 -- ablation use only, keep off for final renders." }
+      },
+      "outputs": [ { "type": "MODEL", "name": "MODEL" } ],
+      "genie": {
+        "slot": "MODEL patch between the diffusion-model loader and the sampler; place after the model, before any LoRAs.",
+        "recommend_bypassable": true,
+        "recommend_bypassed_by_default": true,
+        "bypass_passthrough_input": "model",
+        "wired_into": "workflows/default/Minimax H3 (Ref2Video).json (node 500)",
+        "tokenize": {
+          "note": "Only object_info-COMBO inputs group under a bypassable node's enable/disable toggle in GENie's ComfyUI Settings drawer (inline |a|b options do NOT set combo:true). Expose the combos without inline options; bake numbers/BOOLEANs at their trained defaults so the released model is reproduced.",
+          "as_combo_tokens": ["vdn_checkpoint", "lora_mode", "branch_weights", "attention_backend"],
+          "bake_at_default": ["apply_turbo_adapter", "stage_b_strength", "turbo_strength", "retain_buffers", "verbose", "window_radius", "window_chunk", "anchor_frames", "text_state", "linear_branch", "fast_kernels"]
+        }
+      }
+    }
+  }
+}

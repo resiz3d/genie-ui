@@ -1127,18 +1127,25 @@ const isT2I = () => isSeedream() && modelSelect.value.endsWith("-text-to-image")
 // all seedream variants end in "-to-image"; video models never do
 const isImageOutput = (model) => (model || "").includes("-to-image");
 
-// Video variants that top out at 720p (the standard model reaches 1080p/4k).
-const CAPPED_720_MODELS = new Set([
-  "bytedance/seedance-2-5",
-  "bytedance/seedance-2-fast",
-  "bytedance/seedance-2-mini",
-]);
+// Highest resolution each video model supports. The dropdown lists 480p/720p/
+// 1080p/4k; options above a model's ceiling are disabled. Seedance 2.5 tops out
+// at 1080p (kie.ai's "4K" is marketing — the API's resolution enum stops at
+// 1080p); Fast and Mini cap at 720p; the standard model reaches 4k. Anything not
+// listed is treated as uncapped (4k).
+const RESOLUTION_ORDER = ["480p", "720p", "1080p", "4k"];
+const MAX_RESOLUTION = {
+  "bytedance/seedance-2-5": "1080p",
+  "bytedance/seedance-2-fast": "720p",
+  "bytedance/seedance-2-mini": "720p",
+};
 
 // Models whose aspect_ratio list includes "adaptive" (2.5 and 2.0 Mini per the
 // kie.ai docs; 2.0 and Fast do not offer it).
 const ADAPTIVE_ASPECT_MODELS = new Set(["bytedance/seedance-2-5", "bytedance/seedance-2-mini"]);
 const hasAdaptiveAspect = () => ADAPTIVE_ASPECT_MODELS.has(modelSelect.value);
-const isCapped720 = () => CAPPED_720_MODELS.has(modelSelect.value);
+// Index into RESOLUTION_ORDER of the current model's ceiling (default: 4k).
+const maxResolutionIndex = () =>
+  RESOLUTION_ORDER.indexOf(MAX_RESOLUTION[modelSelect.value] || "4k");
 
 // Short suffix distinguishing the non-standard video variants in labels.
 const VIDEO_VARIANT_LABEL = {
@@ -1222,7 +1229,7 @@ function applyModelUI() {
   estimateEl.classList.remove("hidden");
 
   const seedream = isSeedream();
-  const capped = isCapped720();
+  const maxResIdx = maxResolutionIndex();
   const frames = is25();
   for (const id of ["videoField", "audioField", "resolutionField", "durationField", "genAudioField", "webSearchField"]) {
     document.getElementById(id).classList.toggle("hidden", seedream);
@@ -1253,11 +1260,13 @@ function applyModelUI() {
     seedream ? IMAGE_ASPECTS : hasAdaptiveAspect() ? VIDEO_ASPECTS_ADAPTIVE : VIDEO_ASPECTS,
     frames ? "adaptive" : "16:9" // only 2.5 documents adaptive as its default
   );
+  // Disable any resolution above this model's ceiling; if the current selection
+  // is now disabled, drop to the highest allowed option.
   for (const opt of resolutionSelect.options) {
-    if (opt.value === "1080p" || opt.value === "4k") opt.disabled = capped;
+    opt.disabled = RESOLUTION_ORDER.indexOf(opt.value) > maxResIdx;
   }
-  if (capped && (resolutionSelect.value === "1080p" || resolutionSelect.value === "4k")) {
-    resolutionSelect.value = "720p";
+  if (RESOLUTION_ORDER.indexOf(resolutionSelect.value) > maxResIdx) {
+    resolutionSelect.value = RESOLUTION_ORDER[maxResIdx];
   }
   // Seedance 2.5 allows up to 30s; the other video models cap at 15s.
   const durInput = document.getElementById("duration");

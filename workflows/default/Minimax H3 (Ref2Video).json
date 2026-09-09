@@ -75,7 +75,7 @@
       "steps": "{{steps=8 ; 1/3 ; #6}}",
       "denoise": 1,
       "model": [
-        "127",
+        "500",
         0
       ]
     },
@@ -511,7 +511,7 @@
       "sage_attention": "{{sage_attention=auto ; 1/2 ; #10}}",
       "allow_compile": false,
       "model": [
-        "127",
+        "500",
         0
       ]
     },
@@ -532,6 +532,35 @@
     "class_type": "ModelAttentionBackend",
     "_meta": {
       "title": "Model Attention Backend",
+      "bypassable": true,
+      "bypassed_by_default": true
+    }
+  },
+  "500": {
+    "inputs": {
+      "model": [
+        "127",
+        0
+      ],
+      "vdn_checkpoint": "{{vdn_checkpoint ; full ; #12}}",
+      "apply_turbo_adapter": true,
+      "stage_b_strength": 1.0,
+      "turbo_strength": 1.0,
+      "lora_mode": "{{vdn_lora_mode=merge ; 1/2 ; #13}}",
+      "branch_weights": "{{vdn_branch_weights=auto ; 1/2 ; #14}}",
+      "retain_buffers": "auto",
+      "verbose": false,
+      "attention_backend": "{{vdn_attention_backend=grouped ; 1/2 ; #15}}",
+      "window_radius": 1,
+      "window_chunk": 5,
+      "anchor_frames": "both",
+      "text_state": true,
+      "linear_branch": true,
+      "fast_kernels": false
+    },
+    "class_type": "ApplyVDNH3Advanced",
+    "_meta": {
+      "title": "Apply VDN-H3 (Hybrid Attention)",
       "bypassable": true,
       "bypassed_by_default": true
     }
