@@ -49,7 +49,7 @@ GET https://api.kie.ai/api/v1/jobs/recordInfo?taskId=<taskId>
 
 `data.state` is `waiting` | `success` | `fail`. On success, `data.resultJson` is a
 JSON **string** like `{"resultUrls":["https://.../out.mp4"]}`. Other fields:
-`failCode`, `failMsg`, `costTime` (ms), `completeTime`, `createTime`.
+`failCode`, `failMsg`, `costTime` (seconds), `completeTime`, `createTime` (epoch ms).
 
 **Callback:** if `callBackUrl` is set, kie.ai POSTs the same body as the query
 response on completion (success or fail); its `param` field holds the full create

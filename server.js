@@ -79,6 +79,18 @@ fs.mkdirSync(OUTPUT_DIR, { recursive: true });
 fs.mkdirSync(INPUT_DIR, { recursive: true });
 fs.mkdirSync(WORKFLOWS_DIR, { recursive: true });
 
+// Last-resort safety net: this is a local, single-user tool, so a stray error in one
+// request (a Windows EPERM on a file move, a flaky fetch) should be logged, not allowed
+// to crash the whole server and drop every in-flight generation. Individual handlers
+// still do their own error handling; this only stops an escaped async error from
+// killing the process.
+process.on("unhandledRejection", (reason) => {
+  console.error("Unhandled promise rejection (kept the server alive):", reason);
+});
+process.on("uncaughtException", (err) => {
+  console.error("Uncaught exception (kept the server alive):", err);
+});
+
 // --- json file helpers ----------------------------------------------------
 function readJson(file) {
   try {
@@ -89,6 +101,21 @@ function readJson(file) {
 }
 function writeJson(file, data) {
   fs.writeFileSync(file, JSON.stringify(data, null, 2));
+}
+
+// Persist a single history entry without clobbering concurrent changes to OTHER
+// entries: re-read the file and replace just this one by id, rather than writing back
+// a whole-array snapshot that may be stale. `fallback` is the caller's snapshot, used
+// only if the entry has somehow vanished from the file (it's written as-is then).
+function saveHistoryEntry(entry, fallback) {
+  const latest = readJson(HISTORY_FILE);
+  const idx = latest.findIndex((e) => e.id === entry.id);
+  if (idx >= 0) {
+    latest[idx] = entry;
+    writeJson(HISTORY_FILE, latest);
+  } else if (fallback) {
+    writeJson(HISTORY_FILE, fallback);
+  }
 }
 
 // --- projects ---------------------------------------------------------------
@@ -151,11 +178,44 @@ function moveHistoryVideo(entry, targetSlug) {
     const fileName = path.basename(url);
     const from = path.join(OUTPUT_DIR, url.slice("/output/".length));
     const to = path.join(OUTPUT_DIR, targetSlug + sub, fileName);
-    if (from !== to) {
-      fs.mkdirSync(path.dirname(to), { recursive: true });
-      if (fs.existsSync(from)) fs.renameSync(from, to);
+    const movedUrl = `/output/${targetSlug}${sub}/${fileName}`;
+    if (from === to) return url;
+    if (!fs.existsSync(from)) {
+      // Source already gone — a prior move likely landed it; otherwise keep the url as-is.
+      return fs.existsSync(to) ? movedUrl : url;
     }
-    return `/output/${targetSlug}${sub}/${fileName}`;
+    try {
+      fs.mkdirSync(path.dirname(to), { recursive: true });
+    } catch {
+      /* dir may already exist */
+    }
+    // Windows can throw EPERM/EBUSY on rename when a virus scanner or another process
+    // holds the freshly-written file for a moment. Retry briefly, then fall back to
+    // copy + best-effort delete. If even that fails, leave the file where it is and
+    // keep the entry pointing at it — the subfolder nesting is only cosmetic, and a
+    // failed move must never crash the run.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        fs.renameSync(from, to);
+        return movedUrl;
+      } catch (err) {
+        if (attempt === 2) break;
+        const until = Date.now() + 80; // short synchronous backoff to let a scanner's lock clear
+        while (Date.now() < until) {} // moveHistoryVideo is sync; the spin only runs on the rare retry path
+      }
+    }
+    try {
+      fs.copyFileSync(from, to);
+      try {
+        fs.rmSync(from, { force: true });
+      } catch {
+        /* copy landed; leaving the original is harmless */
+      }
+      return movedUrl;
+    } catch (err) {
+      console.error(`moveHistoryVideo: could not move ${from} -> ${to}: ${err.message || err}`);
+      return url; // keep the original, valid location
+    }
   };
   if (Array.isArray(entry.outputs) && entry.outputs.length) {
     for (const o of entry.outputs) o.localVideo = moveOne(o.localVideo);
@@ -1703,6 +1763,113 @@ async function sweepPendingComfy() {
 setInterval(sweepPendingComfy, COMFY_WATCH_INTERVAL_MS);
 setTimeout(sweepPendingComfy, 4000); // an early pass shortly after startup
 
+// A pending kie.ai run is finished by whichever poller sees it done first: the
+// browser, OR this background sweep. The sweep is the safety net — it downloads the
+// output and marks the entry done even if the tab that started the run was closed,
+// backgrounded, or is on another device when kie.ai finishes. The watch list is just
+// the pending non-comfy entries in history.json that carry a taskId, so it survives a
+// server restart. (Entries created before the taskId was persisted have none and are
+// skipped — there's nothing to poll.)
+const KIE_WATCH_INTERVAL_MS = 10000;
+const KIE_MAX_AGE_MS = 24 * 60 * 60 * 1000; // give up on a task kie.ai never reports done
+let kieWatchBusy = false;
+
+// Finish one pending kie.ai entry: download its output (→ done) or mark it failed.
+// Re-reads history so it no-ops if the browser already finished the same entry.
+async function finalizePendingKie(id, { resultUrls, fail, costCredits, runtimeMs }) {
+  const entries = readJson(HISTORY_FILE);
+  const entry = entries.find((e) => e.id === id);
+  if (!entry || entry.status !== "pending") return; // already finished elsewhere
+  const urls = (resultUrls || []).filter(Boolean);
+  if (urls.length) {
+    await attachOutputs(entry, urls); // also applies server-side auto-draft
+    entry.status = "done";
+    if (typeof costCredits === "number") entry.costCredits = costCredits;
+    entry.runtimeMs =
+      typeof runtimeMs === "number" ? runtimeMs : Date.now() - new Date(entry.createdAt).getTime();
+  } else {
+    entry.status = "failed";
+    if (fail) entry.error = fail;
+  }
+  // Re-read once more so a concurrent write (client result endpoint) isn't clobbered.
+  const latest = readJson(HISTORY_FILE);
+  const idx = latest.findIndex((e) => e.id === id);
+  if (idx >= 0 && latest[idx].status === "pending") {
+    latest[idx] = entry;
+    writeJson(HISTORY_FILE, latest);
+  }
+}
+
+async function sweepPendingKie() {
+  if (!API_KEY || kieWatchBusy) return;
+  kieWatchBusy = true;
+  try {
+    const pending = readJson(HISTORY_FILE).filter(
+      (e) => e.status === "pending" && e.taskId && !(e.input?.model || "").startsWith("comfy:")
+    );
+    for (const entry of pending) {
+      let body;
+      try {
+        const r = await fetch(`${API_BASE}/recordInfo?taskId=${encodeURIComponent(entry.taskId)}`, {
+          headers: { Authorization: `Bearer ${API_KEY}` },
+        });
+        body = await r.json().catch(() => ({}));
+        if (!r.ok || body?.code !== 200) {
+          // 404 means kie.ai has no such task; only give up once it's clearly not
+          // coming back. Everything else (5xx, rate limit) is transient — retry next sweep.
+          if (r.status === 404 && Date.now() - new Date(entry.createdAt).getTime() > KIE_MAX_AGE_MS) {
+            await finalizePendingKie(entry.id, { fail: "kie.ai has no record of this task." });
+          }
+          continue;
+        }
+      } catch {
+        break; // kie.ai unreachable — leave every entry pending, retry next sweep
+      }
+      const d = body.data || {};
+      if (d.state === "success") {
+        let urls = [];
+        try {
+          urls = JSON.parse(d.resultJson || "{}").resultUrls || [];
+        } catch {
+          /* malformed resultJson — treat as no output below */
+        }
+        if (urls.length) {
+          const cost = Number(d.creditsConsumed);
+          // recordInfo's costTime is in SECONDS (despite older docs); prefer the exact
+          // wall-clock span when both timestamps are present.
+          const wallMs =
+            Number(d.completeTime) && Number(d.createTime)
+              ? Number(d.completeTime) - Number(d.createTime)
+              : Number(d.costTime)
+                ? Number(d.costTime) * 1000
+                : undefined;
+          await finalizePendingKie(entry.id, {
+            resultUrls: urls,
+            costCredits: Number.isFinite(cost) && cost > 0 ? cost : undefined,
+            runtimeMs: wallMs,
+          });
+        } else {
+          await finalizePendingKie(entry.id, { fail: "Task succeeded but returned no result URL." });
+        }
+      } else if (d.state === "fail") {
+        await finalizePendingKie(entry.id, {
+          fail: d.failMsg || `Generation failed (code ${d.failCode ?? "?"}).`,
+        });
+      } else if (Date.now() - new Date(entry.createdAt).getTime() > KIE_MAX_AGE_MS) {
+        // Stuck "waiting" for over a day — kie.ai almost certainly dropped it.
+        await finalizePendingKie(entry.id, { fail: "Timed out — kie.ai never reported completion." });
+      }
+      // else still waiting → leave pending, check again next sweep
+    }
+  } catch (err) {
+    console.error("kie.ai sweep error:", err);
+  } finally {
+    kieWatchBusy = false;
+  }
+}
+setInterval(sweepPendingKie, KIE_WATCH_INTERVAL_MS);
+setTimeout(sweepPendingKie, 4000); // an early pass shortly after startup
+
 // Host CPU % + system RAM + GPU util % + VRAM usage, for the live readout during local runs.
 app.get("/api/comfy/stats", async (req, res) => {
   const cpu = cpuPercent();
@@ -2328,27 +2495,37 @@ app.delete("/api/images/:id", (req, res) => {
 // Download a finished result into a project's video folder; returns the served
 // /video/... path, or null on failure.
 async function downloadOutput(resultUrl, proj, id, suffix = "") {
+  // Extension from the path, or from a ?filename= query (ComfyUI /view uses that).
+  let fnameHint = resultUrl.split("?")[0];
   try {
-    const r = await fetch(resultUrl);
-    if (!r.ok) return null;
-    // Extension from the path, or from a ?filename= query (ComfyUI /view uses that).
-    let fnameHint = resultUrl.split("?")[0];
-    try {
-      const q = new URL(resultUrl, "http://localhost").searchParams.get("filename");
-      if (q) fnameHint = q;
-    } catch {
-      /* non-URL resultUrl — fall back to the path */
-    }
-    const ext = (fnameHint.match(/\.(\w+)$/)?.[1] || "mp4").toLowerCase();
-    const fileName = `${id}${suffix}.${ext}`;
-    const buf = Buffer.from(await r.arrayBuffer());
-    fs.mkdirSync(path.join(OUTPUT_DIR, proj.slug), { recursive: true });
-    fs.writeFileSync(path.join(OUTPUT_DIR, proj.slug, fileName), buf);
-    return `/output/${proj.slug}/${fileName}`;
-  } catch (err) {
-    console.error("Failed to download output:", err);
-    return null;
+    const q = new URL(resultUrl, "http://localhost").searchParams.get("filename");
+    if (q) fnameHint = q;
+  } catch {
+    /* non-URL resultUrl — fall back to the path */
   }
+  const ext = (fnameHint.match(/\.(\w+)$/)?.[1] || "mp4").toLowerCase();
+  const fileName = `${id}${suffix}.${ext}`;
+  // Retry a few times: a transient network hiccup (common when two large outputs
+  // download at once) used to leave the run marked done with no local file.
+  let lastErr = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const r = await fetch(resultUrl);
+      if (!r.ok) {
+        lastErr = new Error(`HTTP ${r.status}`);
+      } else {
+        const buf = Buffer.from(await r.arrayBuffer());
+        fs.mkdirSync(path.join(OUTPUT_DIR, proj.slug), { recursive: true });
+        fs.writeFileSync(path.join(OUTPUT_DIR, proj.slug, fileName), buf);
+        return `/output/${proj.slug}/${fileName}`;
+      }
+    } catch (err) {
+      lastErr = err;
+    }
+    if (attempt < 2) await new Promise((res) => setTimeout(res, 500 * (attempt + 1)));
+  }
+  console.error(`Failed to download output from ${resultUrl}:`, lastErr?.message || lastErr);
+  return null;
 }
 
 // Download every output of a finished run and attach them to the entry. A run can
@@ -2461,14 +2638,75 @@ app.post("/api/history/:id/result", async (req, res) => {
 
   // A ComfyUI batch can return several files; kie.ai always one.
   const urls = (resultUrls && resultUrls.length ? resultUrls : resultUrl ? [resultUrl] : []).filter(Boolean);
-  if (urls.length) await attachOutputs(entry, urls); // also applies server-side auto-draft
+  try {
+    if (urls.length) await attachOutputs(entry, urls); // also applies server-side auto-draft
+  } catch (err) {
+    console.error(`attachOutputs failed for entry ${entry.id}:`, err);
+    return res.status(502).json({ code: 502, msg: `Failed to save the output: ${err.message || err}` });
+  }
   if (typeof costCredits === "number") entry.costCredits = costCredits;
   entry.status = "done";
   // Prefer a caller-supplied run time (ComfyUI's real per-prompt execution time);
   // fall back to since-created for kie.ai jobs, which are submitted one at a time.
   entry.runtimeMs =
     typeof runtimeMs === "number" ? runtimeMs : Date.now() - new Date(entry.createdAt).getTime();
-  writeJson(HISTORY_FILE, entries);
+  // Re-read + merge just this entry: two runs finishing at nearly the same instant
+  // (common now that the sweep, client, and other tabs can all finalize) each held a
+  // full-array snapshot, so a plain writeJson(entries) would clobber the other's
+  // result. Replacing only this entry in the latest file avoids that.
+  saveHistoryEntry(entry, entries);
+  res.json({ code: 200, msg: "updated", data: entry });
+});
+
+// Re-download an entry's output(s) from the stored source URL(s) — a manual recovery
+// for a run whose local file failed to save or went missing. Re-runs the same
+// download+place path the result endpoint and sweeps use. The source URLs are kie.ai
+// temp links that eventually expire, so this can legitimately fail for old runs.
+app.post("/api/history/:id/redownload", async (req, res) => {
+  const entries = readJson(HISTORY_FILE);
+  const entry = entries.find((e) => e.id === req.params.id);
+  if (!entry) return res.status(404).json({ code: 404, msg: "history entry not found" });
+  const urls = (
+    Array.isArray(entry.outputs) && entry.outputs.length
+      ? entry.outputs.map((o) => o.resultUrl)
+      : [entry.resultUrl]
+  ).filter(Boolean);
+  if (!urls.length) {
+    return res.status(400).json({ code: 400, msg: "This entry has no source URL to re-download from." });
+  }
+  try {
+    await attachOutputs(entry, urls);
+  } catch (err) {
+    console.error(`redownload failed for entry ${entry.id}:`, err);
+    return res.status(502).json({ code: 502, msg: `Re-download failed: ${err.message || err}` });
+  }
+  if (!entry.localVideo) {
+    return res
+      .status(502)
+      .json({ code: 502, msg: "Re-download failed — the source link may have expired." });
+  }
+  entry.status = "done";
+  saveHistoryEntry(entry, entries);
+  res.json({ code: 200, msg: "redownloaded", data: entry });
+});
+
+// Record the kie.ai taskId (plus the cost/timing baseline) on a pending entry as
+// soon as the task is created. Without this the entry sits in history.json with a
+// null taskId until it finishes, so the server-side sweep can't find it — and a run
+// whose tab is closed before it completes would never be finalized. Guarded on
+// `pending` so a late call can't disturb a finished entry.
+app.post("/api/history/:id/task", (req, res) => {
+  const { taskId, balanceBefore, startedAt } = req.body || {};
+  if (!taskId) return res.status(400).json({ code: 400, msg: "taskId is required" });
+  const entries = readJson(HISTORY_FILE);
+  const entry = entries.find((e) => e.id === req.params.id);
+  if (!entry) return res.status(404).json({ code: 404, msg: "history entry not found" });
+  if (entry.status === "pending") {
+    entry.taskId = taskId;
+    if (typeof balanceBefore === "number") entry.balanceBefore = balanceBefore;
+    if (typeof startedAt === "number") entry.startedAt = startedAt;
+    writeJson(HISTORY_FILE, entries);
+  }
   res.json({ code: 200, msg: "updated", data: entry });
 });
 
@@ -2488,6 +2726,13 @@ app.post("/api/history/:id/fail", (req, res) => {
 
 app.get("/api/history", (req, res) => {
   res.json({ code: 200, msg: "success", data: readJson(HISTORY_FILE) });
+});
+
+// Just the runs still pending — a small payload an open tab polls to reconcile:
+// attach a live poller to a run started on another device, and notice a run the
+// server-side sweep finished. Far cheaper than refetching the whole history.
+app.get("/api/history/pending", (req, res) => {
+  res.json({ code: 200, msg: "success", data: readJson(HISTORY_FILE).filter((e) => e.status === "pending") });
 });
 
 // --- reassign a history entry to another project (video file moves too) ---

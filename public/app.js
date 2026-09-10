@@ -52,40 +52,32 @@ let previewMethod = localStorage.getItem(PREVIEW_KEY) || "auto";
 
 const POLL_INTERVAL_MS = 5000;
 
-// Persisted in-flight tasks so a tab reload can resume polling instead of losing
-// them. Stored as an ARRAY so multiple concurrent generations all survive reload.
-const INFLIGHT_KEY = "seedance_inflight";
-const INFLIGHT_MAX_AGE_MS = 24 * 60 * 60 * 1000; // ignore tasks older than a day
+// In-flight runs are tracked server-side: every run has a pending entry in
+// history.json (the durable source of truth), and background sweeps in server.js
+// finish it even if this tab is closed. The client just persists the kie.ai taskId
+// onto that entry as soon as it's known (see persistEntryTask) so the sweep can poll
+// it, and re-attaches a live status to any pending entry on load (see
+// resumeFromHistory). No localStorage — a reload, or another device, picks the run
+// back up from server history.
 
-// Fields of a job that need to persist for a reload-time resume.
-function serializeJob(job) {
-  const { jobId, taskId, historyId, input, mediaLocalIds, balanceBefore, projectId, refSecs, startedAt } = job;
-  return { jobId, taskId, historyId, input, mediaLocalIds, balanceBefore, projectId, refSecs, startedAt };
-}
-
-function loadInflightList() {
+// Record the kie.ai taskId on the run's pending History entry the moment it's known,
+// so the server-side sweep can finish the run even if this tab goes away first.
+// (ComfyUI runs already store their taskId server-side at queue time.)
+async function persistEntryTask(job) {
+  if (!job.historyId || !job.taskId) return;
   try {
-    const raw = JSON.parse(localStorage.getItem(INFLIGHT_KEY) || "null");
-    if (Array.isArray(raw)) return raw;
-    if (raw?.taskId) return [raw]; // migrate the old single-object format
-    return [];
-  } catch {
-    return [];
+    await fetch(`/api/history/${job.historyId}/task`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        taskId: job.taskId,
+        balanceBefore: job.balanceBefore,
+        startedAt: job.startedAt,
+      }),
+    });
+  } catch (err) {
+    console.error("Failed to persist taskId:", err);
   }
-}
-function saveInflightList(list) {
-  try {
-    if (list.length) localStorage.setItem(INFLIGHT_KEY, JSON.stringify(list));
-    else localStorage.removeItem(INFLIGHT_KEY);
-  } catch {}
-}
-function addInflight(job) {
-  const list = loadInflightList().filter((j) => j.taskId !== job.taskId);
-  list.push(serializeJob(job));
-  saveInflightList(list);
-}
-function removeInflight(taskId) {
-  saveInflightList(loadInflightList().filter((j) => j.taskId !== taskId));
 }
 
 let currentCredits = null;
@@ -2559,7 +2551,6 @@ async function queueComfyRun(wf, values, prune, mediaIds, input, loras, bypass, 
     live.setStatus("Generating on ComfyUI… this can take a while.");
     if (job.historyId) liveStatus.set(job.historyId, live);
     wireComfyCancel(job);
-    addInflight(job);
     ensurePreviewStream(); // start listening for this run's preview frames
     loadHistory(); // renders the pending entry with the live status inside
     pollComfyJob(job);
@@ -2580,7 +2571,6 @@ async function pollComfyJob(job) {
     data = await res.json();
     if (res.status >= 400 && res.status < 500) {
       // Definitive client error — the task is gone/invalid.
-      removeInflight(job.taskId);
       await failJob(job, data.msg || `Status check failed (${res.status})`);
       return;
     }
@@ -2595,7 +2585,6 @@ async function pollComfyJob(job) {
 
   const state = data.data?.state;
   if (state === "success") {
-    removeInflight(job.taskId);
     finishLive(job, { hold: true }); // keep the last preview frame up while we save
     const urls = JSON.parse(data.data.resultJson || "{}").resultUrls || [];
     if (!urls.length) {
@@ -2608,7 +2597,6 @@ async function pollComfyJob(job) {
     return;
   }
   if (state === "fail") {
-    removeInflight(job.taskId);
     await failJob(job, data.data?.failMsg || "ComfyUI generation failed.");
     return;
   }
@@ -2620,7 +2608,6 @@ async function pollComfyJob(job) {
       setTimeout(() => pollComfyJob(job), POLL_INTERVAL_MS);
       return;
     }
-    removeInflight(job.taskId);
     await failJob(
       job,
       "ComfyUI has no record of this run — it was likely restarted. If its output is in " +
@@ -2661,6 +2648,34 @@ updatePromptCount();
 function setError(msg) {
   errorEl.textContent = msg;
   show(errorEl);
+}
+
+// Copy text to the clipboard. The async Clipboard API needs a secure context, so it's
+// unavailable when the app is opened over http://<LAN-IP> (a common phone/PC setup);
+// fall back to a hidden-textarea execCommand there. Returns whether the copy landed.
+async function copyText(text) {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    /* blocked or unavailable — fall through to the legacy path */
+  }
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.style.position = "fixed";
+    ta.style.top = "-9999px";
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(ta);
+    return ok;
+  } catch {
+    return false;
+  }
 }
 
 // --- live status (in the pending History card) --------------------------------
@@ -2834,7 +2849,6 @@ function wireComfyCancel(job) {
   if (!live) return;
   live.enableCancel(async () => {
     job.cancelled = true;
-    removeInflight(job.taskId);
     try {
       await fetch("/api/comfy/cancel", {
         method: "POST",
@@ -3011,7 +3025,7 @@ form.addEventListener("submit", async (e) => {
   try {
     job.taskId = await createTask(genInput, live);
     live.setStatus("Generating… this can take a few minutes.");
-    addInflight(job);
+    await persistEntryTask(job); // let the server-side sweep finish it if this tab goes away
     pollJob(job);
   } catch (err) {
     await failJob(job, err.message || String(err));
@@ -3055,7 +3069,6 @@ async function pollJob(job) {
     data = await res.json();
     if (res.status >= 400 && res.status < 500) {
       // 4xx means the task is gone/invalid — terminal.
-      removeInflight(taskId);
       await failJob(job, data.msg || `Status check failed (${res.status})`);
       return;
     }
@@ -3068,7 +3081,6 @@ async function pollJob(job) {
 
   const state = data.data?.state;
   if (state === "success") {
-    removeInflight(taskId);
     finishLive(job);
     const url = JSON.parse(data.data.resultJson || "{}").resultUrls?.[0];
     if (!url) return failJob(job, "Task succeeded but no result URL was returned.");
@@ -3087,7 +3099,6 @@ async function pollJob(job) {
     return;
   }
   if (state === "fail") {
-    removeInflight(taskId);
     await failJob(job, data.data?.failMsg || `Generation failed (code ${data.data?.failCode ?? "?"}).`);
     return;
   }
@@ -3742,12 +3753,7 @@ function renderHistory(entries) {
     copyBtn.innerHTML = '<span class="btn-ico">⧉</span> Prompt';
     copyBtn.title = "Copy the prompt to the clipboard";
     copyBtn.addEventListener("click", async () => {
-      try {
-        await navigator.clipboard.writeText(input.prompt || "");
-        copyBtn.textContent = "Copied!";
-      } catch {
-        copyBtn.textContent = "Copy failed";
-      }
+      copyBtn.textContent = (await copyText(input.prompt || "")) ? "Copied!" : "Copy failed";
       setTimeout(() => (copyBtn.innerHTML = '<span class="btn-ico">⧉</span> Prompt'), 1200);
     });
     actions.appendChild(copyBtn);
@@ -3759,6 +3765,34 @@ function renderHistory(entries) {
     openBtn.title = "Open full size";
     openBtn.addEventListener("click", () => openHistoryLightbox(entry));
     actions.appendChild(openBtn);
+
+    // Re-download the saved output from its source URL — recovers a run whose local
+    // file failed to save or went missing. Only shown when there's a source to fetch.
+    const hasSource = !!(entry.resultUrl || (entry.outputs || []).some((o) => o.resultUrl));
+    if (hasSource) {
+      const refreshBtn = document.createElement("button");
+      refreshBtn.type = "button";
+      refreshBtn.className = "btn-secondary";
+      refreshBtn.innerHTML = '<span class="btn-ico">⟳</span> Refresh';
+      refreshBtn.title = "Re-download the output file from the source (fixes a missing or wrong saved file)";
+      refreshBtn.addEventListener("click", async () => {
+        refreshBtn.disabled = true;
+        const prev = refreshBtn.innerHTML;
+        refreshBtn.innerHTML = "Refreshing…";
+        try {
+          const res = await fetch(`/api/history/${entry.id}/redownload`, { method: "POST" });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.msg || "Re-download failed");
+          refreshBtn.innerHTML = "Refreshed!";
+          await loadHistory(); // re-renders the card with the freshly-saved file
+        } catch (err) {
+          alert(err.message || String(err));
+          refreshBtn.innerHTML = prev;
+          refreshBtn.disabled = false;
+        }
+      });
+      actions.appendChild(refreshBtn);
+    }
 
     // add the generated image to the gallery for its own project
     if (isImg) {
@@ -3957,38 +3991,92 @@ async function applyEntry(entry) {
   updateEstimate();
 }
 
-// Resume every generation that was in flight when the tab was closed/reloaded.
-function resumeInflight() {
-  const fresh = loadInflightList().filter(
-    (p) => p?.taskId && !(p.startedAt && Date.now() - p.startedAt > INFLIGHT_MAX_AGE_MS)
-  );
-  saveInflightList(fresh); // prune stale/aged-out entries
+// Attach a live status + poller to one pending server-history entry, unless this tab
+// is already tracking it. Returns true if it newly attached. Shared by the load-time
+// resume and the periodic sync so a run started on another device gets picked up the
+// same way. Entries with no taskId (never got one persisted) can't be polled and are
+// skipped — their card just shows the pending placeholder.
+function trackPendingEntry(entry) {
+  if (entry.status !== "pending" || !entry.taskId) return false;
+  if (liveStatus.has(entry.id)) return false; // already live in this tab
+  const isComfyJob = (entry.input?.model || "").startsWith("comfy:");
+  const job = {
+    jobId: nextJobId++,
+    taskId: entry.taskId,
+    historyId: entry.id,
+    input: entry.input,
+    // older saved state used imageLocalIds (a plain array)
+    mediaLocalIds: entry.mediaLocalIds || { image: entry.imageLocalIds || [] },
+    balanceBefore: entry.balanceBefore,
+    projectId: entry.projectId || activeProjectId,
+    refSecs: entry.refVideoSeconds || 0,
+    startedAt: entry.startedAt || new Date(entry.createdAt).getTime(),
+  };
+  const live = createLiveStatus(job);
+  live.setStatus("Resuming previous generation…");
+  liveStatus.set(job.historyId, live);
+  if (isComfyJob) {
+    wireComfyCancel(job);
+    ensurePreviewStream();
+    pollComfyJob(job);
+  } else pollJob(job);
+  return true;
+}
 
-  for (const pending of fresh) {
-    const job = {
-      jobId: nextJobId++,
-      taskId: pending.taskId,
-      historyId: pending.historyId || null,
-      input: pending.input,
-      // older saved state used imageLocalIds (a plain array)
-      mediaLocalIds: pending.mediaLocalIds || { image: pending.imageLocalIds || [] },
-      balanceBefore: pending.balanceBefore,
-      projectId: pending.projectId || activeProjectId,
-      refSecs: pending.refSecs || 0,
-      startedAt: pending.startedAt,
-    };
-    const live = createLiveStatus(job);
-    live.setStatus("Resuming previous generation…");
-    if (job.historyId) liveStatus.set(job.historyId, live);
-    // Route resumed jobs to the matching poller (ComfyUI vs kie.ai).
-    const isComfyJob = (pending.input?.model || "").startsWith("comfy:");
-    if (isComfyJob) {
-      wireComfyCancel(job);
-      ensurePreviewStream();
-      pollComfyJob(job);
-    } else pollJob(job);
+// Re-attach live pollers to every run still pending in server history (the durable
+// source of truth) — after a tab reload, or when opening the app on another device
+// mid-run. The server-side sweeps finish these regardless; this just keeps the cards
+// live while the tab is open. Runs once, right after the first history load.
+let resumedOnce = false;
+function resumeFromHistory() {
+  if (resumedOnce) return;
+  resumedOnce = true;
+  let attached = false;
+  for (const entry of historyEntries) attached = trackPendingEntry(entry) || attached;
+  if (attached) renderHistory(historyEntries); // drop the freshly-attached live status into the cards
+  lastPendingKey = pendingKey(historyEntries.filter((e) => e.status === "pending"));
+  scheduleSyncPending();
+}
+
+// --- periodic pending-run sync --------------------------------------------------
+// An open tab attaches its live pollers only at load. This lightweight poll closes
+// the two gaps: a run started on ANOTHER device after this tab loaded (attach a
+// poller to it), and a run the server-side sweep finished while this tab wasn't
+// tracking it (re-render so its card flips to the result). Cheap: it fetches only the
+// pending entries, and only refetches the full history when that set changes.
+const SYNC_PENDING_ACTIVE_MS = 5000; // something pending — check often
+const SYNC_PENDING_IDLE_MS = 20000; // nothing pending — just watch for runs from elsewhere
+let syncPendingTimer = null;
+let lastPendingKey = "";
+const pendingKey = (list) => list.map((e) => e.id).sort().join(",");
+
+function scheduleSyncPending(delay) {
+  clearTimeout(syncPendingTimer);
+  syncPendingTimer = setTimeout(syncPending, delay ?? SYNC_PENDING_IDLE_MS);
+}
+
+async function syncPending() {
+  let pending = [];
+  try {
+    const res = await fetch("/api/history/pending");
+    const data = await res.json();
+    if (!res.ok || data.code !== 200) throw new Error(data.msg || "sync failed");
+    pending = data.data || [];
+  } catch {
+    scheduleSyncPending(); // transient — retry next tick
+    return;
   }
-  loadHistory(); // render pending cards with their freshly-attached live status
+  let attached = false;
+  for (const entry of pending) attached = trackPendingEntry(entry) || attached;
+  if (attached) renderHistory(historyEntries);
+  // The pending set changed (a run finished, or a new one appeared) — pull the full
+  // history once so freshly-finished cards render with their output.
+  const key = pendingKey(pending);
+  if (key !== lastPendingKey) {
+    lastPendingKey = key;
+    loadHistory(); // renderHistory re-parents live-status elements, so active cards stay live
+  }
+  scheduleSyncPending(pending.length ? SYNC_PENDING_ACTIVE_MS : SYNC_PENDING_IDLE_MS);
 }
 
 // --- server-down banner ----------------------------------------------------------
@@ -4065,6 +4153,5 @@ applyModelUI(); // sync title, button, and model-dependent fields to the default
 loadProjects();
 loadCredits();
 loadGallery();
-loadHistory();
+loadHistory().then(resumeFromHistory); // re-attach live status to any run still pending server-side
 loadWorkflows(); // add any local ComfyUI workflows to the model dropdown
-resumeInflight();
