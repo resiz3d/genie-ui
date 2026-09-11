@@ -1,0 +1,37 @@
+{
+  "_comment": "Empty latent nodes set the output resolution and batch size. Same exposed inputs across the common variants, so they share one file.",
+  "nodes": {
+    "EmptyLatentImage": {
+      "display_name": "Empty Latent Image",
+      "recognize": {
+        "variants": [
+          {
+            "match": [{ "when": "any" }],
+            "group": "Latent Image",
+            "expose": {
+              "width":      { "name": "width",  "label": "Width",  "control": "number", "width": "1/3", "order": 20 },
+              "height":     { "name": "height", "label": "Height", "control": "number", "width": "1/3", "order": 21 },
+              "batch_size": { "name": "batch",  "label": "Batch",  "control": "number", "width": "1/3", "order": 22 }
+            }
+          }
+        ]
+      }
+    },
+    "EmptySD3LatentImage": {
+      "display_name": "Empty SD3 Latent Image",
+      "recognize": {
+        "variants": [
+          {
+            "match": [{ "when": "any" }],
+            "group": "Latent Image",
+            "expose": {
+              "width":      { "name": "width",  "label": "Width",  "control": "number", "width": "1/3", "order": 20 },
+              "height":     { "name": "height", "label": "Height", "control": "number", "width": "1/3", "order": 21 },
+              "batch_size": { "name": "batch",  "label": "Batch",  "control": "number", "width": "1/3", "order": 22 }
+            }
+          }
+        ]
+      }
+    }
+  }
+}

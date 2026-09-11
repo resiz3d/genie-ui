@@ -1,6 +1,5 @@
 {
-  "_comment": "GENie library of known ComfyUI node types. A curated reference so GENie can understand third-party/custom nodes without querying a live ComfyUI /object_info. Keyed by ComfyUI class_type. This is hand-maintained; add an entry per node you want GENie to know about. See docs/COMFYUI.md and docs/workflows/tokens.md for how these map to form controls.",
-  "version": 1,
+  "_comment": "Migrated from the former comfyui_known_nodes.json. Reference metadata for the VDN-H3 custom nodes (schema, install info, and GENie tokenize hints). No `recognize` block yet — these are documented for the tokenized Minimax H3 default workflow; add a recognize block to drive them from a raw drop-in.",
   "nodes": {
     "ApplyVDNH3": {
       "display_name": "Apply VDN-H3 (MiniMax-H3 Hybrid Attention)",

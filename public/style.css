@@ -1393,6 +1393,27 @@ img.zoomable {
 .comfy-settings-body {
   padding: 14px 12px;
 }
+/* Per-node collapsible section for recognized (raw) workflows: one <details> per
+   node type (Prompt, KSampler, Latent Image), each holding that node's controls. */
+.comfy-node-group {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+}
+.comfy-node-group > summary {
+  cursor: pointer;
+  padding: 10px 12px;
+  font-weight: 600;
+  color: var(--text);
+  list-style-position: inside;
+}
+.comfy-node-group[open] > summary {
+  border-bottom: 1px solid var(--border);
+}
+.comfy-node-group-body {
+  padding: 14px 12px;
+}
+
 /* An optional-node enable/disable toggle with its controls grouped beneath it. */
 .comfy-bypass-group .bypass-toggle {
   margin-bottom: 8px;

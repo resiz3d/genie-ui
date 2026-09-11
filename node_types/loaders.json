@@ -1,0 +1,53 @@
+{
+  "_comment": "Model-file loaders. Each becomes its own collapsed section so the (long) installed-file dropdowns stay out of the way until wanted. The file pickers (unet_name / clip_name / vae_name) and the small enums (weight_dtype / type / device) all populate from ComfyUI /object_info.",
+  "nodes": {
+    "UNETLoader": {
+      "display_name": "Load Diffusion Model",
+      "recognize": {
+        "variants": [
+          {
+            "match": [{ "when": "any" }],
+            "group": "Diffusion Model",
+            "collapsed": true,
+            "expose": {
+              "unet_name":    { "name": "unet_name",    "label": "Diffusion model", "control": "combo", "width": "full", "order": 30 },
+              "weight_dtype": { "name": "weight_dtype", "label": "Weight dtype",    "control": "combo", "width": "1/2",  "order": 31 }
+            }
+          }
+        ]
+      }
+    },
+    "CLIPLoader": {
+      "display_name": "Load CLIP",
+      "recognize": {
+        "variants": [
+          {
+            "match": [{ "when": "any" }],
+            "group": "CLIP",
+            "collapsed": true,
+            "expose": {
+              "clip_name": { "name": "clip_name", "label": "CLIP model", "control": "combo", "width": "full", "order": 40 },
+              "type":      { "name": "clip_type", "label": "Type",       "control": "combo", "width": "1/2",  "order": 41 },
+              "device":    { "name": "clip_device", "label": "Device",   "control": "combo", "width": "1/2",  "order": 42 }
+            }
+          }
+        ]
+      }
+    },
+    "VAELoader": {
+      "display_name": "Load VAE",
+      "recognize": {
+        "variants": [
+          {
+            "match": [{ "when": "any" }],
+            "group": "VAE",
+            "collapsed": true,
+            "expose": {
+              "vae_name": { "name": "vae_name", "label": "VAE", "control": "combo", "width": "full", "order": 50 }
+            }
+          }
+        ]
+      }
+    }
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "_comment": "Core ComfyUI sampler. `recognize` exposes the sampler's editable widgets as GENie form controls. `feeds_output` picks the sampler on the path to the output node (a base+refiner graph would otherwise expose two); `only` covers the single-sampler case. See node_types/README.md.",
+  "nodes": {
+    "KSampler": {
+      "display_name": "KSampler",
+      "output": false,
+      "recognize": {
+        "variants": [
+          {
+            "match": [{ "when": "feeds_output" }, { "when": "only" }],
+            "group": "KSampler",
+            "expose": {
+              "seed":         { "name": "seed",      "label": "Seed",      "control": "number", "width": "1/3", "order": 10 },
+              "steps":        { "name": "steps",     "label": "Steps",     "control": "number", "width": "1/3", "order": 11 },
+              "cfg":          { "name": "cfg",       "label": "CFG",       "control": "number", "width": "1/3", "order": 12 },
+              "sampler_name": { "name": "sampler",   "label": "Sampler",   "control": "combo",  "width": "1/3", "order": 13 },
+              "scheduler":    { "name": "scheduler", "label": "Scheduler", "control": "combo",  "width": "1/3", "order": 14 },
+              "denoise":      { "name": "denoise",   "label": "Denoise",   "control": "number", "width": "1/3", "order": 15 }
+            }
+          }
+        ]
+      }
+    }
+  }
+}

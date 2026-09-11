@@ -1,0 +1,25 @@
+{
+  "_comment": "Output/sink nodes. `output: true` marks a node as a graph terminal, which the `feeds_output` match predicate walks toward to find the sampler (or other node) on the path to the final result. They expose nothing themselves for now.",
+  "nodes": {
+    "SaveImage": {
+      "display_name": "Save Image",
+      "output": true,
+      "recognize": {
+        "variants": [
+          {
+            "match": [{ "when": "any" }],
+            "group": "Save Image",
+            "collapsed": true,
+            "expose": {
+              "filename_prefix": { "name": "filename_prefix", "label": "Filename prefix", "control": "text", "width": "full", "order": 90 }
+            }
+          }
+        ]
+      }
+    },
+    "PreviewImage":   { "display_name": "Preview Image", "output": true },
+    "SaveAnimatedWEBP": { "display_name": "Save WEBP",  "output": true },
+    "VHS_VideoCombine": { "display_name": "Video Combine (VHS)", "output": true },
+    "SaveAudio":      { "display_name": "Save Audio",   "output": true }
+  }
+}

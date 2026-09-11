@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { randomUUID, createHash, timingSafeEqual } from "node:crypto";
 import { spawn, execFile } from "node:child_process";
 import os from "node:os";
+import { loadNodeTypes, recognizeWorkflow, applyRecognizedValues } from "./comfy-recognize.js";
 import "dotenv/config";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -53,6 +54,10 @@ const WORKFLOWS_DEFAULT_DIR = path.join(WORKFLOWS_DIR, "default");
 // Per-workflow config (chosen model/LoRA/VAE/sampler + the dynamic LoRA list),
 // stored server-side so it's shared across devices (incl. the phone over LAN).
 const COMFY_SETTINGS_DIR = path.resolve(__dirname, process.env.COMFY_SETTINGS_DIR || "settings/comfy");
+// Data-driven node recognition library. Each node_types/*.json describes which of a
+// node's inputs become form controls, so a *raw* ComfyUI export (no {{tokens}}) can
+// drive the form. See comfy-recognize.js and node_types/README.md.
+const NODE_TYPES_DIR = path.resolve(__dirname, process.env.NODE_TYPES_DIR || "node_types");
 // Live latent previews. ComfyUI honors extra_data.preview_method per prompt, so
 // previews work on any workflow with no workflow-JSON edits and no ComfyUI launch
 // flags. COMFY_PREVIEW_METHOD=off is a hard kill switch whatever a browser asks for.
@@ -587,6 +592,49 @@ function parseWorkflowTokens(text) {
   return [...seen.values()];
 }
 
+// The controls a workflow offers. Two modes, chosen by whether the workflow has any
+// explicit {{tokens}}: a *tokenized* workflow is author-controlled and returns its
+// tokens unchanged (recognition off); a *raw* ComfyUI export (no tokens) is driven
+// entirely by data-driven node recognition (comfy-recognize.js). Returns the
+// token-shaped control list plus the name→node map used for /object_info enrichment
+// (recognized owners included, so their combos/number ranges enrich like tokens do).
+function controlModel(workflow, text) {
+  const tokens = parseWorkflowTokens(text);
+  const nodeMap = mapTokenNodes(workflow);
+  // Manual mode vs auto mode: the moment a workflow carries any explicit {{token}},
+  // its author has taken control of the form, so recognition stays off and the
+  // workflow behaves exactly as it did before this feature. Recognition drives only
+  // *raw* exports — the drop-a-ComfyUI-JSON case — which have no tokens at all.
+  if (tokens.length) return { tokens, nodeMap };
+  let recognized = [];
+  try {
+    recognized = recognizeWorkflow(workflow, loadNodeTypes(NODE_TYPES_DIR)).controls;
+  } catch (err) {
+    console.error("Node recognition failed:", err.message);
+  }
+  const recTokens = [];
+  for (const c of recognized) {
+    recTokens.push({
+      name: c.name,
+      default: c.default,
+      options: c.options || [],
+      width: c.width || null,
+      order: c.order ?? null,
+      role: null,
+      type: null,
+      pin: false,
+      label: c.label || null,
+      multiline: c.multiline || undefined,
+      group: c.group || null,
+      recognized: true,
+    });
+    if (!nodeMap.has(c.name) && c.owner) {
+      nodeMap.set(c.name, { id: c.owner.id, classType: c.owner.classType, input: c.owner.input });
+    }
+  }
+  return { tokens: recTokens, nodeMap };
+}
+
 // Replace tokens in a string. If the whole string is a single token, return the
 // raw value (preserving number/boolean type); otherwise interpolate as text.
 function resolveTokenString(str, values) {
@@ -720,8 +768,8 @@ app.get("/api/workflows", (req, res) => {
     const name = label.replace(/\.json$/i, "");
     try {
       const text = fs.readFileSync(workflowPath(file), "utf8");
-      JSON.parse(text); // validate it's JSON (tokens are valid JSON strings)
-      return { file, name, tokens: parseWorkflowTokens(text) };
+      const workflow = JSON.parse(text); // also validates it's JSON
+      return { file, name, tokens: controlModel(workflow, text).tokens };
     } catch (err) {
       return { file, name, tokens: [], error: err.message };
     }
@@ -736,17 +784,16 @@ app.get("/api/workflows", (req, res) => {
 app.get("/api/comfy/workflow-meta", async (req, res) => {
   const wfPath = workflowPath(req.query.file);
   if (!wfPath || !fs.existsSync(wfPath)) return res.status(400).json({ code: 400, msg: "Unknown workflow file" });
-  let workflow, tokens;
+  let workflow, tokens, nodeMap;
   try {
     const text = fs.readFileSync(wfPath, "utf8");
     workflow = JSON.parse(text);
-    tokens = parseWorkflowTokens(text);
+    ({ tokens, nodeMap } = controlModel(workflow, text));
   } catch (err) {
     return res.status(400).json({ code: 400, msg: `Workflow is not valid JSON: ${err.message}` });
   }
   // Attach each token's node input key (e.g. `vae_name`, `image`) — available even
   // offline, and used to tell a model-file selector from a media-upload field.
-  const nodeMap = mapTokenNodes(workflow);
   const withKeys = tokens.map((t) => ({
     ...t,
     inputKey: nodeMap.get(t.name)?.input || null,
@@ -1468,10 +1515,23 @@ app.post("/api/comfy/generate", async (req, res) => {
   let continuationValues = null; // just the role tokens GENie filled, for the record
   let runValues = values || {};
   try {
-    workflow = JSON.parse(fs.readFileSync(wfPath, "utf8"));
+    const wfText = fs.readFileSync(wfPath, "utf8");
+    workflow = JSON.parse(wfText);
     // Token → node map from the untouched workflow: substitution erases the tokens,
     // and reference-video tails are addressed by token name.
     const tokenNodes = mapTokenNodes(workflow);
+    // Data-driven recognition of the same untouched workflow: the controls a raw
+    // export offers (seed, prompt, resolution, …) and where to write them. Only when
+    // the workflow has no explicit tokens — a tokenized workflow is author-controlled
+    // and the token substitution below handles it (matches controlModel).
+    let recognizedControls = [];
+    if (!parseWorkflowTokens(wfText).length) {
+      try {
+        recognizedControls = recognizeWorkflow(workflow, loadNodeTypes(NODE_TYPES_DIR)).controls;
+      } catch (err) {
+        console.error("Node recognition failed:", err.message);
+      }
+    }
     workflow = pruneWorkflow(workflow, prune); // drop empty optional reference loaders
     // Continuation: the workflow says which tokens carry the state integers, GENie
     // fills them and records what it gave. A caller-supplied slot is a deliberate
@@ -1490,6 +1550,7 @@ app.post("/api/comfy/generate", async (req, res) => {
       continuation = { parentId: c.parentId ? String(c.parentId) : null, from, slot };
     }
     workflow = substituteWorkflow(workflow, runValues);
+    applyRecognizedValues(workflow, recognizedControls, runValues); // patch recognized node inputs
     tailResult = await applyTails(workflow, tokenNodes, tails); // trim references to their last N seconds
     for (const id of Array.isArray(bypass) ? bypass : []) bypassNode(workflow, String(id)); // disabled patch nodes
     workflow = injectLoras(workflow, loras); // splice in any dynamically-added LoRAs

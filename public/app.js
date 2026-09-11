@@ -1850,6 +1850,33 @@ async function renderComfyControls() {
   // generation params and stay in the main form next to steps/seed/duration.
   const bypassIds = new Set((meta.bypassable || []).map((b) => String(b.id)));
   comfyRefLabelScheme = meta.refLabelScheme || null; // null → keep each field's own numbering
+
+  // Recognized (raw-workflow) controls carry a `group` per source node, so the main
+  // form is rendered as one collapsible section per node type — Prompt, KSampler,
+  // Latent Image, … — instead of a flat grid. Tokenized workflows have no groups and
+  // render flat, exactly as before. `mainContainer(token)` returns where a control
+  // mounts: its group's <details> body in grouped mode, or the flat grid otherwise.
+  const grouped = tokens.some((t) => t.group);
+  const groupBodies = new Map(); // group key → body element (created lazily, in order)
+  const mainContainer = (token) => {
+    if (!grouped || !token.group) return comfyControlsEl;
+    let body = groupBodies.get(token.group.key);
+    if (!body) {
+      const details = document.createElement("details");
+      details.className = "comfy-node-group";
+      details.open = !token.group.collapsed; // loaders / save node start closed
+      details.style.gridColumn = "span 12";
+      const summary = document.createElement("summary");
+      summary.textContent = token.group.label || "Options";
+      body = document.createElement("div");
+      body.className = "comfy-node-group-body comfy-grid";
+      details.append(summary, body);
+      comfyControlsEl.appendChild(details);
+      groupBodies.set(token.group.key, body);
+    }
+    return body;
+  };
+
   const settingsScalars = [];
   for (const it of items) {
     if (it.kind === "series") {
@@ -1859,18 +1886,21 @@ async function renderComfyControls() {
         entries.map((e) => e.token.soundtrack),
       );
       ctrl.el.style.gridColumn = `span ${WIDTH_SPAN[entries[0].token.width] || 12}`;
-      comfyControlsEl.appendChild(ctrl.el);
+      mainContainer(entries[0].token).appendChild(ctrl.el);
       comfyFields.push(ctrl);
     } else if (it.kind === "single-media") {
       const ctrl = makeComfyMedia(it.token, it.type);
       ctrl.el.style.gridColumn = `span ${comfySpan(it.token, it.type)}`;
-      comfyControlsEl.appendChild(ctrl.el);
+      mainContainer(it.token).appendChild(ctrl.el);
       comfyFields.push(ctrl);
-    } else if (it.token.combo && (isFilePickerCombo(it.token) || bypassIds.has(String(it.token.nodeId ?? "")))) {
-      settingsScalars.push(it); // installed-file pickers + patch-node toggles → drawer
+    } else if (!it.token.group && it.token.combo && (isFilePickerCombo(it.token) || bypassIds.has(String(it.token.nodeId ?? "")))) {
+      // Tokenized workflows funnel installed-file pickers + patch-node toggles into the
+      // Settings drawer. Recognized controls carry a group and render in their own
+      // (collapsed) node section instead, so they skip the drawer.
+      settingsScalars.push(it);
     } else {
       // numbers, text, inline-option selects, and non-file object_info combos (sampler)
-      renderScalarControl(it.token, it.type, comfyControlsEl);
+      renderScalarControl(it.token, it.type, mainContainer(it.token));
     }
   }
 
@@ -1899,8 +1929,11 @@ async function renderComfyControls() {
     }
   }
   if (comfyBypassControl) comfyBypassControl.mountRemaining(body); // toggles with no controls
+  // LoRAs are always offered, so they live in the main form (not tucked inside the
+  // "ComfyUI Settings" drawer). The drawer holds only installed-file pickers and
+  // patch-node toggles now, and isn't rendered at all when it has neither.
   comfyLoraControl = makeComfyLoraControl(meta.loraOptions || [], !!meta.offline);
-  body.appendChild(comfyLoraControl.el);
+  comfyControlsEl.appendChild(comfyLoraControl.el);
   if (comfyRefLabelScheme) {
     // The literal strings to cite in the prompt, in the order the model presents them.
     comfyRefTagsEl = document.createElement("p");
@@ -1908,7 +1941,7 @@ async function renderComfyControls() {
     comfyRefTagsEl.style.gridColumn = "span 12";
     comfyControlsEl.appendChild(comfyRefTagsEl);
   }
-  comfyControlsEl.appendChild(details);
+  if (body.childElementCount) comfyControlsEl.appendChild(details);
 
   // Overlay this workflow's saved config (server-side settings file) so the form
   // reopens with what you last ran — values, media, seed mode, and LoRAs.
@@ -2166,7 +2199,7 @@ function renderScalarControl(token, type, container = comfyControlsEl) {
   field.style.gridColumn = `span ${comfySpan(token, type)}`;
   const head = document.createElement("div");
   head.className = "field-head";
-  head.innerHTML = `<span>${escapeHtmlJs(prettyLabel(token.name))}</span>`;
+  head.innerHTML = `<span>${escapeHtmlJs(token.label || prettyLabel(token.name))}</span>`;
   field.appendChild(head);
   let afterMode = null; // seed "control after generate" <select>, if present
 

@@ -1,0 +1,26 @@
+{
+  "_comment": "Prompt conditioning. Two variants disambiguate by which KSampler input the node feeds DIRECTLY: `produces KSampler.positive` is the positive prompt, `produces KSampler.negative` the negative. A node reaching the sampler only through a ConditioningZeroOut is not a direct producer, so a zeroed-out negative correctly yields no negative control. The `text` input is often wired from a Primitive* node (see node_types/primitives.json); recognition follows that link to the editable string.",
+  "nodes": {
+    "CLIPTextEncode": {
+      "display_name": "CLIP Text Encode (Prompt)",
+      "recognize": {
+        "variants": [
+          {
+            "match": [{ "when": "produces", "target": "KSampler.positive" }],
+            "group": "Prompt",
+            "expose": {
+              "text": { "name": "prompt", "label": "Prompt", "control": "text", "multiline": true, "width": "full", "order": 1 }
+            }
+          },
+          {
+            "match": [{ "when": "produces", "target": "KSampler.negative" }],
+            "group": "Negative Prompt",
+            "expose": {
+              "text": { "name": "negative_prompt", "label": "Negative Prompt", "control": "text", "multiline": true, "width": "full", "order": 2 }
+            }
+          }
+        ]
+      }
+    }
+  }
+}

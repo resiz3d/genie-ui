@@ -1,0 +1,10 @@
+{
+  "_comment": "Primitive value providers. These carry an editable literal in one input and feed it into another node's widget. They are not exposed directly; instead `value_source.input` tells recognition which input to follow to when another node's exposed input is wired from one of these (e.g. a CLIPTextEncode.text fed by a PrimitiveStringMultiline). The control's identity and kind come from the consuming node's entry, not from here.",
+  "nodes": {
+    "PrimitiveStringMultiline": { "value_source": { "input": "value" } },
+    "PrimitiveString":          { "value_source": { "input": "value" } },
+    "PrimitiveInt":             { "value_source": { "input": "value" } },
+    "PrimitiveFloat":           { "value_source": { "input": "value" } },
+    "PrimitiveBoolean":         { "value_source": { "input": "value" } }
+  }
+}

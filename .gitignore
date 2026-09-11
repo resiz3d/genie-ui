@@ -16,3 +16,7 @@ images/
 
 # migration backups
 *.bak
+
+#workflows
+workflows/*
+!workflows/default/
