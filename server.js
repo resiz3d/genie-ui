@@ -2053,7 +2053,12 @@ app.post("/api/open-folder", (req, res) => {
 });
 
 // --- export the visible history to a shareable, self-contained folder ------
-const isImageOutputModel = (model) => (model || "").includes("-to-image");
+// Declared, not a const arrow: the startup reconcile sweep reaches this through
+// outputSubfolder -> entryIsImage long before this line is evaluated, and a const
+// would still be in its temporal dead zone there.
+function isImageOutputModel(model) {
+  return (model || "").includes("-to-image");
+}
 
 // Whether a finished entry's output is an image (vs video). ComfyUI output type
 // isn't in the model id, so read it off the saved file's extension.
