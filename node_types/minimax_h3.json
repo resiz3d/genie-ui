@@ -1,0 +1,42 @@
+{
+  "_comment": "MiniMax H3 reference-to-video node. `prompt` is followed through its PrimitiveStringMultiline to the editable text. The node also takes dynamic reference collections — 1+ images, videos, audio — wired into dotted inputs (ref_images.ref_image_N, …). GENie renders a multi-upload per collection and, at submit, injects the matching loader nodes (LoadImage / VHS_LoadVideo / VHS_LoadAudioUpload) and wires them, mirroring the shipped tokenized workflow. Loader nodes already wired into a collection are managed by it (not shown as standalone controls).",
+  "nodes": {
+    "MiniMaxH3ReferenceToVideo": {
+      "display_name": "MiniMax H3 Reference to Video",
+      "recognize": {
+        "variants": [
+          {
+            "match": [{ "when": "any" }],
+            "group": "Prompt",
+            "expose": {
+              "prompt": { "name": "prompt", "label": "Prompt", "control": "text", "multiline": true, "width": "full", "order": 1 }
+            },
+            "references": [
+              {
+                "name": "ref_image", "kind": "image", "label": "Reference Images", "max": 9, "order": 3,
+                "loader": { "class_type": "LoadImage", "input": "image" },
+                "wires": [{ "prefix": "ref_images.ref_image_", "slot": 0 }]
+              },
+              {
+                "name": "ref_video", "kind": "video", "label": "Reference Videos", "max": 3, "order": 4,
+                "loader": {
+                  "class_type": "VHS_LoadVideo", "input": "video",
+                  "defaults": { "force_rate": 0, "custom_width": 0, "custom_height": 0, "frame_load_cap": 0, "skip_first_frames": 0, "select_every_nth": 1, "format": "AnimateDiff" }
+                },
+                "wires": [
+                  { "prefix": "ref_videos.ref_video_", "slot": 0 },
+                  { "prefix": "ref_video_audios.ref_video_audio_", "slot": 2 }
+                ]
+              },
+              {
+                "name": "ref_audio", "kind": "audio", "label": "Reference Audio", "max": 3, "order": 5,
+                "loader": { "class_type": "VHS_LoadAudioUpload", "input": "audio", "defaults": { "start_time": 0, "duration": 0 } },
+                "wires": [{ "prefix": "ref_audios.ref_audio_", "slot": 0 }]
+              }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}

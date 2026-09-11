@@ -87,6 +87,40 @@ user drop-in can override a shipped entry — the same shipped-vs-yours idea as
 | `width` | Grid span: `full`, `1/2`, `1/3`, `1/4`, `2/3`, `3/4`. |
 | `order` | Sort position (ascending). |
 
+## Media inputs — `references` (driven by the importing node)
+
+Media (images / videos / audio) is exposed by the node that **imports** it, not by
+the `LoadImage` / `VHS_LoadVideo` loader nodes. A consuming node declares its media
+collections; GENie renders a multi-upload per collection, and at submit **injects one
+loader node per uploaded file** and wires it into the target's inputs — so the user
+can add 1 or more of each, with no pre-wired slots. A collection left untouched keeps
+whatever the export had baked. Loader nodes already wired into a collection are
+"consumed" — they don't also appear as standalone controls.
+
+Add a `references` array to a variant (alongside or instead of `expose`):
+
+```jsonc
+"references": [
+  {
+    "name": "ref_image",          // control id + submit key
+    "kind": "image",              // image | video | audio  → upload dropzone type
+    "label": "Reference Images",
+    "max": 9,                     // cap (1 = a single-media input)
+    "order": 3,
+    "loader": { "class_type": "LoadImage", "input": "image" },  // node to inject per file
+    "wires": [ { "prefix": "ref_images.ref_image_", "slot": 0 } ] // target input(s): prefix+index = [loaderId, slot]
+  }
+]
+```
+
+- **`loader`** is the node GENie creates for each file: its `input` receives the
+  uploaded filename; optional `defaults` fill the loader's other inputs (e.g. the
+  `VHS_LoadVideo` frame options).
+- **`wires`** are the target node's dotted dynamic inputs. Each file `i` sets
+  `<prefix><i> = [loaderId, slot]` for every wire — so one loader can feed several
+  inputs (a video feeding both `ref_video_N` and `ref_video_audio_N`).
+- A single-media input is just `max: 1`.
+
 ## Match predicates (the closed set)
 
 | `when` | Passes when… |
@@ -95,6 +129,7 @@ user drop-in can override a shipped entry — the same shipped-vs-yours idea as
 | `only` | there is exactly one node of this `class_type` in the workflow. |
 | `feeds_output` | a path runs forward from this node to any `output: true` node. |
 | `produces` + `target: "Class.input"` | this node is the **direct** upstream producer of that input on some node of that class (e.g. `KSampler.positive`). Direct, not transitive — so a node reaching the sampler only through a `ConditioningZeroOut` does **not** match. |
+| `produces_input` + `input: "name"` | like `produces` but matches an input of that name on **any** node class (e.g. `audio_vae` to tell an audio VAE loader from an image one). |
 | `title_matches` + `pattern` | the node's `_meta.title` matches the (case-insensitive) regex. |
 
 Precedence with explicit tokens: if a workflow also has a `{{token}}` of the same

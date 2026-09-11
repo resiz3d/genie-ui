@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { randomUUID, createHash, timingSafeEqual } from "node:crypto";
 import { spawn, execFile } from "node:child_process";
 import os from "node:os";
-import { loadNodeTypes, recognizeWorkflow, applyRecognizedValues } from "./comfy-recognize.js";
+import { loadNodeTypes, recognizeWorkflow, applyRecognizedValues, applyReferenceCollections } from "./comfy-recognize.js";
 import "dotenv/config";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -605,13 +605,28 @@ function controlModel(workflow, text) {
   // its author has taken control of the form, so recognition stays off and the
   // workflow behaves exactly as it did before this feature. Recognition drives only
   // *raw* exports — the drop-a-ComfyUI-JSON case — which have no tokens at all.
-  if (tokens.length) return { tokens, nodeMap };
+  if (tokens.length) return { tokens, nodeMap, unknownTypes: [], references: [] };
+  const nodeTypes = loadNodeTypes(NODE_TYPES_DIR);
   let recognized = [];
+  let handledNodeIds = new Set();
+  let references = [];
   try {
-    recognized = recognizeWorkflow(workflow, loadNodeTypes(NODE_TYPES_DIR)).controls;
+    ({ controls: recognized, handledNodeIds, references } = recognizeWorkflow(workflow, nodeTypes));
   } catch (err) {
     console.error("Node recognition failed:", err.message);
   }
+  // Node types GENie doesn't customize — they run exactly as saved. Value-provider
+  // primitives are plumbing, not "run as-is" content, so they're left off the list.
+  const unknownTypes = [];
+  const seenTypes = new Set();
+  for (const [id, node] of Object.entries(workflow)) {
+    const cls = node?.class_type;
+    if (!cls || handledNodeIds.has(String(id)) || seenTypes.has(cls)) continue;
+    if (nodeTypes.get(cls)?.value_source) continue;
+    seenTypes.add(cls);
+    unknownTypes.push(cls);
+  }
+  unknownTypes.sort();
   const recTokens = [];
   for (const c of recognized) {
     recTokens.push({
@@ -632,7 +647,7 @@ function controlModel(workflow, text) {
       nodeMap.set(c.name, { id: c.owner.id, classType: c.owner.classType, input: c.owner.input });
     }
   }
-  return { tokens: recTokens, nodeMap };
+  return { tokens: recTokens, nodeMap, unknownTypes, references };
 }
 
 // Replace tokens in a string. If the whole string is a single token, return the
@@ -784,11 +799,11 @@ app.get("/api/workflows", (req, res) => {
 app.get("/api/comfy/workflow-meta", async (req, res) => {
   const wfPath = workflowPath(req.query.file);
   if (!wfPath || !fs.existsSync(wfPath)) return res.status(400).json({ code: 400, msg: "Unknown workflow file" });
-  let workflow, tokens, nodeMap;
+  let workflow, tokens, nodeMap, unknownTypes, references;
   try {
     const text = fs.readFileSync(wfPath, "utf8");
     workflow = JSON.parse(text);
-    ({ tokens, nodeMap } = controlModel(workflow, text));
+    ({ tokens, nodeMap, unknownTypes, references } = controlModel(workflow, text));
   } catch (err) {
     return res.status(400).json({ code: 400, msg: `Workflow is not valid JSON: ${err.message}` });
   }
@@ -816,7 +831,7 @@ app.get("/api/comfy/workflow-meta", async (req, res) => {
     return res.json({
       code: 200,
       msg: "success",
-      data: { offline: true, tokens: withTail(withKeys), loraOptions: [], bypassable, refLabelScheme: scheme },
+      data: { offline: true, tokens: withTail(withKeys), loraOptions: [], bypassable, refLabelScheme: scheme, unknownTypes: unknownTypes || [], references: references || [] },
     });
   }
   const enriched = withKeys.map((t) => enrichToken(t, nodeMap, objectInfo));
@@ -829,6 +844,8 @@ app.get("/api/comfy/workflow-meta", async (req, res) => {
       loraOptions: loraOptionsFrom(objectInfo),
       bypassable,
       refLabelScheme: scheme,
+      unknownTypes: unknownTypes || [],
+      references: references || [],
     },
   });
 });
@@ -1504,7 +1521,7 @@ async function comfyVram() {
 // orphan the run).
 app.post("/api/comfy/generate", async (req, res) => {
   ensureComfyWs(); // start listening for progress before the run begins
-  const { file, values, prune, loras, bypass, tails, input, mediaLocalIds, projectId, refVideoSeconds, previewMethod, continueFrom } =
+  const { file, values, prune, loras, bypass, tails, input, mediaLocalIds, projectId, refVideoSeconds, previewMethod, continueFrom, references: providedRefs } =
     req.body || {};
   const wfPath = workflowPath(file);
   if (!wfPath || !fs.existsSync(wfPath)) {
@@ -1525,9 +1542,10 @@ app.post("/api/comfy/generate", async (req, res) => {
     // the workflow has no explicit tokens — a tokenized workflow is author-controlled
     // and the token substitution below handles it (matches controlModel).
     let recognizedControls = [];
+    let recognizedRefs = [];
     if (!parseWorkflowTokens(wfText).length) {
       try {
-        recognizedControls = recognizeWorkflow(workflow, loadNodeTypes(NODE_TYPES_DIR)).controls;
+        ({ controls: recognizedControls, references: recognizedRefs } = recognizeWorkflow(workflow, loadNodeTypes(NODE_TYPES_DIR)));
       } catch (err) {
         console.error("Node recognition failed:", err.message);
       }
@@ -1551,6 +1569,7 @@ app.post("/api/comfy/generate", async (req, res) => {
     }
     workflow = substituteWorkflow(workflow, runValues);
     applyRecognizedValues(workflow, recognizedControls, runValues); // patch recognized node inputs
+    applyReferenceCollections(workflow, recognizedRefs, providedRefs); // inject dynamic ref media loaders
     tailResult = await applyTails(workflow, tokenNodes, tails); // trim references to their last N seconds
     for (const id of Array.isArray(bypass) ? bypass : []) bypassNode(workflow, String(id)); // disabled patch nodes
     workflow = injectLoras(workflow, loras); // splice in any dynamically-added LoRAs

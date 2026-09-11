@@ -1841,6 +1841,11 @@ async function renderComfyControls() {
   for (const it of items) {
     if (it.kind === "series" && it.entries.length === 1) { it.kind = "single-media"; it.token = it.entries[0].token; }
   }
+  // Dynamic reference collections (recognized nodes) render as multi-upload controls,
+  // ordered in among the rest by their `order`.
+  (meta.references || []).forEach((ref, i) => {
+    items.push({ kind: "reference", ref, order: ref.order, scanIndex: 900 + i });
+  });
   // Order by the "; #N" hint; items without one keep scan order, after ordered ones.
   items.sort((a, b) => (a.order ?? 1000 + a.scanIndex) - (b.order ?? 1000 + b.scanIndex));
 
@@ -1879,6 +1884,13 @@ async function renderComfyControls() {
 
   const settingsScalars = [];
   for (const it of items) {
+    if (it.kind === "reference") {
+      const ctrl = makeComfyReference(it.ref);
+      ctrl.el.style.gridColumn = "span 12";
+      comfyControlsEl.appendChild(ctrl.el);
+      comfyFields.push(ctrl);
+      continue;
+    }
     if (it.kind === "series") {
       const entries = it.entries.sort((a, b) => a.index - b.index);
       const ctrl = makeComfyMediaMulti(
@@ -1942,6 +1954,32 @@ async function renderComfyControls() {
     comfyControlsEl.appendChild(comfyRefTagsEl);
   }
   if (body.childElementCount) comfyControlsEl.appendChild(details);
+
+  // Transparency: node types GENie has no controls for. They run exactly as saved
+  // in the export. Collapsed by default; recognized (raw) workflows only.
+  const unknownTypes = meta.unknownTypes || [];
+  if (unknownTypes.length) {
+    const info = document.createElement("details");
+    info.className = "comfy-node-group comfy-unknown";
+    info.style.gridColumn = "span 12";
+    const sum = document.createElement("summary");
+    sum.textContent = `Other nodes — run as-is (${unknownTypes.length})`;
+    const b = document.createElement("div");
+    b.className = "comfy-node-group-body";
+    b.innerHTML =
+      `<p class="muted">GENie has no editable controls for these node types, so they run ` +
+      `exactly as saved in the workflow's JSON export:</p>`;
+    const ul = document.createElement("ul");
+    ul.className = "comfy-unknown-list";
+    for (const t of unknownTypes) {
+      const li = document.createElement("li");
+      li.textContent = t;
+      ul.appendChild(li);
+    }
+    b.appendChild(ul);
+    info.append(sum, b);
+    comfyControlsEl.appendChild(info);
+  }
 
   // Overlay this workflow's saved config (server-side settings file) so the form
   // reopens with what you last ran — values, media, seed mode, and LoRAs.
@@ -2297,8 +2335,8 @@ function renderScalarControl(token, type, container = comfyControlsEl) {
 // badges ("Picture 1, 2…"). The Nth file fills the Nth token; unfilled tokens are
 // pruned at submit.
 let comfyListSeq = 0;
-function makeComfyMediaMulti(base, mediaKind, tokenNames, tail = null, soundtracks = []) {
-  const label = prettyLabel(base);
+function makeComfyMediaMulti(base, mediaKind, tokenNames, tail = null, soundtracks = [], labelText = null) {
+  const label = labelText || prettyLabel(base);
   const max = tokenNames.length;
   const list = makeMediaList(`comfy-${base}-${comfyListSeq++}`, {
     mediaType: mediaKind,
@@ -2396,6 +2434,27 @@ function makeComfyMediaMulti(base, mediaKind, tokenNames, tail = null, soundtrac
   };
 }
 
+// A dynamic reference collection (1+ images / videos / audio) for a recognized node
+// like MiniMax H3. Reuses the multi-upload component; the difference from a token
+// series is submit-side: filled files are uploaded, gathered in order, and the
+// server injects one loader node per file wired into the target node (no pre-wired
+// slots to prune). `ref` is a descriptor from workflow-meta's `references`.
+function makeComfyReference(ref) {
+  const max = ref.max || 9;
+  const slotNames = Array.from({ length: max }, (_, i) => `${ref.name}_${i + 1}`);
+  const ctrl = makeComfyMediaMulti(ref.name, ref.kind, slotNames, null, [], ref.label);
+  ctrl.isMultiMedia = false; // not a token series — don't route through values/prune
+  ctrl.isReferenceCollection = true;
+  ctrl.collectionName = ref.name;
+  // Uploaded ComfyUI filenames for the filled slots, in order — what the server
+  // injects loaders for.
+  ctrl.resolveOrdered = async () => {
+    const { values } = await ctrl.resolve();
+    return slotNames.map((n) => values[n]).filter(Boolean);
+  };
+  return ctrl;
+}
+
 // Prefill the active workflow's controls from a saved values blob. Scalar values
 // live at the top level; last-used media files (if any) live under `__media`,
 // keyed by control (media can't be restored from a saved values blob otherwise).
@@ -2474,9 +2533,14 @@ async function saveComfySettings(file) {
 async function collectComfyValues() {
   const values = {};
   const prune = [];
+  const references = {}; // { collectionName: [comfyFilename, …] } for injected ref media
   const tails = {}; // per-reference "use last N sec" (the server turns it into frames)
   for (const f of comfyFields) {
     if (typeof f.tailSpec === "function") Object.assign(tails, f.tailSpec());
+    if (f.isReferenceCollection) {
+      references[f.collectionName] = await f.resolveOrdered();
+      continue;
+    }
     if (f.isMultiMedia) {
       const r = await f.resolve(); // fills the filled slots, prunes the empty ones
       Object.assign(values, r.values);
@@ -2489,7 +2553,7 @@ async function collectComfyValues() {
     }
     values[f.name] = await f.getValue();
   }
-  return { values, prune, tails };
+  return { values, prune, tails, references };
 }
 
 // How many generations to queue (the ×N counter, local ComfyUI only).
@@ -2516,10 +2580,10 @@ async function submitComfy() {
   const bypass = comfyBypassControl ? comfyBypassControl.getDisabled() : [];
   try {
     for (let i = 0; i < count; i++) {
-      const { values, prune, tails } = await collectComfyValues();
+      const { values, prune, tails, references } = await collectComfyValues();
       const mediaIds = { image: [], video: [], audio: [] };
       for (const f of comfyFields) {
-        if (f.isMultiMedia) mediaIds[f.mediaKind]?.push(...f.localIds());
+        if (f.isMultiMedia || f.isReferenceCollection) mediaIds[f.mediaKind]?.push(...f.localIds());
         else if (f.isMedia) {
           const localId = f.localId();
           if (localId) mediaIds[f.mediaKind]?.push(localId);
@@ -2529,7 +2593,7 @@ async function submitComfy() {
       if (allLoras.length) input.loras = allLoras; // store the full loadout (incl. disabled) for re-import
       if (bypass.length) input.bypass = bypass;
       if (typeof values.prompt === "string" && values.prompt.trim()) input.prompt = values.prompt.trim();
-      await queueComfyRun(wf, values, prune, mediaIds, input, enabledLoras, bypass, tails, cont);
+      await queueComfyRun(wf, values, prune, mediaIds, input, enabledLoras, bypass, tails, cont, references);
       // Advance seeds for the next queued run (no-op when the mode is "fixed").
       for (const f of comfyFields) if (typeof f.advance === "function") f.advance();
     }
@@ -2543,7 +2607,7 @@ async function submitComfy() {
 // Queue one ComfyUI run: one request queues it AND creates the pending History
 // entry server-side (so a dropped connection can't orphan it — the sweep finishes
 // it). Then attach a live status to that pending card, wire Cancel, and poll.
-async function queueComfyRun(wf, values, prune, mediaIds, input, loras, bypass, tails, cont) {
+async function queueComfyRun(wf, values, prune, mediaIds, input, loras, bypass, tails, cont, references) {
   const job = {
     jobId: nextJobId++,
     taskId: null,
@@ -2560,6 +2624,7 @@ async function queueComfyRun(wf, values, prune, mediaIds, input, loras, bypass, 
         file: wf.file,
         values,
         prune,
+        references: references || {},
         loras: loras || [],
         bypass: bypass || [],
         tails: tails || {},

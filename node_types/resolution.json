@@ -1,0 +1,20 @@
+{
+  "_comment": "ResolutionSelector (a common custom node) sets output size from an aspect-ratio preset + a megapixel budget, emitting width/height. `multiple` is a rounding constraint left baked. aspect_ratio populates from /object_info when the node is installed; otherwise it stays an editable text field.",
+  "nodes": {
+    "ResolutionSelector": {
+      "display_name": "Resolution Selector",
+      "recognize": {
+        "variants": [
+          {
+            "match": [{ "when": "any" }],
+            "group": "Resolution",
+            "expose": {
+              "aspect_ratio": { "name": "aspect_ratio", "label": "Aspect ratio", "control": "combo",  "width": "1/2", "order": 20 },
+              "megapixels":   { "name": "megapixels",   "label": "Megapixels",   "control": "number", "width": "1/2", "order": 21 }
+            }
+          }
+        ]
+      }
+    }
+  }
+}

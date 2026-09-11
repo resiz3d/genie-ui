@@ -39,6 +39,14 @@
       "recognize": {
         "variants": [
           {
+            "match": [{ "when": "produces_input", "input": "audio_vae" }],
+            "group": "Audio VAE",
+            "collapsed": true,
+            "expose": {
+              "vae_name": { "name": "audio_vae_name", "label": "Audio VAE", "control": "combo", "width": "full", "order": 51 }
+            }
+          },
+          {
             "match": [{ "when": "any" }],
             "group": "VAE",
             "collapsed": true,

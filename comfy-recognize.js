@@ -103,6 +103,11 @@ function forwardIndex(workflow) {
   return fwd;
 }
 
+// A stable, form-safe control name from a human label.
+function slugify(s) {
+  return String(s).toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+}
+
 // Coercion type for a literal, so the submitted value can be written back as the
 // same JSON type the node originally held (a number stays a number, etc.).
 function literalType(v) {
@@ -152,6 +157,8 @@ function nodeMatches(pred, ctx) {
       return feedsOutput(ctx);
     case "produces":
       return producesTarget(workflow, nodeId, pred.target);
+    case "produces_input":
+      return producesInput(workflow, nodeId, pred.input);
     case "title_matches": {
       const title = workflow[nodeId]?._meta?.title;
       if (typeof title !== "string" || !pred.pattern) return false;
@@ -178,6 +185,18 @@ function producesTarget(workflow, nodeId, target) {
   const input = target.slice(dot + 1);
   for (const node of Object.values(workflow)) {
     if (node.class_type !== cls) continue;
+    const link = asLink(node.inputs?.[input]);
+    if (link && String(link[0]) === String(nodeId)) return true;
+  }
+  return false;
+}
+
+// True when `nodeId` is the direct upstream producer of an input named `input` on
+// ANY node, whatever its class — e.g. "produces_input audio_vae" distinguishes the
+// audio VAE loader from the image one without naming the consuming node type.
+function producesInput(workflow, nodeId, input) {
+  if (!input) return false;
+  for (const node of Object.values(workflow)) {
     const link = asLink(node.inputs?.[input]);
     if (link && String(link[0]) === String(nodeId)) return true;
   }
@@ -219,9 +238,12 @@ function variantsOf(entry) {
 //
 // Returns { controls: [...] }. Pure and offline: no ComfyUI needed.
 export function recognizeWorkflow(workflow, nodeTypes) {
-  if (!workflow || typeof workflow !== "object") return { controls: [] };
+  if (!workflow || typeof workflow !== "object") return { controls: [], handledNodeIds: new Set() };
   const fwd = forwardIndex(workflow);
   const controls = [];
+  // Node ids GENie surfaced a control for (or traced a value out of). Everything
+  // else runs exactly as exported — the caller lists those as "unknown" node types.
+  const handledNodeIds = new Set();
   const usedNames = new Map(); // base name → count, for de-duping
 
   // Stable order: by numeric node id when possible, so control order is
@@ -231,7 +253,43 @@ export function recognizeWorkflow(workflow, nodeTypes) {
     return Number.isFinite(na) && Number.isFinite(nb) ? na - nb : String(a).localeCompare(String(b));
   });
 
+  // Pre-pass: dynamic reference collections (1+ images/videos/audio wired into a
+  // node's dotted inputs). We describe each collection for the UI + submit-time
+  // injection, and mark the loader nodes already wired into one as "consumed" so
+  // they don't also render as standalone controls or count as unknown.
+  const references = [];
+  const consumed = new Set();
   for (const nodeId of ids) {
+    const node = workflow[nodeId];
+    const entry = nodeTypes.get(node?.class_type);
+    if (!entry) continue;
+    const ctx = { workflow, fwd, nodeTypes, nodeId };
+    const variant = variantsOf(entry).find((v) => (v.match || [{ when: "any" }]).some((p) => nodeMatches(p, ctx)));
+    if (!variant?.references) continue;
+    for (const rc of variant.references) {
+      for (const w of rc.wires || []) {
+        for (const [k, v] of Object.entries(node.inputs || {})) {
+          if (k.startsWith(w.prefix) && asLink(v)) consumed.add(String(v[0]));
+        }
+      }
+      references.push({
+        name: rc.name,
+        kind: rc.kind,
+        label: rc.label || rc.name,
+        max: Number.isFinite(rc.max) ? rc.max : 9,
+        order: Number.isFinite(rc.order) ? rc.order : null,
+        width: rc.width || "full",
+        targetNodeId: String(nodeId),
+        loader: rc.loader,
+        wires: rc.wires || [],
+      });
+      handledNodeIds.add(String(nodeId));
+    }
+  }
+  for (const id of consumed) handledNodeIds.add(id);
+
+  for (const nodeId of ids) {
+    if (consumed.has(String(nodeId))) continue; // managed by a reference collection
     const node = workflow[nodeId];
     const entry = nodeTypes.get(node?.class_type);
     if (!entry) continue;
@@ -253,6 +311,8 @@ export function recognizeWorkflow(workflow, nodeTypes) {
     for (const [inputKey, spec] of Object.entries(variant.expose)) {
       const traced = traceEditable(workflow, nodeTypes, nodeId, inputKey);
       if (!traced) continue; // graph-driven, nothing editable — skip silently
+      handledNodeIds.add(String(nodeId)); // exposed a control on this node
+      handledNodeIds.add(traced.id); // …and surfaced this node's value (may be a provider)
       const base = spec.name || inputKey;
       // De-dupe: first use keeps the bare name; a second node wanting it gets _2.
       const count = usedNames.get(base) || 0;
@@ -277,7 +337,103 @@ export function recognizeWorkflow(workflow, nodeTypes) {
       });
     }
   }
-  return { controls };
+
+  // Standalone primitive value nodes that nothing else surfaced — e.g. a Float wired
+  // into a math node we don't model. Expose the value directly, labeled by the node's
+  // own title, and let the rest of the graph run as-is. A primitive already traced
+  // into another control (a prompt fed from a PrimitiveStringMultiline) is in
+  // handledNodeIds, so it isn't doubled. This keeps arbitrary workflows fluid without
+  // modelling every intermediate node.
+  for (const nodeId of ids) {
+    const node = workflow[nodeId];
+    const vs = nodeTypes.get(node?.class_type)?.value_source;
+    if (!vs?.input || handledNodeIds.has(String(nodeId))) continue;
+    const val = node.inputs?.[vs.input];
+    if (val === undefined || asLink(val) || (val && typeof val === "object")) continue; // not an editable literal
+    const label = node._meta?.title || node.class_type;
+    const base = slugify(label) || `value_${nodeId}`;
+    const count = usedNames.get(base) || 0;
+    usedNames.set(base, count + 1);
+    const name = count === 0 ? base : `${base}_${count + 1}`;
+    const type = typeof val === "number" ? "number" : typeof val === "boolean" ? "boolean" : "string";
+    controls.push({
+      name,
+      label,
+      default: val == null ? "" : String(val),
+      options: [],
+      width: "full",
+      order: null,
+      multiline: /multiline/i.test(node.class_type) || undefined,
+      group: { key: String(nodeId), label, collapsed: false },
+      owner: { id: String(nodeId), classType: node.class_type, input: vs.input },
+      targets: [{ id: String(nodeId), input: vs.input, type }],
+    });
+    handledNodeIds.add(String(nodeId));
+  }
+
+  return { controls, references, handledNodeIds };
+}
+
+// Find the largest numeric node id in a workflow (new injected nodes get ids above
+// it, so they never collide with the export's own ids).
+function maxNumericId(workflow) {
+  let max = 0;
+  for (const id of Object.keys(workflow)) {
+    const n = Number(id);
+    if (Number.isFinite(n) && n > max) max = n;
+  }
+  return max;
+}
+
+// True when any node input links to `id` (so we don't prune a still-used node).
+function isReferencedBy(workflow, id) {
+  for (const node of Object.values(workflow)) {
+    for (const v of Object.values(node?.inputs || {})) {
+      if (asLink(v) && String(v[0]) === String(id)) return true;
+    }
+  }
+  return false;
+}
+
+// Inject the user's reference media into a (clone of a) workflow, in place. For each
+// collection with provided files, we clear the target node's existing wiring for it,
+// create one media-loader node per file, and wire them into the dotted inputs
+// (mirroring the tokenized MiniMax workflow). A collection with no provided files is
+// left exactly as the export had it. Orphaned original loaders are pruned.
+//
+// `provided` is { collectionName: [comfyFilename, …] }. `references` comes from
+// recognizeWorkflow(workflow).references.
+export function applyReferenceCollections(workflow, references, provided) {
+  if (!references?.length || !provided) return workflow;
+  let nextId = maxNumericId(workflow) + 1;
+  for (const ref of references) {
+    const files = Array.isArray(provided[ref.name]) ? provided[ref.name].filter(Boolean) : null;
+    if (!files || !files.length) continue; // untouched — keep the export's baked wiring
+    const target = workflow[ref.targetNodeId];
+    if (!target?.inputs) continue;
+    // Clear the collection's current wiring, remembering the loaders it pointed to.
+    const oldLoaders = new Set();
+    for (const w of ref.wires || []) {
+      for (const k of Object.keys(target.inputs)) {
+        if (!k.startsWith(w.prefix)) continue;
+        const link = asLink(target.inputs[k]);
+        if (link) oldLoaders.add(String(link[0]));
+        delete target.inputs[k];
+      }
+    }
+    // One loader node per file, wired into slot i of every wire of this collection.
+    files.slice(0, ref.max).forEach((filename, i) => {
+      const loaderId = String(nextId++);
+      workflow[loaderId] = {
+        inputs: { [ref.loader.input]: filename, ...(ref.loader.defaults || {}) },
+        class_type: ref.loader.class_type,
+      };
+      for (const w of ref.wires || []) target.inputs[`${w.prefix}${i}`] = [loaderId, w.slot];
+    });
+    // Prune the export's original loaders if nothing references them any more.
+    for (const id of oldLoaders) if (!isReferencedBy(workflow, id)) delete workflow[id];
+  }
+  return workflow;
 }
 
 // Coerce a submitted value to the JSON type the target input originally held, so

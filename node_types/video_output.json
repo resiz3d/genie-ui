@@ -1,0 +1,40 @@
+{
+  "_comment": "The video output pair. CreateVideo assembles frames (+ optional audio) into a video and carries the frame-rate / bit-depth / color-space; SaveVideo writes it and holds the filename+path and container/codec. SaveVideo is the graph terminal (output: true). The nested codec widgets ComfyUI encodes as dotted keys (format.codec, …) are left baked. Combos populate from /object_info when the node is installed, otherwise they stay editable text.",
+  "nodes": {
+    "CreateVideo": {
+      "display_name": "Create Video",
+      "recognize": {
+        "variants": [
+          {
+            "match": [{ "when": "any" }],
+            "group": "Create Video",
+            "collapsed": true,
+            "expose": {
+              "fps":         { "name": "fps",         "label": "FPS",         "control": "number", "width": "1/3", "order": 80 },
+              "bit_depth":   { "name": "bit_depth",   "label": "Bit depth",   "control": "combo",  "width": "1/3", "order": 81 },
+              "color_space": { "name": "color_space", "label": "Color space", "control": "combo",  "width": "1/3", "order": 82 }
+            }
+          }
+        ]
+      }
+    },
+    "SaveVideo": {
+      "display_name": "Save Video",
+      "output": true,
+      "recognize": {
+        "variants": [
+          {
+            "match": [{ "when": "any" }],
+            "group": "Save Video",
+            "collapsed": true,
+            "expose": {
+              "filename_prefix": { "name": "filename_prefix", "label": "Filename & path", "control": "text",  "width": "full", "order": 90 },
+              "format":          { "name": "format",          "label": "Container",       "control": "combo", "width": "1/2",  "order": 91 },
+              "codec":           { "name": "codec",            "label": "Codec",           "control": "combo", "width": "1/2",  "order": 92 }
+            }
+          }
+        ]
+      }
+    }
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "_comment": "ComfyMathExpression evaluates a formula over its wired `values.a/b/…` inputs. The `expression` string itself is editable here; the value inputs stay graph-driven (a wired Float/Int is exposed on its own primitive node). Full width so long formulas are readable.",
+  "nodes": {
+    "ComfyMathExpression": {
+      "display_name": "Math Expression",
+      "recognize": {
+        "variants": [
+          {
+            "match": [{ "when": "any" }],
+            "group": "Math Expression",
+            "expose": {
+              "expression": { "name": "expression", "label": "Expression", "control": "text", "width": "full", "order": 70 }
+            }
+          }
+        ]
+      }
+    }
+  }
+}

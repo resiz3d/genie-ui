@@ -1,0 +1,49 @@
+{
+  "_comment": "The SamplerCustom / SamplerCustomAdvanced sampling stack, where sampler, scheduler, steps and seed live on separate nodes rather than one KSampler. SamplerCustomAdvanced and BasicGuider themselves expose nothing (all-link inputs) and run as-is.",
+  "nodes": {
+    "KSamplerSelect": {
+      "display_name": "KSamplerSelect",
+      "recognize": {
+        "variants": [
+          {
+            "match": [{ "when": "any" }],
+            "group": "Sampler",
+            "expose": {
+              "sampler_name": { "name": "sampler", "label": "Sampler", "control": "combo", "width": "full", "order": 13 }
+            }
+          }
+        ]
+      }
+    },
+    "BasicScheduler": {
+      "display_name": "BasicScheduler",
+      "recognize": {
+        "variants": [
+          {
+            "match": [{ "when": "any" }],
+            "group": "Scheduler",
+            "expose": {
+              "scheduler": { "name": "scheduler", "label": "Scheduler", "control": "combo",  "width": "1/3", "order": 14 },
+              "steps":     { "name": "steps",     "label": "Steps",     "control": "number", "width": "1/3", "order": 15 },
+              "denoise":   { "name": "denoise",   "label": "Denoise",   "control": "number", "width": "1/3", "order": 16 }
+            }
+          }
+        ]
+      }
+    },
+    "RandomNoise": {
+      "display_name": "RandomNoise",
+      "recognize": {
+        "variants": [
+          {
+            "match": [{ "when": "any" }],
+            "group": "Noise",
+            "expose": {
+              "noise_seed": { "name": "seed", "label": "Seed", "control": "seed", "width": "1/2", "order": 10 }
+            }
+          }
+        ]
+      }
+    }
+  }
+}

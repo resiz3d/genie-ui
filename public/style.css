@@ -1413,6 +1413,18 @@ img.zoomable {
 .comfy-node-group-body {
   padding: 14px 12px;
 }
+/* "Other nodes — run as-is": a plain list of the class_types GENie doesn't drive. */
+.comfy-unknown-list {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  columns: 2;
+}
+.comfy-unknown-list li {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 12px;
+  color: var(--text);
+  margin: 2px 0;
+}
 
 /* An optional-node enable/disable toggle with its controls grouped beneath it. */
 .comfy-bypass-group .bypass-toggle {
