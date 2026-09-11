@@ -22,4 +22,4 @@ shipped default. Giving your copy a **new name** keeps both — which is the
 recommended approach.
 
 See [`../README.md`](../README.md) for more on custom workflows, and
-[`../../docs/COMFYUI.md`](../../docs/COMFYUI.md) for the workflow/token format.
+[`../../docs/COMFYUI.md`](../../docs/COMFYUI.md) for the ComfyUI integration.

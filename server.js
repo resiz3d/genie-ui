@@ -39,8 +39,9 @@ const PROJECTS_FILE = path.join(__dirname, "projects.json");
 
 // --- ComfyUI (optional local backend) -------------------------------------
 // Point at a running ComfyUI instance to run local workflows from the UI.
-// WORKFLOWS_DIR holds ComfyUI API-format .json exports, optionally tokenized
-// with {{name=default|opt|opt}} placeholders. See docs/COMFYUI.md.
+// WORKFLOWS_DIR holds raw ComfyUI API-format .json exports — drop one in and GENie
+// builds the form from its recognized nodes (see node_types/). No authoring needed.
+// See docs/COMFYUI.md.
 // Workflows load from two places: WORKFLOWS_DIR itself (the user's custom
 // workflows) and its `default/` subfolder (the ones GENie ships). A custom file
 // overrides a shipped default of the same name. Workflows in *subfolders* of
@@ -55,8 +56,8 @@ const WORKFLOWS_DEFAULT_DIR = path.join(WORKFLOWS_DIR, "default");
 // stored server-side so it's shared across devices (incl. the phone over LAN).
 const COMFY_SETTINGS_DIR = path.resolve(__dirname, process.env.COMFY_SETTINGS_DIR || "settings/comfy");
 // Data-driven node recognition library. Each node_types/*.json describes which of a
-// node's inputs become form controls, so a *raw* ComfyUI export (no {{tokens}}) can
-// drive the form. See comfy-recognize.js and node_types/README.md.
+// node's inputs become form controls, so a raw ComfyUI export drives the form.
+// See comfy-recognize.js and node_types/README.md.
 const NODE_TYPES_DIR = path.resolve(__dirname, process.env.NODE_TYPES_DIR || "node_types");
 // Live latent previews. ComfyUI honors extra_data.preview_method per prompt, so
 // previews work on any workflow with no workflow-JSON edits and no ComfyUI launch
@@ -507,16 +508,20 @@ app.get("/api/status", (req, res) => {
 
 // =========================================================================
 // ComfyUI: run local API-format workflows from the UI. Workflows live in
-// WORKFLOWS_DIR and may contain {{name=default|opt|opt}} tokens; the UI renders
-// a control per token and posts back {file, values}. We substitute, forward to
-// ComfyUI /prompt, and normalize /history polling into the same shape the
-// kie.ai path uses so the frontend job flow is shared.
+// WORKFLOWS_DIR as raw ComfyUI exports; the UI renders a control per recognized
+// node input (see node_types/) and posts back {file, values}. We patch the
+// recognized inputs, forward to ComfyUI /prompt, and normalize /history polling
+// into the same shape the kie.ai path uses so the frontend job flow is shared.
+//
+// One {{token}} use survives: the continuation role tokens (; continue.in/out),
+// which carry per-run state integers GENie fills. parseTokenSpec + substituteWorkflow
+// exist only to serve that; there is no longer any {{token}} form-control authoring.
 // =========================================================================
 
-// Parse a single token body (the text between {{ }}): "name", "name=default",
-// "name=default|opt1|opt2", plus optional trailing layout hints separated by ";":
-// a width ("; 1/4") and/or an order ("; #8"). Returns {name, default, options,
-// width, order}. Hints are layout-only and ignored when substituting values.
+// Parse a single {{ }} body. General {{token}} form authoring is retired, so the
+// only field that still matters here is the continuation role hint ("; continue.in"
+// / "; continue.out"); the name/default/width/order/type/pin parsing is retained
+// harmlessly so a role token written in the old full grammar still parses.
 const WIDTH_RE = /^(full|1|1\/2|1\/3|1\/4|2\/3|3\/4)$/;
 // A token may carry this run's continuation state. GENie assigns the integers and
 // never interprets them — the workflow supplies the meaning.
@@ -574,38 +579,15 @@ function continuationRoles(workflow) {
   return roles; // e.g. { "continue.in": "prev_state", "continue.out": "this_state" }
 }
 
-// All distinct tokens in a workflow's raw text, first occurrence wins.
-function parseWorkflowTokens(text) {
-  const seen = new Map();
-  const re = /\{\{([\s\S]*?)\}\}/g;
-  let m;
-  while ((m = re.exec(text)) !== null) {
-    const spec = parseTokenSpec(m[1]);
-    // Tokens are authored inside JSON strings, so a default's backslashes arrive
-    // JSON-escaped (a model path like "Z-Image Turbo\\model.safetensors"). Collapse
-    // "\\" → "\" so the default matches ComfyUI's real /object_info value and the
-    // combo pre-selects the right file instead of silently falling back to the first.
-    // Substitution is unaffected — it reads the already-parsed workflow object.
-    if (spec.default) spec.default = spec.default.replace(/\\\\/g, "\\");
-    if (spec.name && !seen.has(spec.name)) seen.set(spec.name, spec);
-  }
-  return [...seen.values()];
-}
-
-// The controls a workflow offers. Two modes, chosen by whether the workflow has any
-// explicit {{tokens}}: a *tokenized* workflow is author-controlled and returns its
-// tokens unchanged (recognition off); a *raw* ComfyUI export (no tokens) is driven
-// entirely by data-driven node recognition (comfy-recognize.js). Returns the
-// token-shaped control list plus the name→node map used for /object_info enrichment
-// (recognized owners included, so their combos/number ranges enrich like tokens do).
+// The controls a workflow offers, derived entirely from data-driven node
+// recognition (comfy-recognize.js): drop a raw ComfyUI API export in and GENie
+// turns its recognized nodes into form controls. Returns the control list plus the
+// name→node map used for /object_info enrichment (recognized owners included, so
+// their combos/number ranges get the installed-file lists and real min/max).
+// `text` is unused now that {{token}} authoring is gone, but kept in the signature
+// so callers (which have the raw text handy) don't need to change.
 function controlModel(workflow, text) {
-  const tokens = parseWorkflowTokens(text);
   const nodeMap = mapTokenNodes(workflow);
-  // Manual mode vs auto mode: the moment a workflow carries any explicit {{token}},
-  // its author has taken control of the form, so recognition stays off and the
-  // workflow behaves exactly as it did before this feature. Recognition drives only
-  // *raw* exports — the drop-a-ComfyUI-JSON case — which have no tokens at all.
-  if (tokens.length) return { tokens, nodeMap, unknownTypes: [], references: [] };
   const nodeTypes = loadNodeTypes(NODE_TYPES_DIR);
   let recognized = [];
   let handledNodeIds = new Set();
@@ -1537,18 +1519,15 @@ app.post("/api/comfy/generate", async (req, res) => {
     // Token → node map from the untouched workflow: substitution erases the tokens,
     // and reference-video tails are addressed by token name.
     const tokenNodes = mapTokenNodes(workflow);
-    // Data-driven recognition of the same untouched workflow: the controls a raw
-    // export offers (seed, prompt, resolution, …) and where to write them. Only when
-    // the workflow has no explicit tokens — a tokenized workflow is author-controlled
-    // and the token substitution below handles it (matches controlModel).
+    // Data-driven recognition of the untouched workflow: the controls it offers
+    // (seed, prompt, resolution, …) and where to write them. This is the only source
+    // of form controls now — {{token}} authoring has been retired.
     let recognizedControls = [];
     let recognizedRefs = [];
-    if (!parseWorkflowTokens(wfText).length) {
-      try {
-        ({ controls: recognizedControls, references: recognizedRefs } = recognizeWorkflow(workflow, loadNodeTypes(NODE_TYPES_DIR)));
-      } catch (err) {
-        console.error("Node recognition failed:", err.message);
-      }
+    try {
+      ({ controls: recognizedControls, references: recognizedRefs } = recognizeWorkflow(workflow, loadNodeTypes(NODE_TYPES_DIR)));
+    } catch (err) {
+      console.error("Node recognition failed:", err.message);
     }
     workflow = pruneWorkflow(workflow, prune); // drop empty optional reference loaders
     // Continuation: the workflow says which tokens carry the state integers, GENie
@@ -1567,7 +1546,11 @@ app.post("/api/comfy/generate", async (req, res) => {
       runValues = { ...runValues, ...continuationValues };
       continuation = { parentId: c.parentId ? String(c.parentId) : null, from, slot };
     }
-    workflow = substituteWorkflow(workflow, runValues);
+    // Token substitution is now confined to the continuation role tokens — the one
+    // remaining {{token}} use (see continuationRoles). All form values are written by
+    // applyRecognizedValues below, never by substitution. A raw export with no
+    // continuation tokens leaves this an inert deep-clone.
+    workflow = substituteWorkflow(workflow, continuationValues || {});
     applyRecognizedValues(workflow, recognizedControls, runValues); // patch recognized node inputs
     applyReferenceCollections(workflow, recognizedRefs, providedRefs); // inject dynamic ref media loaders
     tailResult = await applyTails(workflow, tokenNodes, tails); // trim references to their last N seconds

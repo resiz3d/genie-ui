@@ -1,9 +1,9 @@
 # Node types — the recognition library
 
-GENie can drive its form from a **raw ComfyUI API export** — no `{{token}}`
-authoring required. It does that by recognizing nodes **by `class_type`** and
-turning their inputs into form controls. This folder is the library that makes
-that possible: one small JSON file per node type (or a group of related ones).
+GENie drives its form entirely from a **raw ComfyUI API export** — no authoring
+required. It does that by recognizing nodes **by `class_type`** and turning their
+inputs into form controls. This folder is the library that makes that possible: one
+small JSON file per node type (or a group of related ones).
 
 Adding support for a new node is **a new file here** — no server code. Drop it
 in, reload, done. The engine ([`../comfy-recognize.js`](../comfy-recognize.js))
@@ -132,6 +132,7 @@ Add a `references` array to a variant (alongside or instead of `expose`):
 | `produces_input` + `input: "name"` | like `produces` but matches an input of that name on **any** node class (e.g. `audio_vae` to tell an audio VAE loader from an image one). |
 | `title_matches` + `pattern` | the node's `_meta.title` matches the (case-insensitive) regex. |
 
-Precedence with explicit tokens: if a workflow also has a `{{token}}` of the same
-`name`, the **token wins** and the recognized control is dropped. So a tokenized
-workflow keeps behaving exactly as before.
+Recognition is the sole source of form controls. (GENie's older `{{token}}` authoring
+layer has been retired; the one surviving `{{token}}` — the `; continue.in/out`
+continuation role — isn't a form control and is handled separately. See
+[`../docs/COMFYUI.md`](../docs/COMFYUI.md).)

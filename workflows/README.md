@@ -10,10 +10,12 @@ with `COMFYUI_URL` in `.env`; defaults to `http://127.0.0.1:8188`).
 ## What goes here
 
 - **ComfyUI API-format `.json`** exports (Save → *Export (API)* in ComfyUI).
-- Optionally **tokenized** with `{{name=default|opt|opt}}` placeholders, which
-  GENie turns into form controls. See
-  [`../docs/workflows/tokens.md`](../docs/workflows/tokens.md) for the full token
-  reference, or [`../docs/COMFYUI.md`](../docs/COMFYUI.md) for the whole integration.
+
+Nothing to author: GENie **recognizes** the nodes in a raw export and builds the
+form from them. Adding support for a new node type is a small file in
+[`../node_types/`](../node_types/) — see its
+[README](../node_types/README.md), or [`../docs/COMFYUI.md`](../docs/COMFYUI.md)
+for the whole integration.
 
 ## Defaults vs. your workflows
 
@@ -48,5 +50,5 @@ Two things to know:
   (`their-workflows/Cool Thing.json`), which can't collide with the bare filenames
   used by workflows here and in `default/`.
 - Your saved picks for it live in `settings/comfy/their-workflows/<name>.json`. Move a
-  workflow to a different folder and it starts from its token defaults again, the same
-  as renaming one does — copy the old settings file across to keep them.
+  workflow to a different folder and it starts from the export's own values again, the
+  same as renaming one does — copy the old settings file across to keep them.

@@ -1,9 +1,9 @@
 # Local ComfyUI workflows
 
 Run local [ComfyUI](https://github.com/comfyanonymous/ComfyUI) workflows from the
-same UI you use for the kie.ai models. Nothing is hard-coded: drop workflow files
-in a folder, mark the values you want to control with `{{tokens}}`, and the UI
-builds a form for them automatically.
+same UI you use for the kie.ai models. Nothing is hard-coded and nothing needs
+authoring: drop a **raw ComfyUI API export** in a folder and GENie **recognizes** the
+nodes in it and builds a form automatically.
 
 ## Setup
 
@@ -33,70 +33,51 @@ builds a form for them automatically.
    [Filmstrip previews](#filmstrip-previews) below. GENie doesn't require it — skip this
    and everything else works exactly the same.
 
-## Tokens
+## Controls — from node recognition
 
-Replace any value in the workflow JSON with a token to expose it as a control:
+There is nothing to mark up. GENie reads the export, matches each node by its
+`class_type` against the **recognition library** in
+[`node_types/`](../node_types/), and turns the recognized inputs into form controls —
+a **Prompt** box, a **KSampler** section with seed/steps/cfg/sampler/scheduler/denoise,
+a **Latent Image** section with resolution, a **Save Image** filename, loader pickers,
+and so on. Each recognized node becomes its own **collapsible section**, so the form
+mirrors the graph instead of being one flat wall of fields.
 
-```jsonc
-"129": { "inputs": { "noise_seed": "{{seed=14}}" } },      // number, default 14
-"138": { "inputs": { "value": "{{prompt}}" } },            // big text box
-"137": { "inputs": { "image": "{{first_frame}}" } },       // image upload
-"12":  { "inputs": { "sampler_name": "{{sampler}}" } }     // dropdown from ComfyUI
-```
+- **Type is preserved** — a numeric input stays a number, a combo stays a dropdown.
+- **Nodes GENie doesn't recognize run exactly as saved.** They're listed, collapsed,
+  under **Other nodes (run as-is)** so you can see what's passing through untouched.
+- **Your last-used values win.** Picks are saved per workflow under
+  `settings/comfy/<name>.json` (see [Per-workflow settings](#per-workflow-settings));
+  the export's own values are the starting point until then.
 
-The grammar is `{{ name = default | opt | opt ; width ; #order }}`, and GENie picks
-each control automatically from the token name, its options, and what ComfyUI reports
-for that node input. In brief:
+### Adding support for a node
 
-- **Type is preserved** for a whole-value token (a number stays a number); embedded
-  tokens interpolate as text.
-- The **same name** on multiple nodes renders one control and fills them all.
-- **`=default`** bakes a starting value; your last-used settings (saved per workflow
-  under `settings/comfy/<name>.json`) override it — delete that file to reset.
-- **Layout hints** `; 1/2` … `; full` (width) and `; #N` (order) arrange the grid.
-
-- **Continuations** let a workflow carry state from one run to the next: tag two
-  tokens `; continue.in` / `; continue.out` and each run gets an opaque integer plus a
-  **Continue** button on its History card. GENie never interprets the number — see
-  [Continuations](workflows/tokens.md#continuations).
-
-> 📖 **Full authoring reference:** [workflows/tokens.md](workflows/tokens.md) — the
-> complete `{{token}}` guide (grammar, the control-inference rules, media series,
-> forcing dropdowns, continuations, the worked example, and gotchas) for anyone writing
-> their own workflows. The rest of this page covers the surrounding behavior.
+Recognition is **data-driven** — supporting a new node type is a small JSON file in
+[`node_types/`](../node_types/), no server code. Its
+[README](../node_types/README.md) is the full reference: how a node maps its inputs to
+controls, how to disambiguate (e.g. positive vs. negative prompt), how to expose media
+(the `references` mechanism, below), and the closed set of match predicates. A file you
+drop in can also **override** a shipped entry, the same shipped-vs-yours idea as
+`workflows/`.
 
 ## Models, LoRAs, VAEs & samplers (from ComfyUI)
 
-Tokenize a loader/sampler field and the app fills its dropdown from your **live
-ComfyUI install** — no need to list options by hand:
+When a recognized control is a loader or sampler field — `ckpt_name`, `vae_name`,
+`lora_name`, `sampler_name`, `scheduler`, … — GENie fills its dropdown from your
+**live ComfyUI install**, so you pick from exactly what's installed with no list to
+maintain. Numeric fields (`cfg`, `steps`, `strength_model`, …) pick up their real
+min/max/step from the same place.
 
-```jsonc
-"4":  { "inputs": { "ckpt_name":  "{{model}}" } },        // → checkpoint dropdown
-"10": { "inputs": { "vae_name":   "{{vae}}" } },          // → VAE dropdown
-"14": { "inputs": { "lora_name":  "{{lora}}",             // → LoRA dropdown
-                    "strength_model": "{{lora_strength=0.8}}" } },
-"12": { "inputs": { "sampler_name": "{{sampler}}",        // → sampler dropdown
-                    "scheduler":    "{{scheduler}}" } }    // → scheduler dropdown
-```
-
-The choices come from ComfyUI's `/object_info`, so a dropdown shows exactly what's
-installed; numeric fields (`strength_model`, `cfg`, `steps`, …) pick up their real
-min/max/step from the same source. **ComfyUI must be running** to build these
-controls — if it's offline the form shows a notice and those pickers don't populate
-(text/number controls still work). No `|option|` list needed; only add one if you
-want to force specific choices.
-
-These installed-file pickers (and the LoRA section below) render inside a collapsed
-**ComfyUI Settings** drawer at the bottom of the form, so a workflow's loader
-dropdowns don't clutter the main controls. Width/order hints (`; full`, `; #1`, …)
-still order them within the drawer.
+The choices come from ComfyUI's `/object_info`, so **ComfyUI must be running** to build
+these pickers — if it's offline the form shows a notice and those dropdowns don't
+populate (text and number controls still work).
 
 ### Dynamic LoRAs
 
-Separately from any tokenized `lora_name`, the **ComfyUI Settings** drawer has a
-**LoRAs** section: click
-**+ Add LoRA**, pick a file from your installed LoRAs, and type a **strength**
-(keyboard entry, e.g. `0.3`, `0.85`, range **−5 to 5**). Add as many as you like.
+Independently of any checkpoint LoRA in the graph, the **LoRAs** control lets you add
+extra LoRAs to any workflow: click **+ Add LoRA**, pick a file from your installed
+LoRAs, and type a **strength** (e.g. `0.3`, `0.85`, range **−5 to 5**). Add as many as
+you like.
 
 These are spliced into the workflow at generate time — the app inserts a chain of
 `LoraLoader` nodes between the checkpoint's MODEL/CLIP and everything that consumes
@@ -107,15 +88,15 @@ surfaces an error (the run can't be queued). Workflows without a CLIP encoder us
 
 ### Optional / bypassable nodes
 
-Mark a node `_meta.bypassable` and the **ComfyUI Settings** drawer shows an
-**enable/disable** checkbox directly above that node's controls; unchecking it hides
-those controls and **removes the node** at generate time, reconnecting its
-passthrough (its `model` link input → whatever consumed its output), so an optional
-custom node can be turned off for anyone who doesn't have it installed:
+Mark a node `_meta.bypassable` and the form shows an **enable/disable** checkbox above
+that node's controls; unchecking it hides those controls and **removes the node** at
+generate time, reconnecting its passthrough (its `model` link input → whatever consumed
+its output), so an optional custom node can be turned off for anyone who doesn't have it
+installed:
 
 ```jsonc
 "400": {
-  "inputs": { "sage_attention": "{{sage_attention=auto}}", "model": ["127", 0] },
+  "inputs": { "sage_attention": "auto", "model": ["127", 0] },
   "class_type": "PathchSageAttentionKJ",
   "_meta": { "title": "Patch Sage Attention KJ", "bypassable": true }
 }
@@ -129,13 +110,6 @@ Add `_meta.bypassed_by_default: true` and the toggle starts **off**, for a node 
 shouldn't impose anything until it's asked for. Your saved settings win once the
 workflow has been run, so this only sets the starting state.
 
-The bundled MiniMax workflow ships two patch nodes chained: **Patch Sage Attention KJ**
-then **Model Attention Backend**, the second of them off by default. Both write the same
-`transformer_options["optimized_attention_override"]`, so they can't coexist and the
-**downstream node wins** — enabling the backend selector makes it authoritative,
-switching it back off hands control to the Sage patch, and with both off you get
-whatever ComfyUI was launched with.
-
 ### Per-workflow settings
 
 Your picks — control values, chosen model/LoRA/VAE/sampler, media, seed mode, the
@@ -148,7 +122,7 @@ re-importing a run from History) reloads it.
 
 A workflow in a subfolder keys on its path (`settings/comfy/<repo>/<name>.json`), so
 two repos can ship a same-named workflow without treading on each other. Move a
-workflow between folders and it starts from its token defaults again — its old
+workflow between folders and it starts from the export's own values again — its old
 settings file stays where it was.
 
 ## Image inputs & the gallery
@@ -164,20 +138,21 @@ At generate time the chosen image is pushed into ComfyUI's input folder and its
 gallery id is recorded on the History entry, so a **project export** bundles
 ComfyUI input images alongside API ones.
 
-### Optional / multiple references
+### Reference media — driven by the importing node
 
-A workflow can wire many reference-loader nodes (e.g. all 9 image / 3 video /
-3 audio slots of MiniMax H3) and tokenize each with a **numbered series** —
-`{{picture1}}`…`{{picture9}}`, `{{ref_video1}}`…, `{{ref_audio1}}`….
+Media (images / videos / audio) is exposed by the node that **imports** it, not by the
+`LoadImage` / `VHS_LoadVideo` loader nodes. A recognized consuming node declares its
+media collections (in its `node_types` entry — see the `references` schema in the
+[node_types README](../node_types/README.md)), and GENie renders a **multi-upload per
+collection** — the *same* component as the kie.ai reference-images dropzone, so it
+supports **drag-to-reorder**, **view full size** (⤢), and **Pick from gallery**.
 
-Media tokens that share a base name and end in a number are **grouped into one
-multi-upload field** — the *same* component as the kie.ai reference-images dropzone,
-so it supports **drag-to-reorder**, **view full size** (⤢), and **Pick from
-gallery**. Add several files; each thumbnail is labelled with the **exact tag to cite
-in the prompt** (see *Reference labels* below), and you can drag them to re-sort. The Nth
-file fills the Nth token; the field's width/order come from the first token in the
-series (`picture1`). URL drops aren't accepted here — ComfyUI needs a real file, so
-drop or browse a file (it's saved to the gallery first).
+At generate time GENie **injects one loader node per uploaded file** and wires it into
+the importing node's inputs, so you can add **1 or more** of each with no pre-wired
+slots. A collection you leave untouched keeps whatever wiring the export had baked.
+(MiniMax H3, for example, exposes up to **9 image / 3 video / 3 audio** references this
+way.) URL drops aren't accepted here — ComfyUI needs a real file, so drop or browse one
+(it's saved to the gallery first).
 
 ### Reference labels
 
@@ -202,106 +177,63 @@ reorder files. A workflow that drops the soundtrack link makes your audio file
 `<Audio 1>` — same files, different tag.
 
 The server reports `refLabelScheme: "minimax_h3"` for workflows containing a
-`MiniMaxH3ReferenceToVideo` node, plus a per-video-token `soundtrack` flag; other
+`MiniMaxH3ReferenceToVideo` node, plus a per-video `soundtrack` flag; other
 workflows keep each field's own numbering.
 
-Media is **optional**: any slot you leave empty has its **loader node pruned** from
-the submitted workflow (with its now-dangling connections), so you only fill the
-references you have — no "empty input" errors. Files fill from the top, so slots
-stay contiguous. (Pruning doesn't renumber, so a hand-built workflow that fills
-non-contiguous slots could leave a gap the node may reject — not possible via the
-grouped field, which always fills in order.)
+> **Reference-video tails ("use last N sec")** — trimming a reference to its last few
+> seconds (cheaper attention on continuations) was previously tied to the retired
+> `{{token}}` layer and is **not currently active** on the recognition path. Re-adding
+> it as a property of a recognized reference collection is tracked as follow-up work.
 
-### Reference-video tails ("use last N sec")
+## Continuations — carry state between runs
 
-Each reference **video** gets its own **use last N sec** box under the dropzone.
-Reference frames are re-injected on every sampling step, so a long reference is
-expensive: at 0.5 MP, a 15s target with a full 15s reference is ~123k tokens, while
-the same run with only the reference's last ~4s is ~74k — and attention cost grows
-faster than linearly, so the wall-clock saving is bigger than the token ratio. When
-you're continuing a shot, the tail is usually the only part that matters.
+Some workflows carry state from one run to the next — a sampler that writes something
+and reads it back, so a second clip continues the first. GENie supports that without
+knowing anything about the mechanism: it hands each run an **opaque integer**, remembers
+which run each one continued, and gives you a **Continue** button. What the number
+*means* is entirely the workflow's business.
 
-Leave the box at `0` (or blank) for the whole clip. The hint next to it shows the
-clip's length and how many frames the tail actually keeps.
-
-It's applied as **`skip_first_frames` on that reference's own loader**, not by
-re-encoding a trimmed file: frame-exact, instant, and `VHS_LoadVideo` derives its
-audio start from the same input, so a trimmed reference keeps its soundtrack in sync.
-
-**Frame-grid snapping.** MiniMax H3 truncates reference frames **from the end** to
-reach its 17k+5 frame grid — on a continuation that would silently drop the newest
-frames, the ones you're continuing from. So the kept count snaps *down* to the grid
-(5 / 22 / 39 / 56 / 73 / 90 / 124 …) and nothing is lost off the end. Declare the
-grid on the loader node; without it the tail is used as-is:
+This is the one place a workflow still opts in with a marker in the JSON. Tag two
+primitive value inputs with a continuation role:
 
 ```jsonc
-"144": {
-  "inputs": { "video": "{{ref_video1}}", "skip_first_frames": 0, … },
-  "class_type": "VHS_LoadVideo",
-  "_meta": { "title": "Load Video (Upload)", "tail_frame_grid": [17, 5] }
-}
+"610": { "inputs": { "value": "{{prev=0 ; continue.in}}"  }, "class_type": "PrimitiveInt" },
+"611": { "inputs": { "value": "{{cur=0 ; continue.out}}"  }, "class_type": "PrimitiveInt" }
 ```
 
-A video reference offers the control whenever its loader has a `skip_first_frames`
-input (override the input name with `_meta.tail_input`). Tails are remembered per
-file in the workflow's saved settings, and the **frames actually used** are recorded
-on the History entry, so re-importing a run restores the same trim.
+- **`continue.out`** receives a fresh integer for this run — unique, never reused.
+- **`continue.in`** receives the integer that was given to the run you're continuing
+  from, or `0` when there is no parent. Make `0` the default too (the natural "nothing
+  to continue" value).
 
-Measuring the clip needs **ffprobe** on the app server's PATH (ComfyUI already
-depends on ffmpeg for `VHS_VideoCombine` and reference-audio extraction, so it's
-normally there). Without it the run still queues — it just uses the whole clip and
-says so on the run.
+Wire those two inputs into whatever writes and reads your state. Neither shows up as a
+control — GENie fills them, so there's nothing to set by hand. Run the workflow once and
+its History card grows two buttons:
 
-### Pinned guide clips (continuation)
+- **⛓ Continue** — a new run that continues this one. Everything is re-imported, and
+  the **seed is re-rolled**, because reusing the parent's seed with near-identical
+  conditioning just reproduces the parent.
+- **↻ Re-roll** — redo *this* run into its own slot, keeping its place so anything
+  continuing from it stays valid. Plain **Re-run** deliberately forks instead: it
+  allocates a new integer and never overwrites.
 
-A plain reference video is positioned *before* the target on the model's shared time
-axis, which gives context but no frame-level tie to the target's first frame — so a
-"continue this shot" run tends to re-establish the scene instead of resuming.
-`MiniMaxH3AddGuide` is the hard mechanism: it writes `minimax_keyframes` into the
-conditioning, and those rows sit at the **same time coordinates as the target**, so the
-frames you anchor at `frame_idx 0` condition the opening of the generated clip.
+A banner shows while a continuation is armed, with a Cancel; re-importing anything else
+clears it. A continued run's History entry carries `continuation: { parentId, from,
+slot }` — who it continued, the integer it read, and the integer it was given. Ordinary
+runs, and runs of workflows that don't declare these roles, have `continuation: null`
+and behave exactly as before.
 
-The local `Minimax H3 (Continue)` workflow wires this from the reference loader itself,
-so there's no second upload and the guide always comes from whatever the reference tail
-left:
-
-```jsonc
-"503": { "inputs": { "value": "{{guide_len=22}}" }, "class_type": "PrimitiveInt" },
-// batch_index must be -guide_len; derive it so the two can't drift apart
-"501": { "inputs": { "expression": "-a", "values.a": ["503", 0] },
-         "class_type": "ComfyMathExpression" },                       // output 1 is the INT
-"502": { "inputs": { "image": ["144", 0], "batch_index": ["501", 1], "length": ["503", 0] },
-         "class_type": "ImageFromBatch" },                            // negative index = from the end
-"500": { "inputs": { "positive": ["136", 0], "latent": ["136", 1], "vae": ["119", 0],
-                     "image": ["502", 0], "frame_idx": 0 },
-         "class_type": "MiniMaxH3AddGuide" }
-```
-
-`BasicGuider`'s `conditioning` then reads `["500", 0]`; the sampler's `latent_image`
-still reads `["136", 1]`, since a guide only alters conditioning.
-
-- **Guide length** must land on the model's grid — 5, 22, 39, 56 … (`% 17 == 5`).
-  `nodes_minimax_h3.py` crops *down* to it, and anything under 5 collapses to a single
-  frame. 22 frames ≈ 0.9s ≈ 7 latent frames, ~3,640 tokens at 640×832.
-- **One frame pins position, not motion.** A multi-frame guide encodes real movement, so
-  velocity carries across the seam — usually what you want when continuing a shot.
-- **Guide frames are not copied through verbatim.** Condition rows and target rows are
-  packed side by side and the output is read from the target rows, so the opening frames
-  are regenerated under strong conditioning — near-identical, not byte-identical.
-- **Aspect must match the source clip.** Guide frames are resized with a *centre crop*
-  to the target's dimensions, so a mismatched `aspect_ratio`/`megapixels` crops them and
-  the seam jumps.
-- **The reference video is required** in that workflow: leaving it empty prunes its
-  loader and strands the guide chain's `image` input.
-- The `audio` anchor is left unwired. At `frame_idx 0` it pins up to the whole remaining
-  track, so it needs its own trimmed clip to be useful rather than the reference's.
+> The `{{prev=0 ; continue.in}}` marker is the **only** `{{token}}` GENie still reads.
+> It's an implementation detail of Continue, not a general authoring system — every
+> other control comes from node recognition.
 
 ## How a run works
 
 1. Image inputs are saved to the gallery, then pushed to ComfyUI (`/upload/image`).
-2. Empty optional reference loaders are pruned; any reference-video tail becomes a
-   `skip_first_frames` on its loader; remaining tokens are substituted
-   into a copy of the workflow (your file is never modified).
+2. The workflow is recognized and prepared in a **copy** (your file is never modified):
+   recognized control values are written into their nodes, reference media loaders are
+   injected and wired, continuation roles are filled, and any added LoRAs are spliced
+   in.
 3. The workflow is queued (`/prompt`) and its **pending History entry is created in
    the same request** (so a dropped connection right after — common on mobile —
    can't orphan the run); the app then polls `/history/{id}`. While it runs,
@@ -412,8 +344,9 @@ tune the frame count, the image size and a cheaper one-tile-per-step mode — se
 
 ## Notes & limits
 
-- Local models are labelled **Experimental** in the UI — the token/control layer is
-  generic and hasn't been exercised across many node types yet.
+- Local models are labelled **Experimental** in the UI — the recognition layer is
+  generic and hasn't been exercised across every node type yet. A node it doesn't
+  recognize still runs as-is; add a `node_types/` entry to expose its inputs.
 - Requires a workflow that **saves an output** (e.g. `VHS_VideoCombine`,
   `SaveImage`) — that's what the app pulls the result from.
 - Re-import from History reselects the workflow, refills text/number/dropdown
@@ -430,13 +363,6 @@ tune the frame count, the image size and a cheaper one-tile-per-step mode — se
   not in […]`, and a mid-run failure shows the failing node type + exception message.
   Common runtime failures get a short headline instead of the raw traceback: **out
   of VRAM**, **model mismatch** (state-dict/size mismatch), and **missing file**.
-- The bundled `workflows/Minimax H3 (Ref2Video).json` is a tokenized example showing
-  every control type: `prompt` (text), up to **9 image / 3 video / 3 audio**
-  optional references (`picture1`…`picture9`, `ref_video1`…, `ref_audio1`…),
-  `seed`/`duration`/`steps` (numbers), `aspect_ratio`/`megapixels`/`scheduler`/`ref_image_size`
-  (inline dropdowns), and `model`/`clip`/`video_vae`/`audio_vae` (installed-file
-  pickers from `/object_info`, shown in the **ComfyUI Settings** drawer), plus
-  width/order layout hints. Add extra LoRAs via the drawer's **LoRAs** section.
 - **MiniMax H3 reference videos need the comfy-kitchen attention backend.** H3 hands
   attention its `q`/`k` as slices of one fused qkv projection, so their sequence
   stride is `3·56·128 = 21504` elements. SageAttention and PyTorch attention (flash
@@ -446,11 +372,9 @@ tune the frame count, the image size and a cheaper one-tile-per-step mode — se
   sequence — 15s target + 15s reference at 0.5 MP is ~123k tokens — so it reliably
   crosses the line, while reference *images* barely move it. ComfyUI's own int8
   attention handles the layout correctly (and peaks lower on VRAM, since it quantizes
-  and frees `q`/`k`/`v` before attending), which is why the bundled workflow offers a
-  **Model Attention Backend** node downstream of the Sage patch. It ships **switched
-  off**, so nothing changes for runs that don't use a reference video — tick it in the
-  drawer and pick `comfy kitchen attention` before a reference-video run. Left off (on
-  Sage or PyTorch attention) keep target + reference duration under roughly 22 combined
-  seconds at 0.5 MP, halving that per doubling of megapixels. On an install without
-  comfy-kitchen attention the dropdown offers only `pytorch attention`, where the same
-  ceiling applies.
+  and frees `q`/`k`/`v` before attending), which is why a **Model Attention Backend**
+  node (bypassable, downstream of a Sage patch) is the reliable way to switch a
+  reference-video run onto `comfy kitchen attention`. Left on Sage or PyTorch
+  attention, keep target + reference duration under roughly 22 combined seconds at
+  0.5 MP, halving that per doubling of megapixels. On an install without comfy-kitchen
+  attention the dropdown offers only `pytorch attention`, where the same ceiling applies.

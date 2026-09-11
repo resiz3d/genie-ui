@@ -1210,7 +1210,7 @@ function applyModelUI() {
   document.getElementById("comfyCountField").classList.toggle("hidden", !comfy);
   document.getElementById("previewMethodField").classList.toggle("hidden", !comfy);
   if (comfy) {
-    // Swap the whole kie.ai form for token-driven workflow controls.
+    // Swap the whole kie.ai form for the recognized workflow controls.
     for (const id of KIE_FIELDS) document.getElementById(id).classList.add("hidden");
     estimateEl.classList.add("hidden");
     comfyRenderPromise = renderComfyControls(); // async (fetches ComfyUI options); awaited on re-import
@@ -1354,9 +1354,9 @@ document
 
 // =========================================================================
 // ComfyUI: local workflows chosen from the model dropdown. Each workflow's
-// {{tokens}} become form controls (inferred from the token name); on Generate
-// we upload any image inputs, post to the server, and reuse the job-card +
-// history flow. See docs/COMFYUI.md.
+// recognized nodes become form controls (see node_types/); on Generate we upload
+// any image inputs, post to the server, and reuse the job-card + history flow.
+// See docs/COMFYUI.md.
 // =========================================================================
 let comfyWorkflows = [];
 const comfyControlsEl = document.getElementById("comfyControls");
@@ -1784,8 +1784,9 @@ async function renderComfyControls() {
   }
   if (!wf.tokens.length) {
     comfyControlsEl.innerHTML =
-      `<p class="muted">No <code>{{tokens}}</code> found in <b>${escapeHtmlJs(wf.name)}</b>. ` +
-      `It will run exactly as saved. Add tokens like <code>{{prompt}}</code> to expose controls.</p>`;
+      `<p class="muted">No editable controls recognized in <b>${escapeHtmlJs(wf.name)}</b>. ` +
+      `It will run exactly as saved. Support for a node type is a small file in ` +
+      `<code>node_types/</code> — see its README.</p>`;
     return;
   }
 
@@ -1856,11 +1857,11 @@ async function renderComfyControls() {
   const bypassIds = new Set((meta.bypassable || []).map((b) => String(b.id)));
   comfyRefLabelScheme = meta.refLabelScheme || null; // null → keep each field's own numbering
 
-  // Recognized (raw-workflow) controls carry a `group` per source node, so the main
-  // form is rendered as one collapsible section per node type — Prompt, KSampler,
-  // Latent Image, … — instead of a flat grid. Tokenized workflows have no groups and
-  // render flat, exactly as before. `mainContainer(token)` returns where a control
-  // mounts: its group's <details> body in grouped mode, or the flat grid otherwise.
+  // Recognized controls carry a `group` per source node, so the main form is
+  // rendered as one collapsible section per node type — Prompt, KSampler, Latent
+  // Image, … — instead of a flat grid. A control without a group (or a workflow
+  // with none) falls back to the flat grid. `mainContainer(token)` returns where a
+  // control mounts: its group's <details> body in grouped mode, or the flat grid.
   const grouped = tokens.some((t) => t.group);
   const groupBodies = new Map(); // group key → body element (created lazily, in order)
   const mainContainer = (token) => {
