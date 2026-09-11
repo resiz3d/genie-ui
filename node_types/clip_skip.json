@@ -1,0 +1,19 @@
+{
+  "_comment": "CLIPSetLastLayer (a.k.a. CLIP skip) stops the CLIP text encoder at an earlier layer. The value is negative: -1 uses the final layer, -2 skips one, and so on. Exposed as a small number control so it can be tuned from the UI instead of running as-baked.",
+  "nodes": {
+    "CLIPSetLastLayer": {
+      "display_name": "CLIP Set Last Layer",
+      "recognize": {
+        "variants": [
+          {
+            "match": [{ "when": "any" }],
+            "group": "CLIP Skip",
+            "expose": {
+              "stop_at_clip_layer": { "name": "clip_skip", "label": "Stop at CLIP layer", "control": "number", "width": "1/3", "order": 60 }
+            }
+          }
+        ]
+      }
+    }
+  }
+}

@@ -14,7 +14,7 @@
   },
   "3": {
     "inputs": {
-      "text": "{{prompt ; #8}}",
+      "text": "Positive Prompt",
       "clip": [
         "2",
         0
@@ -27,7 +27,7 @@
   },
   "4": {
     "inputs": {
-      "text": "",
+      "text": "Negative Prompt",
       "clip": [
         "2",
         0
@@ -40,11 +40,11 @@
   },
   "5": {
     "inputs": {
-      "seed": "{{seed=566 ; 1/3 ; #4}}",
-      "steps": "{{steps=15 ; 1/3 ; #3}}",
+      "seed": 570,
+      "steps": 15,
       "cfg": 1,
-      "sampler_name": "{{sampler=euler ; 1/2 ; #6}}",
-      "scheduler": "{{scheduler=simple ; 1/2 ; #7}}",
+      "sampler_name": "euler",
+      "scheduler": "simple",
       "denoise": 1,
       "model": [
         "14",
@@ -70,9 +70,9 @@
   },
   "6": {
     "inputs": {
-      "width": "{{width=800 ; 1/2 ; #1}}",
-      "height": "{{height=1600 ; 1/2 ; #2}}",
-      "batch_size": "{{batch_size=1 ; 1/3 ; #5}}"
+      "width": 1600,
+      "height": 1200,
+      "batch_size": 4
     },
     "class_type": "EmptyLatentImage",
     "_meta": {
@@ -110,7 +110,7 @@
   },
   "12": {
     "inputs": {
-      "vae_name": "{{vae=ae.safetensors ; 1/2 ; #3}}"
+      "vae_name": "ae.safetensors"
     },
     "class_type": "VAELoader",
     "_meta": {
@@ -119,7 +119,7 @@
   },
   "13": {
     "inputs": {
-      "clip_name": "{{clip=qwen3_4b_fp8_scaled.safetensors ; 1/2 ; #2}}",
+      "clip_name": "qwen3_4b_fp8_scaled.safetensors",
       "type": "lumina2",
       "device": "default"
     },
@@ -130,7 +130,7 @@
   },
   "14": {
     "inputs": {
-      "unet_name": "{{model=Z-Image Turbo\\cyberrealisticZImage_v10.safetensors ; full ; #1}}",
+      "unet_name": "Z-Image Turbo\\cyberrealisticZImage_v10.safetensors",
       "weight_dtype": "default"
     },
     "class_type": "UNETLoader",
