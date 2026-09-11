@@ -20,3 +20,4 @@ images/
 #workflows
 workflows/*
 !workflows/default/
+!workflows/.place_your_workflows_here
