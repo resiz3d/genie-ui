@@ -9,7 +9,10 @@ with `COMFYUI_URL` in `.env`; defaults to `http://127.0.0.1:8188`).
 
 ## What goes here
 
-- **ComfyUI API-format `.json`** exports (Save → *Export (API)* in ComfyUI).
+- **ComfyUI API-format `.json`** exports. In ComfyUI, open your workflow and choose
+  **File → Export (API)**, then save the file here. (Older builds: enable
+  *Settings → Enable Dev mode Options* and use **Save (API Format)**.) The ordinary
+  *Export*/*Save* writes the graph format, which GENie can't run.
 
 Nothing to author: GENie **recognizes** the nodes in a raw export and builds the
 form from them. Adding support for a new node type is a small file in

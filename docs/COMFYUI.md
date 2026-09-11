@@ -14,11 +14,19 @@ nodes in it and builds a form automatically.
    COMFYUI_URL=http://127.0.0.1:8188
    ```
 
-2. Put **API-format** workflow exports (`.json`) in the `workflows/` folder (change
-   the location with `WORKFLOWS_DIR` in `.env`). In ComfyUI, enable
-   *Settings → Enable Dev mode Options* and use **Save (API Format)** — this is the
-   flat `{ "<nodeId>": { "inputs": …, "class_type": … } }` shape, not the editor's
-   graph export.
+2. **Export the workflow from ComfyUI in API format** and drop the `.json` into the
+   `workflows/` folder (change the location with `WORKFLOWS_DIR` in `.env`).
+
+   In ComfyUI, with your workflow open, choose **File → Export (API)** and save the
+   file into GENie's `workflows/` folder. (On older ComfyUI builds without that menu
+   item, enable *Settings → Enable Dev mode Options* first, then use **Save (API
+   Format)**.)
+
+   > **Use the API export, not the normal one.** *Export (API)* produces the flat
+   > `{ "<nodeId>": { "inputs": …, "class_type": … } }` shape GENie reads. The
+   > ordinary **File → Export** (or **Save**) writes the editor's *graph* format, which
+   > GENie can't run — so if a dropped workflow doesn't show controls, check you used
+   > *Export (API)*.
 
    Subfolders count: `git clone` a workflow repo into `workflows/<repo>/` and its
    files are listed as `<repo>/<name>` (`.git` and friends are skipped). See
