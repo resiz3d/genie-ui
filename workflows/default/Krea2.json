@@ -2,10 +2,7 @@
   "29": {
     "inputs": {
       "filename_prefix": "Krea2_turbo",
-      "images": [
-        "54",
-        0
-      ]
+      "images": ["54", 0]
     },
     "class_type": "SaveImage",
     "_meta": {
@@ -14,14 +11,8 @@
   },
   "51": {
     "inputs": {
-      "text": [
-        "62",
-        0
-      ],
-      "clip": [
-        "56",
-        0
-      ]
+      "text": ["62", 0],
+      "clip": ["56", 0]
     },
     "class_type": "CLIPTextEncode",
     "_meta": {
@@ -47,22 +38,10 @@
       "sampler_name": "euler",
       "scheduler": "simple",
       "denoise": 1,
-      "model": [
-        "77",
-        0
-      ],
-      "positive": [
-        "51",
-        0
-      ],
-      "negative": [
-        "58",
-        0
-      ],
-      "latent_image": [
-        "52",
-        0
-      ]
+      "model": ["77", 0],
+      "positive": ["51", 0],
+      "negative": ["58", 0],
+      "latent_image": ["52", 0]
     },
     "class_type": "KSampler",
     "_meta": {
@@ -71,14 +50,8 @@
   },
   "54": {
     "inputs": {
-      "samples": [
-        "53",
-        0
-      ],
-      "vae": [
-        "57",
-        0
-      ]
+      "samples": ["53", 0],
+      "vae": ["57", 0]
     },
     "class_type": "VAEDecode",
     "_meta": {
@@ -117,10 +90,7 @@
   },
   "58": {
     "inputs": {
-      "conditioning": [
-        "51",
-        0
-      ]
+      "conditioning": ["51", 0]
     },
     "class_type": "ConditioningZeroOut",
     "_meta": {
@@ -134,20 +104,6 @@
     "class_type": "PrimitiveStringMultiline",
     "_meta": {
       "title": "Text String (User Prompt)"
-    }
-  },
-  "77": {
-    "inputs": {
-      "lora_name": "krea2\\arthemyComicsKrea2_v11.safetensors",
-      "strength_model": 1,
-      "model": [
-        "55",
-        0
-      ]
-    },
-    "class_type": "LoraLoaderModelOnly",
-    "_meta": {
-      "title": "Load LoRA"
     }
   }
 }

@@ -30,14 +30,8 @@
   },
   "121": {
     "inputs": {
-      "samples": [
-        "125",
-        0
-      ],
-      "vae": [
-        "120",
-        0
-      ]
+      "samples": ["125", 0],
+      "vae": ["120", 0]
     },
     "class_type": "VAEDecodeAudio",
     "_meta": {
@@ -46,14 +40,8 @@
   },
   "122": {
     "inputs": {
-      "samples": [
-        "125",
-        0
-      ],
-      "vae": [
-        "119",
-        0
-      ]
+      "samples": ["125", 0],
+      "vae": ["119", 0]
     },
     "class_type": "VAEDecode",
     "_meta": {
@@ -74,10 +62,7 @@
       "scheduler": "simple",
       "steps": 10,
       "denoise": 1,
-      "model": [
-        "127",
-        0
-      ]
+      "model": ["127", 0]
     },
     "class_type": "BasicScheduler",
     "_meta": {
@@ -86,26 +71,11 @@
   },
   "125": {
     "inputs": {
-      "noise": [
-        "129",
-        0
-      ],
-      "guider": [
-        "126",
-        0
-      ],
-      "sampler": [
-        "123",
-        0
-      ],
-      "sigmas": [
-        "124",
-        0
-      ],
-      "latent_image": [
-        "136",
-        1
-      ]
+      "noise": ["129", 0],
+      "guider": ["126", 0],
+      "sampler": ["123", 0],
+      "sigmas": ["124", 0],
+      "latent_image": ["136", 1]
     },
     "class_type": "SamplerCustomAdvanced",
     "_meta": {
@@ -114,14 +84,8 @@
   },
   "126": {
     "inputs": {
-      "model": [
-        "401",
-        0
-      ],
-      "conditioning": [
-        "136",
-        0
-      ]
+      "model": ["401", 0],
+      "conditioning": ["136", 0]
     },
     "class_type": "BasicGuider",
     "_meta": {
@@ -130,7 +94,7 @@
   },
   "127": {
     "inputs": {
-      "unet_name": "Minimax\\minimax_h3_fastvideo_vsa_datafree_1300step_4step_int8_convrot.safetensors",
+      "unet_name": "minimax_h3_fastvideo_vsa_datafree_1300step_4step_int8_convrot.safetensors",
       "weight_dtype": "default"
     },
     "class_type": "UNETLoader",
@@ -161,10 +125,7 @@
   "131": {
     "inputs": {
       "expression": "max(5, round(a * 24)) + (5 - (max(5, round(a * 24)) % 17)) % 17",
-      "values.a": [
-        "132",
-        0
-      ]
+      "values.a": ["132", 0]
     },
     "class_type": "ComfyMathExpression",
     "_meta": {
@@ -182,39 +143,15 @@
   },
   "136": {
     "inputs": {
-      "prompt": [
-        "138",
-        0
-      ],
-      "width": [
-        "115",
-        0
-      ],
-      "height": [
-        "115",
-        1
-      ],
-      "length": [
-        "131",
-        1
-      ],
+      "prompt": ["138", 0],
+      "width": ["115", 0],
+      "height": ["115", 1],
+      "length": ["131", 1],
       "ref_image_size": "match",
-      "clip": [
-        "128",
-        0
-      ],
-      "vae": [
-        "119",
-        0
-      ],
-      "audio_vae": [
-        "120",
-        0
-      ],
-      "ref_images.ref_image_0": [
-        "137",
-        0
-      ]
+      "clip": ["128", 0],
+      "vae": ["119", 0],
+      "audio_vae": ["120", 0],
+      "ref_images.ref_image_0": ["137", 0]
     },
     "class_type": "MiniMaxH3ReferenceToVideo",
     "_meta": {
@@ -242,10 +179,7 @@
   "401": {
     "inputs": {
       "attention": "comfy kitchen attention",
-      "model": [
-        "127",
-        0
-      ]
+      "model": ["127", 0]
     },
     "class_type": "ModelAttentionBackend",
     "_meta": {
@@ -259,10 +193,7 @@
       "format.codec": "h264",
       "format.codec.encoding": "auto",
       "codec": "auto",
-      "video": [
-        "403",
-        0
-      ]
+      "video": ["403", 0]
     },
     "class_type": "SaveVideo",
     "_meta": {
@@ -274,14 +205,8 @@
       "fps": 24,
       "bit_depth": "auto",
       "color_space": "sRGB",
-      "images": [
-        "122",
-        0
-      ],
-      "audio": [
-        "121",
-        0
-      ]
+      "images": ["122", 0],
+      "audio": ["121", 0]
     },
     "class_type": "CreateVideo",
     "_meta": {
