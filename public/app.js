@@ -1274,9 +1274,8 @@ function updateModelChrome() {
   const label = modelSelect.options[modelSelect.selectedIndex].textContent.replace(/\s*\(.*\)$/, "").trim();
   if (isComfy()) {
     document.getElementById("pageTitle").textContent = label;
-    document.getElementById("pageSub").innerHTML =
-      `Run ${escapeHtmlJs(label)} on your local ComfyUI ` +
-      `<span class="experimental-tag">Experimental</span>`;
+    document.getElementById("pageSub").textContent =
+      `Run ${label} on your local ComfyUI`;
     document.title = `GENie — ${label}`;
     submitBtn.textContent = "Generate";
     return;
@@ -1382,7 +1381,7 @@ async function loadWorkflows() {
   modelSelect.querySelector('optgroup[data-comfy]')?.remove();
   if (comfyWorkflows.length) {
     const group = document.createElement("optgroup");
-    group.label = "Local · ComfyUI (Experimental)";
+    group.label = "Local · ComfyUI";
     group.setAttribute("data-comfy", "");
     for (const w of comfyWorkflows) {
       const opt = new Option(w.error ? `${w.name} (invalid JSON)` : w.name, `comfy:${w.file}`);

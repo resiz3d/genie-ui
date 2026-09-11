@@ -352,9 +352,9 @@ tune the frame count, the image size and a cheaper one-tile-per-step mode — se
 
 ## Notes & limits
 
-- Local models are labelled **Experimental** in the UI — the recognition layer is
-  generic and hasn't been exercised across every node type yet. A node it doesn't
-  recognize still runs as-is; add a `node_types/` entry to expose its inputs.
+- The recognition layer is generic and hasn't been exercised across every node type
+  yet. A node it doesn't recognize still runs as-is; add a `node_types/` entry to
+  expose its inputs.
 - Requires a workflow that **saves an output** (e.g. `VHS_VideoCombine`,
   `SaveImage`) — that's what the app pulls the result from.
 - Re-import from History reselects the workflow, refills text/number/dropdown

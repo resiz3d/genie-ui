@@ -4,25 +4,38 @@
 
 # GENie
 
-*Your wish, rendered.* A tiny local web app for generating images and video from
-both **cloud models** and **your own local ComfyUI**, all from one UI — pick the
-model per generation and the form adapts to it.
+*Your wish, rendered.* A tiny local web app that is, first, a **friendly front-end
+for your own ComfyUI** and a **project manager** for everything you generate — and,
+secondarily, a client for **cloud models** via [kie.ai](https://kie.ai). Everything
+runs from one UI: pick a workflow (or a cloud model) per generation and the form
+adapts to it.
 
-**Cloud models** via [kie.ai](https://kie.ai): **Seedance 2.5** / **Seedance 2** /
-**Seedance 2 Fast** / **Seedance 2 Mini** (video; 2.5, Fast and Mini are 480p/720p
-only — 2.5 adds start/end keyframes, an adaptive aspect ratio, up to 30s duration,
-and mp4/mov output) and **Seedream 5.0 Lite** image-to-image / text-to-image (the
-form adapts: quality tier instead of resolution/duration, image references only —
-or none at all for text-to-image — and results display as images).
+**Local ComfyUI — the main event.** Drop a raw ComfyUI API export into `workflows/`
+and pick it from the Model dropdown like any other model. There is **nothing to
+author**: GENie recognizes the nodes in the export (KSampler, prompts, latent size,
+loaders, savers, …) and builds a form for them automatically, node by node. Add extra
+LoRAs, toggle optional nodes, watch live sampler previews and host GPU/VRAM stats, and
+carry state between runs with the Continue feature. Supporting a new node type is a
+small file you drop in — no code. See [`docs/COMFYUI.md`](docs/COMFYUI.md).
 
-**Local ComfyUI:** run tokenized `.json` workflows from the same Model dropdown —
-drop them in `workflows/` and pick them like any other model. See
-[`docs/COMFYUI.md`](docs/COMFYUI.md).
+**Project manager.** Every generation — local or cloud — lands in a **project** with
+its own gallery, history, and output folder: drag-and-drop reference media, re-import
+or re-run any past generation, and **export** a self-contained, shareable bundle of a
+project's history. Your whole library of prompts, references, and results stays
+organized on your own disk.
 
-A small Express server keeps your API key on the server side (never exposed to the
-browser) and proxies requests to the kie.ai API; local ComfyUI runs talk to your
-own ComfyUI instance. A single-page UI lets you submit a prompt + reference media,
-then polls until the result is ready.
+**Cloud models (optional)** via [kie.ai](https://kie.ai): **Seedance 2.5** /
+**Seedance 2** / **Seedance 2 Fast** / **Seedance 2 Mini** (video; 2.5, Fast and Mini
+are 480p/720p only — 2.5 adds start/end keyframes, an adaptive aspect ratio, up to 30s
+duration, and mp4/mov output) and **Seedream 5.0 Lite** image-to-image / text-to-image
+(the form adapts: quality tier instead of resolution/duration, image references only —
+or none at all for text-to-image — and results display as images). Add a kie.ai API key
+to enable these; skip it and GENie is a pure ComfyUI front-end.
+
+A small Express server runs the whole thing locally: local ComfyUI runs talk to your
+own ComfyUI instance, and — if you add a key — it keeps that key server-side (never
+exposed to the browser) and proxies requests to kie.ai. A single-page UI lets you
+submit a prompt + reference media, then polls until the result is ready.
 
 ![Screenshot of GENie](screenshot.png)
 
@@ -32,28 +45,30 @@ then polls until the result is ready.
 
 ## Features
 
-- **Drag-and-drop reference media** — images, videos, and audio each have a
-  dropzone: drop local files (or click to browse, or drag a URL in). Files are
-  saved locally on drop and only uploaded to kie.ai's file host when you click
-  Generate. Each shows a thumbnail with an **×** to remove and a **Clear all**
-  button.
-- **Media gallery** — every dropped file is kept in a gallery (video/audio get a
-  kind badge); expand it to click any past item back into the matching reference
-  list. Hosting happens fresh at generate time, so kie.ai's ~3-day URL expiry
-  never matters.
-- **Labeled, reorderable references** — thumbnails are labeled `Image1`/`Video1`/
-  `Audio1`, … matching the `@Image1`-style tokens you use in the prompt. Drag
-  thumbnails to reorder within a list; the labels (and the order sent to the API)
-  update accordingly.
-- **Generation history** — every successful generation is saved to `history.json`
-  with its prompt, settings, reference URLs, and measured credit cost. Each entry
-  has **Re-import** (load the settings back into the form) and **Re-run** (load +
-  generate again). Re-runs re-host the saved reference images automatically.
-- **Saved videos** — finished videos are downloaded into the `output/` folder, and
-  the history record links to both the local copy and the original URL.
-- **Reload-safe** — the in-flight task id is saved to `localStorage`, so closing or
-  reloading the tab mid-generation resumes polling automatically on the next load
-  (generations can take 5+ minutes; nothing is held on an open connection).
+### Local ComfyUI front-end
+
+- **Zero-authoring workflows** — drop a raw **File → Export (API)** `.json` in
+  `workflows/` and GENie recognizes its nodes and builds the form automatically,
+  rendering each recognized node as its own collapsible section. Nodes it doesn't
+  recognize run exactly as saved. See [`docs/COMFYUI.md`](docs/COMFYUI.md).
+- **Extensible by data, not code** — supporting a new node type is a small JSON file
+  in [`node_types/`](node_types/); no server changes. A file you add can also override
+  a shipped one.
+- **Live model options** — dropdowns for models, LoRAs, VAEs, and samplers fill from
+  your running ComfyUI (`/object_info`), and number fields pick up their real
+  min/max/step, so you pick from exactly what's installed.
+- **Dynamic LoRAs & optional nodes** — add extra LoRAs to any checkpoint workflow, and
+  flip `_meta.bypassable` "patch" nodes on/off (they're removed and reconnected at
+  generate time) without editing the graph.
+- **Live previews & host stats** — a run's card shows the frame forming each sampler
+  step plus a CPU/GPU/VRAM strip; an optional
+  [filmstrip node](docs/COMFYUI.md#filmstrip-previews) turns a video preview into a
+  grid across the clip.
+- **Continue** — workflows that carry state between runs get an opaque per-run id and
+  a Continue button, so a second clip can pick up where the first left off.
+
+### Project manager
+
 - **Projects** — divide generations into projects via the header switcher (＋ new,
   ✎ rename, 🗑 delete). Each project gets its own `input/<slug>/` and
   `output/<slug>/` subfolders; the gallery is strictly per-project and history can
@@ -61,15 +76,38 @@ then polls until the result is ready.
   before saving the result to the active project. Deleting a project moves its
   media and history to Default. Pre-project data is auto-migrated to Default on
   first start.
+- **Generation history** — every successful generation (local or cloud) is saved to
+  `history.json` with its prompt, settings, references, and — for cloud runs —
+  measured credit cost. Each entry has **Re-import** (load the settings back into the
+  form) and **Re-run** (load + generate again).
+- **Media gallery** — every dropped file is kept in a per-project gallery (video/audio
+  get a kind badge); expand it to click any past item back into the matching reference
+  list.
+- **Drag-and-drop reference media** — images, videos, and audio each have a dropzone:
+  drop local files (or click to browse, or drag a URL in). Thumbnails are labeled and
+  reorderable — drag to re-sort and the labels update. Each has an **×** to remove and
+  a **Clear all** button.
+- **Saved results** — finished videos/images are downloaded into the `output/` folder,
+  and the history record links to the local copy (and, for cloud runs, the original
+  URL).
 - **Export** — the **📦 Export** button (next to Open folder) writes the shown
   history to a new self-contained subfolder in `exports/`: a standalone
   `index.html` (prompt + reference thumbnails on the left, the result on the
   right, all click-to-enlarge, with model/resolution/aspect/duration/credit-cost
   details) plus `input/` and `output/` folders holding copies of every reference
   and result file. Zip the folder to share it — it needs no server. Exports one
-  project at a time (pick
-  a specific project in the History filter first); override the location with
-  `EXPORTS_DIR` in `.env`.
+  project at a time (pick a specific project in the History filter first); override
+  the location with `EXPORTS_DIR` in `.env`.
+- **Reload-safe** — the in-flight task id is saved to `localStorage`, so closing or
+  reloading the tab mid-generation resumes polling automatically on the next load
+  (generations can take 5+ minutes; nothing is held on an open connection).
+
+### kie.ai cloud (optional)
+
+- **Cloud reference hosting** — dropped files are saved locally and only uploaded to
+  kie.ai's file host at generate time, so kie.ai's ~3-day URL expiry never matters;
+  re-runs re-host saved references automatically. In prompts, `@Image1`/`@Video1`/…
+  match the reference thumbnail labels.
 - **Live credit balance** — shown in the header (`GET /api/v1/chat/credit`), with a
   refresh button.
 - **Cost estimate** — kie.ai has no price-preview API, so cost is *measured*: the
@@ -92,9 +130,10 @@ You'll need [Node.js](https://nodejs.org) 18+ (uses the built-in `fetch`).
 # 1. Install dependencies
 npm install
 
-# 2. Add your API key
+# 2. Create your config (optional: add a kie.ai key for cloud models)
 cp .env.example .env        # on Windows: copy .env.example .env
-#   then edit .env and paste your key from https://kie.ai/api-key
+#   for the cloud models, edit .env and paste your key from https://kie.ai/api-key
+#   — skip this and GENie runs as a pure ComfyUI front-end
 
 # 3. Run it
 npm start
@@ -104,13 +143,20 @@ Open <http://localhost:3000> in your browser.
 
 For auto-restart while developing: `npm run dev`.
 
-## Getting an API key
+To run **local ComfyUI workflows**, point GENie at your ComfyUI instance (defaults to
+`http://127.0.0.1:8188`) — see [`docs/COMFYUI.md`](docs/COMFYUI.md). No API key needed
+for local workflows.
+
+## Getting an API key (for cloud models)
+
+The kie.ai key is only needed for the **cloud** models — local ComfyUI workflows don't
+use it. To enable the cloud models:
 
 1. Go to <https://kie.ai/api-key>
 2. Create a key and copy it into `.env` as `KIE_API_KEY=...`
 
-**Each person running the app needs their own key.** Generations are billed to the
-key's account.
+**Each person running the app needs their own key**, and cloud generations are billed
+to the key's account.
 
 ## Updating to a newer version (complete beginner)
 

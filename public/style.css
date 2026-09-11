@@ -1337,21 +1337,7 @@ img.zoomable {
   }
 }
 
-/* --- ComfyUI (experimental local models) --- */
-.experimental-tag {
-  display: inline-block;
-  margin-left: 6px;
-  padding: 1px 7px;
-  font-size: 0.7rem;
-  font-weight: 600;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
-  color: #ffcf7a;
-  background: rgba(255, 176, 60, 0.12);
-  border: 1px solid rgba(255, 176, 60, 0.35);
-  border-radius: 999px;
-  vertical-align: middle;
-}
+/* --- ComfyUI (local models) --- */
 .comfy-gallery {
   margin-top: 8px;
 }
