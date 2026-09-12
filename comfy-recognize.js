@@ -236,9 +236,10 @@ function variantsOf(entry) {
 // describes it, for combo/number enrichment) and `targets` (where the value is
 // written at submit). Names are made unique with numeric suffixes.
 //
-// Returns { controls: [...] }. Pure and offline: no ComfyUI needed.
+// Returns { controls, references, handledNodeIds, bypassable }. Pure and offline: no
+// ComfyUI needed.
 export function recognizeWorkflow(workflow, nodeTypes) {
-  if (!workflow || typeof workflow !== "object") return { controls: [], handledNodeIds: new Set() };
+  if (!workflow || typeof workflow !== "object") return { controls: [], references: [], handledNodeIds: new Set(), bypassable: [] };
   const fwd = forwardIndex(workflow);
   const controls = [];
   // Node ids GENie surfaced a control for (or traced a value out of). Everything
@@ -322,6 +323,7 @@ export function recognizeWorkflow(workflow, nodeTypes) {
         name,
         label: spec.label || null,
         default: traced.value == null ? "" : String(traced.value),
+        control: spec.control || null, // the declared kind — lets the UI pick a widget offline
         options: Array.isArray(spec.options) ? spec.options : [],
         width: spec.width || null,
         order: Number.isFinite(spec.order) ? spec.order : null,
@@ -371,7 +373,24 @@ export function recognizeWorkflow(workflow, nodeTypes) {
     handledNodeIds.add(String(nodeId));
   }
 
-  return { controls, references, handledNodeIds };
+  // Optional model-patch nodes the library marks `bypassable` (Sage Attention, an
+  // attention backend, a step-forecasting cache, …) get the same enable/disable toggle
+  // a workflow can ask for with `_meta.bypassable`, so a raw export needs no hand edit.
+  // The toggle is itself a control, so the node counts as handled.
+  const bypassable = [];
+  for (const nodeId of ids) {
+    const node = workflow[nodeId];
+    const entry = nodeTypes.get(node?.class_type);
+    if (!entry?.bypassable) continue;
+    bypassable.push({
+      id: String(nodeId),
+      title: node._meta?.title || entry.display_name || node.class_type,
+      off: entry.bypassed_by_default === true,
+    });
+    handledNodeIds.add(String(nodeId));
+  }
+
+  return { controls, references, handledNodeIds, bypassable };
 }
 
 // Find the largest numeric node id in a workflow (new injected nodes get ids above

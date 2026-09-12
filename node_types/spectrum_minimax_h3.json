@@ -1,0 +1,33 @@
+{
+  "_comment": "Spectrum for MiniMax H3 (ComfyUI-Spectrum-MiniMax-H3) — forecasts some sampler steps' features instead of running the transformer, trading a little fidelity for speed. A MODEL patch like the attention nodes, so it's `bypassable` (the toggle removes it; that also covers the node's own `enabled` input, which is left baked). The everyday knobs are exposed; the experimental/research switches (model_aware_*, generic_correction_*, anchor_residual_feedback, selective_rollback_correction, sa_pece_forecast_policy, debug) keep the export's values.",
+  "nodes": {
+    "SpectrumApplyMiniMaxH3": {
+      "display_name": "Spectrum Apply MiniMax H3",
+      "bypassable": true,
+      "recognize": {
+        "variants": [
+          {
+            "match": [{ "when": "any" }],
+            "group": "Spectrum (step forecasting)",
+            "collapsed": true,
+            "expose": {
+              "blend_weight":             { "name": "spectrum_blend_weight",       "label": "Video blend weight",       "control": "number", "width": "1/2", "order": 64.01 },
+              "audio_blend_weight":       { "name": "spectrum_audio_blend_weight", "label": "Audio blend weight",       "control": "number", "width": "1/2", "order": 64.02 },
+              "degree":                   { "name": "spectrum_degree",             "label": "Degree",                   "control": "number", "width": "1/4", "order": 64.03 },
+              "ridge_lambda":             { "name": "spectrum_ridge_lambda",       "label": "Ridge λ",                  "control": "number", "width": "1/4", "order": 64.04 },
+              "window_size":              { "name": "spectrum_window_size",        "label": "Window size",              "control": "number", "width": "1/4", "order": 64.05 },
+              "flex_window":              { "name": "spectrum_flex_window",        "label": "Flex window",              "control": "number", "width": "1/4", "order": 64.06 },
+              "warmup_steps":             { "name": "spectrum_warmup_steps",       "label": "Warmup steps",             "control": "number", "width": "1/3", "order": 64.07 },
+              "tail_actual_steps":        { "name": "spectrum_tail_steps",         "label": "Tail actual steps",        "control": "number", "width": "1/3", "order": 64.08 },
+              "max_history":              { "name": "spectrum_max_history",        "label": "Max history",              "control": "number", "width": "1/3", "order": 64.09 },
+              "bootstrap_first_forecast": { "name": "spectrum_bootstrap",          "label": "Bootstrap first forecast", "control": "toggle", "width": "1/2", "order": 64.10 },
+              "offline_smoothing_replay": { "name": "spectrum_offline_replay",     "label": "Offline smoothing replay", "control": "toggle", "width": "1/2", "order": 64.11 },
+              "history_storage":          { "name": "spectrum_history_storage",    "label": "History storage",          "control": "combo",  "width": "1/2", "order": 64.12 },
+              "offline_archive_storage":  { "name": "spectrum_archive_storage",    "label": "Replay archive storage",   "control": "combo",  "width": "1/2", "order": 64.13 }
+            }
+          }
+        ]
+      }
+    }
+  }
+}

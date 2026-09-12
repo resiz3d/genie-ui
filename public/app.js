@@ -1423,6 +1423,8 @@ function comfyControlType(token) {
   if (token.options?.length) return "select";
   const n = token.name.toLowerCase();
   const key = (token.inputKey || "").toLowerCase();
+  // A BOOLEAN input (from /object_info), or one the node_types entry declares a toggle.
+  if (token.bool || token.control === "toggle") return "toggle";
   if (/prompt/.test(n)) return "textarea";
   // Online, /object_info is authoritative. A combo is a dropdown of installed
   // choices (checkpoints, LoRAs, VAEs, samplers, schedulers) — UNLESS it's an
@@ -1430,6 +1432,11 @@ function comfyControlType(token) {
   // `uploadKind` and gets the upload dropzone instead.
   if (token.combo) return token.uploadKind || "select";
   if (token.num) return "number";
+  // A recognized control's declared kind beats guessing from its name, which misfires
+  // on names like "spectrum_audio_blend_weight" (not an audio upload).
+  if (token.control === "number") return "number";
+  if (token.control === "text") return token.multiline ? "textarea" : "text";
+  if (token.control === "combo") return "text"; // choices unavailable (offline / node not installed)
   // Offline / non-combo fallback by name. A model-file selector input (vae_name,
   // ckpt_name, unet_name, lora_name, clip_name, …) is never a media upload even if
   // its token name contains "video"/"audio" (e.g. `video_vae`).
@@ -1863,6 +1870,10 @@ async function renderComfyControls() {
   // control mounts: its group's <details> body in grouped mode, or the flat grid.
   const grouped = tokens.some((t) => t.group);
   const groupBodies = new Map(); // group key → body element (created lazily, in order)
+  // Enable/disable toggles for optional patch nodes (e.g. Sage Attention). A
+  // recognized node's toggle sits at the top of its own section, above the controls it
+  // hides; the rest land in the Settings drawer below.
+  comfyBypassControl = (meta.bypassable || []).length ? makeComfyBypassControl(meta.bypassable) : null;
   const mainContainer = (token) => {
     if (!grouped || !token.group) return comfyControlsEl;
     let body = groupBodies.get(token.group.key);
@@ -1877,6 +1888,9 @@ async function renderComfyControls() {
       body.className = "comfy-node-group-body comfy-grid";
       details.append(summary, body);
       comfyControlsEl.appendChild(details);
+      if (comfyBypassControl && bypassIds.has(String(token.group.key))) {
+        body = comfyBypassControl.mountGroup(body, token.group.key);
+      }
       groupBodies.set(token.group.key, body);
     }
     return body;
@@ -1928,10 +1942,8 @@ async function renderComfyControls() {
   const body = document.createElement("div");
   body.className = "comfy-settings-body comfy-grid";
   details.appendChild(body);
-  // Enable/disable toggles for optional patch nodes (e.g. Sage Attention). Each
-  // node's controls render inside its toggle's group (hidden when disabled); the
-  // checkbox sits directly above them.
-  comfyBypassControl = (meta.bypassable || []).length ? makeComfyBypassControl(meta.bypassable) : null;
+  // Settings-drawer controls of a bypassable node render inside its toggle's group
+  // (hidden when disabled); the checkbox sits directly above them.
   for (const it of settingsScalars) {
     const nid = String(it.token.nodeId ?? "");
     if (comfyBypassControl && bypassIds.has(nid)) {
@@ -2260,6 +2272,29 @@ function renderScalarControl(token, type, container = comfyControlsEl) {
     parsedOptions.every((o) => o.value !== "" && !Number.isNaN(Number(o.value)));
 
   let input;
+  if (type === "toggle") {
+    // A checkbox, labeled beside it rather than above (no field-head).
+    const asBool = (v) => v === true || v === "true" || v === 1 || v === "1";
+    input = document.createElement("input");
+    input.type = "checkbox";
+    input.checked = asBool(token.default);
+    const label = document.createElement("label");
+    label.className = "inline";
+    label.append(input, document.createTextNode(` ${token.label || prettyLabel(token.name)}`));
+    head.remove();
+    field.classList.add("field-toggle");
+    field.appendChild(label);
+    container.appendChild(field);
+    comfyFields.push({
+      name: token.name,
+      getValue: async () => input.checked,
+      peek: () => input.checked,
+      set: (v) => { input.checked = asBool(v); },
+      pin: !!token.pin,
+      lock: (on) => { input.disabled = !!on; field.classList.toggle("locked", !!on); },
+    });
+    return;
+  }
   if (type === "select") {
     const initial = parsedOptions.some((o) => o.value === token.default) ? token.default : parsedOptions[0]?.value ?? "";
     if (parsedOptions.length > 10) {

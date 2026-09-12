@@ -114,6 +114,11 @@ Best for single-in/single-out model "patch" nodes (Sage Attention, attention bac
 model-sampling patches, …) — the passthrough is taken from the node's `model` input (or
 its sole link input).
 
+Common patch nodes don't need the flag: their [`node_types/`](../node_types/) entry is
+marked `bypassable`, so a raw export gets the checkbox at the top of the node's section
+as-is. That currently covers `PathchSageAttentionKJ`, `ModelAttentionBackend`,
+`SolAttnPatch` and `SpectrumApplyMiniMaxH3`.
+
 Add `_meta.bypassed_by_default: true` and the toggle starts **off**, for a node that
 shouldn't impose anything until it's asked for. Your saved settings win once the
 workflow has been run, so this only sets the starting state.

@@ -37,6 +37,8 @@ user drop-in can override a shipped entry — the same shipped-vs-yours idea as
 | `display_name` | Human label (reference/UI only). |
 | `output` | `true` marks a terminal/sink node (SaveImage, VideoCombine). The `feeds_output` predicate walks toward these. |
 | `value_source` | `{ "input": "value" }` — marks a passthrough value provider (a Primitive\*). When another node's exposed input is *wired from* this node, recognition follows the link here to the real editable value. |
+| `bypassable` | `true` gives every instance an **enable/disable** checkbox at the top of its section; unchecked, the node is removed at generate time and its `model` link reconnected. For optional MODEL-in/MODEL-out patches (Sage Attention, attention backends, Sol-Attn, Spectrum — see `attention.json`). The same as a workflow's `_meta.bypassable`, without editing the export. |
+| `bypassed_by_default` | `true` with `bypassable` starts the checkbox **off**. Saved settings win once the workflow has run. |
 | `recognize` | How this node becomes controls (below). |
 | _anything else_ | Free-form reference metadata (schema, install notes, tokenize hints). Ignored by the engine. |
 
@@ -81,7 +83,7 @@ user drop-in can override a shipped entry — the same shipped-vs-yours idea as
 | --- | --- |
 | `name` | The control's form key (defaults to the input key). Reuse the token naming heuristics: a name containing `seed` gets the seed widget, `prompt` gets a multi-line box, numeric names get number boxes. Duplicate names are auto-suffixed `_2`, `_3`. |
 | `label` | Display label. |
-| `control` | `number` \| `text` \| `combo` \| `seed` \| `media` \| `toggle`. Combos/numbers still enrich from ComfyUI `/object_info` (installed files, real min/max). |
+| `control` | `number` \| `text` \| `combo` \| `seed` \| `media` \| `toggle`. Combos/numbers still enrich from ComfyUI `/object_info` (installed files, real min/max), and a `BOOLEAN` input renders as a checkbox. The declared kind also picks the widget when ComfyUI is offline, so a name like `audio_blend_weight` isn't mistaken for an upload. Per-format widgets that `/object_info` only describes under a combo's `formats` (VHS Video Combine's `crf`, `pix_fmt`) enrich from there. |
 | `multiline` | `true` with `control: "text"` for a textarea. |
 | `options` | Inline dropdown choices, if you don't want `/object_info` to fill them. |
 | `width` | Grid span: `full`, `1/2`, `1/3`, `1/4`, `2/3`, `3/4`. |

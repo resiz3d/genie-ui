@@ -19,7 +19,6 @@
     },
     "PreviewImage":   { "display_name": "Preview Image", "output": true },
     "SaveAnimatedWEBP": { "display_name": "Save WEBP",  "output": true },
-    "VHS_VideoCombine": { "display_name": "Video Combine (VHS)", "output": true },
     "SaveAudio":      { "display_name": "Save Audio",   "output": true }
   }
 }

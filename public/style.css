@@ -1551,6 +1551,11 @@ img.zoomable {
   gap: 16px;
   align-items: start;
 }
+/* A checkbox control sharing a row with inputs lines up with them, not their labels. */
+.comfy-grid > .field-toggle {
+  align-self: end;
+  padding-bottom: 0.55rem;
+}
 .comfy-grid > * {
   grid-column: span 12;
   margin: 0;

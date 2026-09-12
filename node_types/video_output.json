@@ -1,5 +1,5 @@
 {
-  "_comment": "The video output pair. CreateVideo assembles frames (+ optional audio) into a video and carries the frame-rate / bit-depth / color-space; SaveVideo writes it and holds the filename+path and container/codec. SaveVideo is the graph terminal (output: true). The nested codec widgets ComfyUI encodes as dotted keys (format.codec, …) are left baked. Combos populate from /object_info when the node is installed, otherwise they stay editable text.",
+  "_comment": "The video output pair. CreateVideo assembles frames (+ optional audio) into a video and carries the frame-rate / bit-depth / color-space; SaveVideo writes it and holds the filename+path and container/codec. SaveVideo is the graph terminal (output: true). The nested codec widgets ComfyUI encodes as dotted keys (format.codec, …) are left baked. Combos populate from /object_info when the node is installed, otherwise they stay editable text. VHS_VideoCombine (VideoHelperSuite) does both jobs in one output node; its `crf` / `pix_fmt` exist only for some formats, and enrich from the format combo's per-format widget list (options follow the format the export was saved with).",
   "nodes": {
     "CreateVideo": {
       "display_name": "Create Video",
@@ -31,6 +31,26 @@
               "filename_prefix": { "name": "filename_prefix", "label": "Filename & path", "control": "text",  "width": "full", "order": 90 },
               "format":          { "name": "format",          "label": "Container",       "control": "combo", "width": "1/2",  "order": 91 },
               "codec":           { "name": "codec",            "label": "Codec",           "control": "combo", "width": "1/2",  "order": 92 }
+            }
+          }
+        ]
+      }
+    },
+    "VHS_VideoCombine": {
+      "display_name": "Video Combine (VHS)",
+      "output": true,
+      "recognize": {
+        "variants": [
+          {
+            "match": [{ "when": "any" }],
+            "group": "Video Combine",
+            "collapsed": true,
+            "expose": {
+              "filename_prefix": { "name": "filename_prefix", "label": "Filename & path", "control": "text",   "width": "full", "order": 85 },
+              "format":          { "name": "output_format",   "label": "Format",          "control": "combo",  "width": "1/2",  "order": 86 },
+              "pix_fmt":         { "name": "pix_fmt",         "label": "Pixel format",    "control": "combo",  "width": "1/2",  "order": 87 },
+              "frame_rate":      { "name": "fps",             "label": "Frame rate",      "control": "number", "width": "1/2",  "order": 88 },
+              "crf":             { "name": "crf",             "label": "CRF (quality)",   "control": "number", "width": "1/2",  "order": 89 }
             }
           }
         ]

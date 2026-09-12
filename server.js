@@ -592,8 +592,9 @@ function controlModel(workflow, text) {
   let recognized = [];
   let handledNodeIds = new Set();
   let references = [];
+  let bypassable = [];
   try {
-    ({ controls: recognized, handledNodeIds, references } = recognizeWorkflow(workflow, nodeTypes));
+    ({ controls: recognized, handledNodeIds, references, bypassable } = recognizeWorkflow(workflow, nodeTypes));
   } catch (err) {
     console.error("Node recognition failed:", err.message);
   }
@@ -621,6 +622,7 @@ function controlModel(workflow, text) {
       type: null,
       pin: false,
       label: c.label || null,
+      control: c.control || null,
       multiline: c.multiline || undefined,
       group: c.group || null,
       recognized: true,
@@ -629,7 +631,7 @@ function controlModel(workflow, text) {
       nodeMap.set(c.name, { id: c.owner.id, classType: c.owner.classType, input: c.owner.input });
     }
   }
-  return { tokens: recTokens, nodeMap, unknownTypes, references };
+  return { tokens: recTokens, nodeMap, unknownTypes, references, bypassable: bypassable || [] };
 }
 
 // Replace tokens in a string. If the whole string is a single token, return the
@@ -781,11 +783,11 @@ app.get("/api/workflows", (req, res) => {
 app.get("/api/comfy/workflow-meta", async (req, res) => {
   const wfPath = workflowPath(req.query.file);
   if (!wfPath || !fs.existsSync(wfPath)) return res.status(400).json({ code: 400, msg: "Unknown workflow file" });
-  let workflow, tokens, nodeMap, unknownTypes, references;
+  let workflow, tokens, nodeMap, unknownTypes, references, libraryBypassable;
   try {
     const text = fs.readFileSync(wfPath, "utf8");
     workflow = JSON.parse(text);
-    ({ tokens, nodeMap, unknownTypes, references } = controlModel(workflow, text));
+    ({ tokens, nodeMap, unknownTypes, references, bypassable: libraryBypassable } = controlModel(workflow, text));
   } catch (err) {
     return res.status(400).json({ code: 400, msg: `Workflow is not valid JSON: ${err.message}` });
   }
@@ -796,7 +798,13 @@ app.get("/api/comfy/workflow-meta", async (req, res) => {
     inputKey: nodeMap.get(t.name)?.input || null,
     nodeId: nodeMap.get(t.name)?.id || null,
   }));
-  const bypassable = bypassableNodes(workflow); // enable/disable toggles (offline-safe)
+  // Enable/disable toggles (offline-safe): nodes the workflow marks `_meta.bypassable`,
+  // plus patch nodes the node_types library marks bypassable. The workflow's own flag
+  // wins for a node both name, so an author can still ship one switched off.
+  const bypassable = bypassableNodes(workflow);
+  for (const b of libraryBypassable || []) {
+    if (!bypassable.some((x) => String(x.id) === b.id)) bypassable.push(b);
+  }
   // Video references whose loader can skip frames get a per-file "use the last N
   // seconds" control (see tailSupport).
   const withTail = (list) =>
@@ -816,7 +824,7 @@ app.get("/api/comfy/workflow-meta", async (req, res) => {
       data: { offline: true, tokens: withTail(withKeys), loraOptions: [], bypassable, refLabelScheme: scheme, unknownTypes: unknownTypes || [], references: references || [] },
     });
   }
-  const enriched = withKeys.map((t) => enrichToken(t, nodeMap, objectInfo));
+  const enriched = withKeys.map((t) => enrichToken(t, nodeMap, objectInfo, workflow));
   res.json({
     code: 200,
     msg: "success",
@@ -996,14 +1004,18 @@ function mapTokenNodes(workflow) {
 // upload dropzone instead of a file dropdown — distinguishing e.g. `video`
 // (uploadable) from `vae_name` (a model-file picker whose token happens to be named
 // "video_vae").
-function enrichToken(token, nodeMap, objectInfo) {
+function enrichToken(token, nodeMap, objectInfo, workflow = null) {
   if (token.options && token.options.length) return token;
   const loc = nodeMap.get(token.name);
   if (!loc) return token;
   const info = objectInfo?.[loc.classType];
-  const spec = info?.input?.required?.[loc.input] || info?.input?.optional?.[loc.input];
+  const spec =
+    info?.input?.required?.[loc.input] ||
+    info?.input?.optional?.[loc.input] ||
+    formatWidgetSpec(info, loc, workflow);
   if (!Array.isArray(spec)) return token;
   const [type, cfg] = spec;
+  if (type === "BOOLEAN") return { ...token, bool: true };
   // A combo (enum) is reported one of two ways: legacy nodes put the choices array
   // directly in `type` (e.g. VAELoader.vae_name); newer-schema nodes report the
   // string "COMBO" with the choices in cfg.options (e.g. KSamplerSelect.sampler_name).
@@ -1032,6 +1044,26 @@ function enrichToken(token, nodeMap, objectInfo) {
     };
   }
   return token;
+}
+
+// Some nodes grow widgets per choice of a combo — VHS_VideoCombine's `crf` / `pix_fmt`
+// exist only for the video formats that take them — so /object_info doesn't list them
+// as inputs. It describes them in that combo's `cfg.formats`: { choice: [[name, type,
+// cfg?], …] }. Resolve an input from there, preferring the choice the node is set to
+// in the workflow, and return it in the ordinary [type, cfg] input-spec shape.
+function formatWidgetSpec(info, loc, workflow) {
+  const inputs = { ...(info?.input?.required || {}), ...(info?.input?.optional || {}) };
+  for (const [comboKey, spec] of Object.entries(inputs)) {
+    const formats = Array.isArray(spec) ? spec[1]?.formats : null;
+    if (!formats || typeof formats !== "object") continue;
+    const current = workflow?.[loc.id]?.inputs?.[comboKey];
+    const lists = [formats[current], ...Object.values(formats)].filter(Array.isArray);
+    for (const widgets of lists) {
+      const w = widgets.find((x) => Array.isArray(x) && x[0] === loc.input);
+      if (w) return [w[1], w[2] || {}];
+    }
+  }
+  return null;
 }
 
 // The installed LoRA file list (for the dynamic-LoRA picker).
