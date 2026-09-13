@@ -1369,6 +1369,7 @@ img.zoomable {
     flex-direction: column;
   }
   .hist-thumb,
+  .hist-card .hist-placeholder, /* outranks the base rule defined further down */
   .hist-card video,
   .hist-card .hist-img {
     width: 100%;
@@ -1641,6 +1642,13 @@ img.zoomable {
   background: var(--panel);
   border: 1px dashed var(--border);
   border-radius: 8px;
+  /* Takes the thumbnail's slot and width, so a long error (often with an unbreakable
+     URL) wraps inside it instead of crushing the buttons beside it. */
+  width: 200px;
+  flex-shrink: 0;
+  align-self: flex-start;
+  box-sizing: border-box;
+  overflow-wrap: anywhere;
 }
 .hist-placeholder.pending {
   border-style: solid;
