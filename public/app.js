@@ -1273,7 +1273,7 @@ function applyModelUI() {
 function updateModelChrome() {
   const label = modelSelect.options[modelSelect.selectedIndex].textContent.replace(/\s*\(.*\)$/, "").trim();
   if (isComfy()) {
-    document.getElementById("pageTitle").textContent = label;
+    setBreakableText(document.getElementById("pageTitle"), label);
     document.getElementById("pageSub").textContent =
       `Run ${label} on your local ComfyUI`;
     document.title = `GENie — ${label}`;
@@ -1286,6 +1286,17 @@ function updateModelChrome() {
   document.getElementById("pageSub").textContent = `Generate ${medium} with the ${label} model`;
   document.title = `GENie — ${label}`;
   submitBtn.textContent = image ? "Generate Image" : "Generate Video";
+}
+
+// Set `el`'s text with a line-break opportunity after each _ - / . so a workflow name
+// like "MiniMax_H3_Ref2Video_Custom" wraps between its parts on a narrow screen
+// rather than mid-word.
+function setBreakableText(el, text) {
+  el.textContent = "";
+  for (const part of String(text).split(/(?<=[_\-/.])/)) {
+    if (el.childNodes.length) el.appendChild(document.createElement("wbr"));
+    el.appendChild(document.createTextNode(part));
+  }
 }
 const MODEL_KEY = "seedance_last_model";
 // --- continuation --------------------------------------------------------------
@@ -1480,51 +1491,40 @@ const MEDIA_ARTICLE = { image: "an image", video: "a video", audio: "an audio fi
 // wired soundtrack claims an audio number and a separately attached audio file is
 // <Audio 2> — which is invisible in the form unless we show it. Server sends
 // `refLabelScheme` so this node-specific rule is only applied where it holds.
-let comfyRefTagsEl = null;
 let comfyRefLabelScheme = null;
 
-// Tags in presentation order, plus the per-slot tag for each media field.
+// The per-slot tag for each media field, in presentation order. A wired soundtrack
+// takes an audio number without a thumbnail of its own.
 function comfyRefTags() {
   const counts = { picture: 0, video: 0, audio: 0 };
   const perField = new Map(); // field -> [tag, …] aligned with its filled slots
-  const summary = [];
   const fieldsOfKind = (kind) => comfyFields.filter((f) => f.mediaKind === kind && f.filledMedia);
 
   for (const f of fieldsOfKind("image")) {
-    const tags = f.filledMedia().map(() => `<Picture ${++counts.picture}>`);
-    perField.set(f, tags);
-    tags.forEach((t, i) => summary.push(`${t} ${f.filledMedia()[i].name || ""}`.trim()));
+    perField.set(f, f.filledMedia().map(() => `<Picture ${++counts.picture}>`));
   }
   for (const f of fieldsOfKind("video")) {
     const tags = [];
     f.filledMedia().forEach((item, i) => {
-      if (f.soundtrackAt?.(i)) summary.push(`<Audio ${++counts.audio}> = Video ${counts.video + 1}'s soundtrack`);
-      const tag = `<Video ${++counts.video}>`;
-      tags.push(tag);
-      summary.push(`${tag} ${item.name || ""}`.trim());
+      if (f.soundtrackAt?.(i)) counts.audio++; // the soundtrack's <Audio j> comes first
+      tags.push(`<Video ${++counts.video}>`);
     });
     perField.set(f, tags);
   }
   for (const f of fieldsOfKind("audio")) {
-    const tags = f.filledMedia().map(() => `<Audio ${++counts.audio}>`);
-    perField.set(f, tags);
-    tags.forEach((t, i) => summary.push(`${t} ${f.filledMedia()[i].name || ""}`.trim()));
+    perField.set(f, f.filledMedia().map(() => `<Audio ${++counts.audio}>`));
   }
-  return { perField, summary };
+  return perField;
 }
 
-// Write the real tags onto the thumbnails and refresh the summary line. Called from
-// every media field's render, so it must not itself trigger a re-render.
+// Write the real tags onto the thumbnails. Called from every media field's render, so
+// it must not itself trigger a re-render.
 function refreshComfyRefTags() {
   if (comfyRefLabelScheme !== "minimax_h3") return;
-  const { perField, summary } = comfyRefTags();
-  for (const [f, tags] of perField) {
+  for (const [f, tags] of comfyRefTags()) {
     const labels = f.el.querySelectorAll(".dropzone .thumb.ready .img-label");
     tags.forEach((t, i) => { if (labels[i]) labels[i].textContent = t; });
   }
-  if (!comfyRefTagsEl) return;
-  comfyRefTagsEl.textContent = summary.length ? `Prompt tags — ${summary.join(" · ")}` : "";
-  comfyRefTagsEl.classList.toggle("hidden", !summary.length);
 }
 
 // --- reference-video tails ---------------------------------------------------
@@ -1777,7 +1777,6 @@ async function renderComfyControls() {
   comfyFields = [];
   comfyLoraControl = null;
   comfyBypassControl = null;
-  comfyRefTagsEl = null;
   comfyRefLabelScheme = null;
   const wf = comfyWorkflows.find((w) => w.file === comfyFile());
   if (!wf) {
@@ -1870,6 +1869,10 @@ async function renderComfyControls() {
   // control mounts: its group's <details> body in grouped mode, or the flat grid.
   const grouped = tokens.some((t) => t.group);
   const groupBodies = new Map(); // group key → body element (created lazily, in order)
+  // Mark a section's only control, whose label can defer to the section's summary.
+  const groupSizes = new Map();
+  for (const t of tokens) if (t.group) groupSizes.set(t.group.key, (groupSizes.get(t.group.key) || 0) + 1);
+  for (const t of tokens) if (t.group && groupSizes.get(t.group.key) === 1) t.soleInGroup = true;
   // Enable/disable toggles for optional patch nodes (e.g. Sage Attention). A
   // recognized node's toggle sits at the top of its own section, above the controls it
   // hides; the rest land in the Settings drawer below.
@@ -1958,13 +1961,6 @@ async function renderComfyControls() {
   // patch-node toggles now, and isn't rendered at all when it has neither.
   comfyLoraControl = makeComfyLoraControl(meta.loraOptions || [], !!meta.offline);
   comfyControlsEl.appendChild(comfyLoraControl.el);
-  if (comfyRefLabelScheme) {
-    // The literal strings to cite in the prompt, in the order the model presents them.
-    comfyRefTagsEl = document.createElement("p");
-    comfyRefTagsEl.className = "ref-tags hint hidden";
-    comfyRefTagsEl.style.gridColumn = "span 12";
-    comfyControlsEl.appendChild(comfyRefTagsEl);
-  }
   if (body.childElementCount) comfyControlsEl.appendChild(details);
 
   // Transparency: node types GENie has no controls for. They run exactly as saved
@@ -2249,7 +2245,15 @@ function renderScalarControl(token, type, container = comfyControlsEl) {
   field.style.gridColumn = `span ${comfySpan(token, type)}`;
   const head = document.createElement("div");
   head.className = "field-head";
-  head.innerHTML = `<span>${escapeHtmlJs(token.label || prettyLabel(token.name))}</span>`;
+  const labelText = token.label || prettyLabel(token.name);
+  // A control named the same as its section ("Prompt" inside Prompt) needs no label of
+  // its own — the section's summary already says it. The head stays for a seed's
+  // after-generate/dice controls; otherwise it's removed below.
+  // Only for a section's sole control, so a multi-control section keeps every label.
+  const echoesGroup =
+    !!token.soleInGroup && !!token.group?.label &&
+    labelText.trim().toLowerCase() === token.group.label.trim().toLowerCase();
+  if (!echoesGroup) head.innerHTML = `<span>${escapeHtmlJs(labelText)}</span>`;
   field.appendChild(head);
   let afterMode = null; // seed "control after generate" <select>, if present
 
@@ -2307,7 +2311,7 @@ function renderScalarControl(token, type, container = comfyControlsEl) {
     }
   } else if (type === "textarea") {
     input = document.createElement("textarea");
-    input.rows = 4;
+    input.rows = /prompt/i.test(token.name) ? 15 : 4; // prompts get room to write in
     input.value = token.default || "";
   } else {
     input = document.createElement("input");
@@ -2337,6 +2341,7 @@ function renderScalarControl(token, type, container = comfyControlsEl) {
       head.appendChild(dice);
     }
   }
+  if (!head.childElementCount) head.remove(); // label suppressed and nothing else in the head
   field.appendChild(input);
   container.appendChild(field);
   const readValue = () => (type === "number" || numericSelect ? Number(input.value) : input.value);

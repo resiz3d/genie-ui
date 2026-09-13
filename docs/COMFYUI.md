@@ -184,9 +184,8 @@ audio file all loaded, the tags are:
 
 Because it depends on what's loaded *and* on whether the workflow wires
 `ref_video_audios.ref_video_audio_N`, the numbering shifts between workflows and
-between runs. So the form shows the real tag on each thumbnail and lists the whole
-mapping in one line beneath the reference fields, updating as you add, remove or
-reorder files. A workflow that drops the soundtrack link makes your audio file
+between runs. So the form shows the real tag on each thumbnail, updating as you add,
+remove or reorder files. A workflow that drops the soundtrack link makes your audio file
 `<Audio 1>` — same files, different tag.
 
 The server reports `refLabelScheme: "minimax_h3"` for workflows containing a

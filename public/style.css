@@ -93,6 +93,29 @@ header {
   font-size: 0.85rem;
 }
 
+/* Phones: side by side, the unshrinkable pills squeeze the title into a sliver and
+   run past the page padding. Stack them under the title instead, with the project
+   pill taking the row's spare width so a long project name still fits. */
+@media (max-width: 600px) {
+  header {
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+  .header-right {
+    width: 100%;
+    justify-content: flex-start;
+  }
+  .project-pill {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+  .project-pill select {
+    flex: 1 1 auto;
+    min-width: 0;
+    max-width: none;
+  }
+}
+
 .credits-label {
   color: var(--muted);
   text-decoration: none;
@@ -195,6 +218,17 @@ h1 {
 .sub {
   margin: 0.25rem 0 0;
   color: var(--muted);
+}
+
+/* The title is a ComfyUI workflow's name when one is selected — often a single
+   unbreakable run like "MiniMax_H3_Ref2Video_Custom" that would otherwise widen the
+   whole page on a phone. Let it (and the subtitle quoting it) break anywhere. */
+header > div:first-child {
+  min-width: 0;
+}
+header h1,
+header .sub {
+  overflow-wrap: anywhere;
 }
 
 form {
@@ -815,6 +849,7 @@ img.zoomable {
 /* --- submit row / estimate --- */
 .submit-row {
   display: flex;
+  flex-wrap: wrap; /* the ComfyUI ×N and Preview controls drop a line on narrow phones */
   align-items: center;
   gap: 0.9rem;
 }
@@ -835,6 +870,7 @@ img.zoomable {
 /* --- history --- */
 .hist-head {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   align-items: center;
   margin-bottom: 0.75rem;
@@ -843,8 +879,10 @@ img.zoomable {
 
 .hist-head-actions {
   display: flex;
+  flex-wrap: wrap; /* on a phone the project filter wraps rather than overhanging */
   align-items: center;
   gap: 0.5rem;
+  min-width: 0;
 }
 
 /* Second header row: the tag toggles, below the main History actions. */
@@ -1712,12 +1750,6 @@ img.zoomable {
 
 /* Reference tags: the literal <Picture N> / <Video N> / <Audio N> strings to cite
    in a prompt, in the order the model presents them. */
-.ref-tags {
-  margin: 0.1rem 0 0.3rem;
-  font-size: 0.82rem;
-  line-height: 1.5;
-}
-
 /* An armed continuation: the next Generate continues a finished run. */
 .continue-banner {
   display: flex;
@@ -1738,4 +1770,25 @@ img.zoomable {
 .field.locked input,
 .field.locked select {
   cursor: not-allowed;
+}
+
+/* Phones: the nested page → form → node-section padding eats a third of the width
+   before a textarea even starts, so thin each layer. Last in the file so it
+   overrides the base rules above. */
+@media (max-width: 600px) {
+  main {
+    padding-left: 0.6rem;
+    padding-right: 0.6rem;
+  }
+  form {
+    padding: 0.8rem 0.65rem;
+  }
+  .comfy-node-group > summary,
+  .comfy-settings > summary {
+    padding: 8px 10px;
+  }
+  .comfy-node-group-body,
+  .comfy-settings-body {
+    padding: 10px 8px;
+  }
 }
