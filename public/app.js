@@ -981,6 +981,11 @@ async function loadCredits() {
   try {
     const res = await fetch("/api/credits");
     const data = await res.json();
+    // No kie.ai key configured: there's no balance to show, so hide the pill. A real
+    // key that fails to load still shows "—", so a broken key stays noticeable.
+    kieConfigured = data.configured !== false;
+    document.getElementById("credits").classList.toggle("hidden", !kieConfigured);
+    syncKieAvailability();
     if (typeof data.data === "number") {
       currentCredits = data.data;
       creditsValue.textContent = currentCredits.toLocaleString();
@@ -993,6 +998,30 @@ async function loadCredits() {
   return currentCredits;
 }
 refreshCredits.addEventListener("click", loadCredits);
+
+// Without a kie.ai key GENie is a ComfyUI-only front-end: the kie.ai models stay listed
+// (so it's clear they exist) but disabled, the per-project credit spend is hidden, and
+// a kie.ai model left selected by default gives way to the first ComfyUI workflow.
+// Runs once the key status is known and again whenever the workflow list loads.
+let kieConfigured = null; // null until /api/credits answers
+function syncKieAvailability() {
+  if (kieConfigured !== false) return;
+  const group = modelSelect.querySelector("optgroup[data-kie]");
+  if (group) {
+    group.label = "kie.ai API — add KIE_API_KEY to .env to enable";
+    for (const o of group.querySelectorAll("option")) o.disabled = true;
+  }
+  document.getElementById("projectCredits").classList.add("hidden");
+  const current = modelSelect.options[modelSelect.selectedIndex];
+  if (!current || current.disabled) {
+    const firstComfy = [...modelSelect.options].find((o) => o.value.startsWith("comfy:") && !o.disabled);
+    if (firstComfy) {
+      modelSelect.value = firstComfy.value;
+      applyModelUI();
+      scheduleComfyStats(0);
+    }
+  }
+}
 
 // How many of the most-recent matching runs feed a price estimate. Estimates are
 // built from the LATEST runs (not an all-time average) so they track price
@@ -1399,9 +1428,10 @@ async function loadWorkflows() {
       opt.disabled = !!w.error;
       group.appendChild(opt);
     }
-    modelSelect.appendChild(group);
+    modelSelect.prepend(group); // local workflows list first, above the kie.ai API group
   }
   restoreLastModel(); // now that comfy options exist, reselect the last-used model
+  syncKieAvailability(); // no kie.ai key: fall back to a ComfyUI workflow if needed
 }
 
 // Reselect the last-used model (base or comfy:) if it's still a valid option.

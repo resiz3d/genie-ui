@@ -150,7 +150,7 @@ Same four ideas, slightly different clicks:
 | Problem | Fix |
 | --- | --- |
 | `'npm' is not recognized` / `command not found: npm` | Node.js isn't installed (or the terminal was open during install). Reinstall from <https://nodejs.org>, then open a **new** terminal. |
-| `Missing KIE_API_KEY` when starting | Step 5 didn't stick — make sure the file is named exactly `.env` (not `.env.txt`) and contains your real key. Redo the two commands in Step 5. |
+| `No KIE_API_KEY set` when starting, and the kie.ai models say no key is configured | Step 5 didn't stick — make sure the file is named exactly `.env` (not `.env.txt`) and contains your real key. Redo the two commands in Step 5. (Without a key the app still runs ComfyUI workflows.) |
 | `EADDRINUSE: address already in use` | The app is already running in another window, or something else is using port 3000. Close other terminals, or edit `.env` and change `PORT=3000` to `PORT=3001` (then browse to localhost:3001). |
 | Red "Server not reachable" banner in the browser | The terminal running `npm start` was closed. Start it again (Everyday use, above). |
 | A generation fails with "Insufficient credits" | Your kie.ai account is out of credits — top up at <https://kie.ai>. |

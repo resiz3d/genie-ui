@@ -24,7 +24,7 @@
             <button type="button" id="deleteProject" class="link-btn" title="Delete project (contents move to Default)">🗑</button>
           </div>
           <div class="credits" id="credits" title="Account credit balance">
-            <a class="credits-label" href="https://kie.ai/billing" target="_blank" rel="noopener" title="Open kie.ai billing">Credits</a>
+            <a class="credits-label" href="https://kie.ai/billing" target="_blank" rel="noopener" title="Open kie.ai billing">kie.ai credits</a>
             <span class="credits-value" id="creditsValue">…</span>
             <button type="button" id="refreshCredits" class="link-btn" title="Refresh">↻</button>
           </div>
@@ -44,14 +44,17 @@
         <label>
           Model
           <select id="model">
-            <option value="bytedance/seedance-2-5" selected>Seedance 2.5 (up to 1080p)</option>
-            <option value="bytedance/seedance-2">Seedance 2</option>
-            <option value="bytedance/seedance-2-fast">Seedance 2 Fast (480p/720p only)</option>
-            <option value="bytedance/seedance-2-mini">Seedance 2 Mini (480p/720p only)</option>
-            <option value="seedream/5-lite-image-to-image">Seedream 5.0 Lite (image-to-image)</option>
-            <option value="seedream/5-lite-text-to-image">Seedream 5.0 Lite (text-to-image)</option>
-            <option value="seedream/5-pro-image-to-image">Seedream 5.0 Pro (image-to-image)</option>
-            <option value="seedream/5-pro-text-to-image">Seedream 5.0 Pro (text-to-image)</option>
+            <!-- The "Local · ComfyUI" group is inserted above this one once workflows load. -->
+            <optgroup label="kie.ai API" data-kie>
+              <option value="bytedance/seedance-2-5" selected>Seedance 2.5 (up to 1080p)</option>
+              <option value="bytedance/seedance-2">Seedance 2</option>
+              <option value="bytedance/seedance-2-fast">Seedance 2 Fast (480p/720p only)</option>
+              <option value="bytedance/seedance-2-mini">Seedance 2 Mini (480p/720p only)</option>
+              <option value="seedream/5-lite-image-to-image">Seedream 5.0 Lite (image-to-image)</option>
+              <option value="seedream/5-lite-text-to-image">Seedream 5.0 Lite (text-to-image)</option>
+              <option value="seedream/5-pro-image-to-image">Seedream 5.0 Pro (image-to-image)</option>
+              <option value="seedream/5-pro-text-to-image">Seedream 5.0 Pro (text-to-image)</option>
+            </optgroup>
           </select>
         </label>
 

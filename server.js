@@ -13,7 +13,11 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const API_BASE = "https://api.kie.ai/api/v1/jobs";
 const UPLOAD_URL = "https://kieai.redpandaai.co/api/file-stream-upload";
 const CREDITS_URL = "https://api.kie.ai/api/v1/chat/credit";
-const API_KEY = process.env.KIE_API_KEY;
+// Optional: without a key GENie is a pure ComfyUI front-end. The .env.example
+// placeholder counts as no key, so a copied-but-unedited .env behaves the same.
+const API_KEY = /^(|your_api_key_here)$/.test((process.env.KIE_API_KEY || "").trim())
+  ? ""
+  : process.env.KIE_API_KEY.trim();
 const PORT = process.env.PORT || 3000;
 // Network interface to bind. Default 127.0.0.1 = this PC only. Set HOST=0.0.0.0
 // in .env to also accept connections from other devices on your home network
@@ -74,11 +78,16 @@ function comfyPreviewMethod(requested) {
 }
 
 if (!API_KEY) {
-  console.error(
-    "\n  Missing KIE_API_KEY. Copy .env.example to .env and add your key.\n" +
-      "  Get one at https://kie.ai/api-key\n"
+  console.log(
+    "\n  No KIE_API_KEY set — kie.ai cloud models are disabled; ComfyUI workflows work as usual.\n" +
+      "  To enable them, add a key from https://kie.ai/api-key to .env and restart.\n"
   );
-  process.exit(1);
+}
+
+// Guard for routes that call kie.ai: without a key they'd only bounce off its auth.
+function requireKieKey(req, res, next) {
+  if (API_KEY) return next();
+  res.status(400).json({ code: 400, msg: "No kie.ai API key configured — add KIE_API_KEY to .env to use the kie.ai models." });
 }
 
 fs.mkdirSync(OUTPUT_DIR, { recursive: true });
@@ -470,7 +479,7 @@ const ALLOWED_MODELS = new Set([
   "seedream/5-pro-text-to-image",
 ]);
 
-app.post("/api/create", (req, res) => {
+app.post("/api/create", requireKieKey, (req, res) => {
   // `generatePreview` is a UI-only flag (stored in History, honored by the client);
   // strip it so it isn't forwarded to the kie.ai API as an unknown input field.
   const { model: requestedModel, generatePreview, ...input } = req.body || {};
@@ -495,7 +504,7 @@ app.post("/api/create", (req, res) => {
 });
 
 // --- poll task status / result ------------------------------------------
-app.get("/api/status", (req, res) => {
+app.get("/api/status", requireKieKey, (req, res) => {
   const taskId = req.query.taskId;
   if (!taskId) return res.status(400).json({ code: 400, msg: "taskId is required" });
   forward(
@@ -2408,6 +2417,8 @@ app.get("/api/ping", (req, res) => {
 
 // --- account credit balance ---------------------------------------------
 app.get("/api/credits", (req, res) => {
+  // No key: report "not configured" (the header hides the balance) instead of an error.
+  if (!API_KEY) return res.json({ code: 200, msg: "no api key", data: null, configured: false });
   forward(res, fetch(CREDITS_URL, { headers: { Authorization: `Bearer ${API_KEY}` } }));
 });
 
@@ -2533,7 +2544,7 @@ app.post("/api/upload", (req, res) => {
 });
 
 // --- host a saved local file on kie.ai, return a fresh URL (at generate) ---
-app.post("/api/reupload", async (req, res) => {
+app.post("/api/reupload", requireKieKey, async (req, res) => {
   const { id } = req.body || {};
   const images = readJson(IMAGES_FILE);
   const entry = images.find((i) => i.id === id);
