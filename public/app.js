@@ -6961,8 +6961,7 @@ function renderHistory(entries) {
     const wfMeta = comfyEntry
       ? comfyWorkflows.find((w) => w.file === (input.model || "").slice("comfy:".length))
       : null;
-    const roles = {};
-    for (const t of wfMeta?.tokens || []) if (t.role) roles[t.role] = t.name;
+    const roles = wfMeta?.roles || {};
     const when = new Date(entry.createdAt || Number(entry.id)).toLocaleString();
 
     if (cont?.slot && roles["continue.in"] && roles["continue.out"] && output) {
