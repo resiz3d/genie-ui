@@ -217,8 +217,8 @@
 
         <div class="submit-row">
           <button type="submit" id="submitBtn">Generate</button>
-          <label class="queue-count hidden" id="comfyCountField" title="Queue this many generations">
-            ×<input id="comfyCount" type="number" min="1" max="20" step="1" value="1" />
+          <label class="queue-count" id="queueCountField" title="Queue this many generations (kie.ai: reference media is uploaded once for the whole batch)">
+            ×<input id="queueCount" type="number" min="1" max="20" step="1" value="1" />
           </label>
           <label class="queue-count hidden" id="previewMethodField" title="Show a live preview of the frame forming as it samples">
             👁
@@ -270,6 +270,7 @@
         estimates are approximate. You are responsible for your API key, your
         costs, and what you create.
         <a href="https://github.com/resiz3d/genie-ui/blob/main/LICENSE" target="_blank" rel="noopener">MIT License</a>
+        <span id="appVersion" class="app-version"></span>
       </footer>
     </main>
 

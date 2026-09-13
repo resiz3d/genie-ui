@@ -9,6 +9,15 @@ import { loadNodeTypes, recognizeWorkflow, applyRecognizedValues, applyReference
 import "dotenv/config";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// The release number lives in package.json alone (see CHANGELOG.md); the startup log
+// and the page footer read it from here.
+const APP_VERSION = (() => {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(__dirname, "package.json"), "utf8")).version || "";
+  } catch {
+    return "";
+  }
+})();
 
 const API_BASE = "https://api.kie.ai/api/v1/jobs";
 const UPLOAD_URL = "https://kieai.redpandaai.co/api/file-stream-upload";
@@ -2412,7 +2421,7 @@ app.post("/api/export", (req, res) => {
 
 // --- health check (used by the client's server-down banner) ---------------
 app.get("/api/ping", (req, res) => {
-  res.json({ ok: true });
+  res.json({ ok: true, version: APP_VERSION });
 });
 
 // --- account credit balance ---------------------------------------------
@@ -3002,7 +3011,7 @@ function lanUrls(port) {
 
 app.listen(PORT, HOST, () => {
   const loopback = HOST === "127.0.0.1" || HOST === "localhost" || HOST === "::1";
-  console.log(`\n  GENie running:  http://localhost:${PORT}`);
+  console.log(`\n  GENie${APP_VERSION ? ` v${APP_VERSION}` : ""} running:  http://localhost:${PORT}`);
   console.log(`  Password protection:   ${AUTH_ENABLED ? "ON" : "OFF (set APP_PASSWORD in .env to enable)"}`);
 
   if (!loopback) {

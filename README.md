@@ -42,6 +42,9 @@ submit a prompt + reference media, then polls until the result is ready.
 > **API reference:** local copies of the kie.ai model docs (parameters per model,
 > shared endpoints, and known discrepancies) live in
 > [`docs/kie-api/`](docs/kie-api/README.md) so you don't have to re-check the web.
+>
+> **What's new:** see the [changelog](CHANGELOG.md). The running version is shown in
+> the page footer.
 
 ## Features
 
@@ -108,6 +111,10 @@ submit a prompt + reference media, then polls until the result is ready.
   kie.ai's file host at generate time, so kie.ai's ~3-day URL expiry never matters;
   re-runs re-host saved references automatically. In prompts, `@Image1`/`@Video1`/…
   match the reference thumbnail labels.
+- **Batches** — set the **×N** counter beside Generate to queue up to 20 identical runs
+  in one click. References are uploaded once and shared by the batch, then one kie.ai
+  task per run is created (spaced to stay under the rate limit), each with its own
+  History card; the cost estimate shows the batch total.
 - **Live credit balance** — shown in the header (`GET /api/v1/chat/credit`), with a
   refresh button.
 - **Cost estimate** — kie.ai has no price-preview API, so cost is *measured*: the

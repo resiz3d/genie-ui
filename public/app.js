@@ -1081,7 +1081,7 @@ function updateEstimate() {
       return;
     }
     const est = Math.round(median(costs));
-    estimateEl.innerHTML = `Est. cost: ~<b>${est.toLocaleString()}</b> credits`;
+    estimateEl.innerHTML = `Est. cost: ~<b>${est.toLocaleString()}</b> credits${batchCostNote(est)}`;
     estimateEl.title = `Median of your ${costs.length} most recent ${seedreamLabel(model)} run${costs.length > 1 ? "s" : ""} at this quality.`;
     return;
   }
@@ -1100,14 +1100,21 @@ function updateEstimate() {
   const est = Math.round(r.rate * (duration + refSecs));
   const refNote = refSecs > 0 ? ` (incl. ~${Math.round(refSecs)}s video ref)` : "";
   const overLimit = refSecs > 15 ? ` ⚠ video refs exceed the 15s total limit` : "";
-  estimateEl.innerHTML = `Est. cost: ~<b>${est.toLocaleString()}</b> credits${refNote}${overLimit}`;
+  estimateEl.innerHTML = `Est. cost: ~<b>${est.toLocaleString()}</b> credits${refNote}${batchCostNote(est)}${overLimit}`;
   estimateEl.title = `Based on your ${r.n} most recent run${r.n > 1 ? "s" : ""} at this resolution/audio setting (median).`;
+}
+
+// " × 4 = ~56" when the ×N counter queues a batch; nothing for a single run.
+function batchCostNote(each) {
+  const n = queueCount();
+  return n > 1 ? ` × ${n} = ~<b>${(each * n).toLocaleString()}</b>` : "";
 }
 
 ["resolution", "duration"].forEach((id) =>
   document.getElementById(id).addEventListener("input", updateEstimate)
 );
 document.getElementById("generate_audio").addEventListener("change", updateEstimate);
+document.getElementById("queueCount").addEventListener("input", updateEstimate);
 
 // Per-model form shaping: Seedance 2 Fast and Mini cap resolution at 720p;
 // Seedream 5.0 Lite is image-to-image (no duration/resolution/audio/video, has
@@ -1236,7 +1243,6 @@ function applyModelUI() {
   const cc = document.getElementById("comfyControls");
   cc.classList.toggle("hidden", !comfy);
   cc.classList.toggle("comfy-grid", comfy);
-  document.getElementById("comfyCountField").classList.toggle("hidden", !comfy);
   document.getElementById("previewMethodField").classList.toggle("hidden", !comfy);
   if (comfy) {
     // Swap the whole kie.ai form for the recognized workflow controls.
@@ -2626,9 +2632,10 @@ async function collectComfyValues() {
   return { values, prune, tails, references };
 }
 
-// How many generations to queue (the ×N counter, local ComfyUI only).
-function comfyQueueCount() {
-  const n = Math.floor(Number(document.getElementById("comfyCount").value) || 1);
+// How many generations to queue (the ×N counter beside Generate). Capped at 20, which
+// is also kie.ai's limit on new requests per 10 seconds.
+function queueCount() {
+  const n = Math.floor(Number(document.getElementById("queueCount").value) || 1);
   return Math.min(20, Math.max(1, n));
 }
 
@@ -2644,7 +2651,7 @@ async function submitComfy() {
   const cont = armedContinuation;
   // Redoing a run in place writes one fixed slot; queueing several would stamp the
   // same one N times.
-  const count = cont?.into ? 1 : comfyQueueCount();
+  const count = cont?.into ? 1 : queueCount();
   const allLoras = comfyLoraControl ? comfyLoraControl.getLoras() : [];
   const enabledLoras = allLoras.filter((l) => l.enabled !== false); // only these get injected
   const bypass = comfyBypassControl ? comfyBypassControl.getDisabled() : [];
@@ -3143,30 +3150,43 @@ form.addEventListener("submit", async (e) => {
     lastFrame: usesFrames() ? lists.lastFrame.localIds() : [],
   };
 
-  const job = {
-    jobId: nextJobId++,
-    taskId: null,
-    input: null,
-    mediaLocalIds,
-    balanceBefore: null,
-    projectId: activeProjectId, // pin now so a mid-run project switch can't misfile it
-    refSecs: isSeedream() ? 0 : refVideoSeconds(),
-    startedAt: Date.now(),
-  };
+  // ×N: one batch of identical requests. Each run gets its own job, History card and
+  // kie.ai task, but the reference media is uploaded once and shared by all of them.
+  const count = queueCount();
+  const storedInput = collectInput({ image: [], video: [], audio: [], firstFrame: [], lastFrame: [] });
+  const projectId = activeProjectId; // pin now so a mid-run project switch can't misfile it
+  const refSecs = isSeedream() ? 0 : refVideoSeconds();
+  const jobs = [];
 
-  // Create the pending History entry up front (before the upload), so the run has a
-  // live card from the start. Its stored input has no hosted URLs yet — reference
+  // Create the pending History entries up front (before the upload), so every run has
+  // a live card from the start. Their stored input has no hosted URLs yet — reference
   // counts come from mediaLocalIds — and the real (resolved) input is sent to the API.
-  job.input = collectInput({ image: [], video: [], audio: [], firstFrame: [], lastFrame: [] });
-  job.historyId = await createHistoryEntry(job.input, null, job.mediaLocalIds, job.projectId, job.refSecs);
-  const live = createLiveStatus(job);
-  if (job.historyId) liveStatus.set(job.historyId, live);
+  for (let i = 0; i < count; i++) {
+    const job = {
+      jobId: nextJobId++,
+      taskId: null,
+      input: storedInput,
+      mediaLocalIds,
+      balanceBefore: null,
+      projectId,
+      refSecs,
+      startedAt: Date.now(),
+    };
+    job.historyId = await createHistoryEntry(job.input, null, job.mediaLocalIds, job.projectId, job.refSecs);
+    job.live = createLiveStatus(job);
+    if (count > 1) job.live.setStatus(`Waiting (${i + 1} of ${count})…`);
+    if (job.historyId) liveStatus.set(job.historyId, job.live);
+    jobs.push(job);
+  }
   loadHistory();
+  const setAllStatus = (text) => jobs.forEach((j) => j.live.setStatus(text));
 
   // Host reference media on kie.ai now — nothing was sent when they were dropped.
   let resolved;
   try {
-    if (allItems().some((i) => i.status === "ready")) live.setStatus("Uploading reference media…");
+    if (allItems().some((i) => i.status === "ready")) {
+      setAllStatus(count > 1 ? `Uploading reference media (shared by ${count} runs)…` : "Uploading reference media…");
+    }
     resolved = {
       // only upload the reference kinds the selected model+mode actually uses
       // (2.5 forbids mixing reference images with first/last frames)
@@ -3177,30 +3197,42 @@ form.addEventListener("submit", async (e) => {
       lastFrame: usesFrames() ? await lists.lastFrame.resolve() : [],
     };
   } catch (err) {
-    await failJob(job, err.message || "Failed to upload reference media.");
+    const msg = err.message || "Failed to upload reference media.";
+    for (const job of jobs) await failJob(job, msg);
     submitBtn.disabled = false;
     return;
   }
 
   const genInput = collectInput(resolved); // real input (hosted URLs) for the API call
-  live.setStatus("Submitting…");
 
   // Snapshot the balance so we can measure actual cost on completion. (With
   // overlapping runs this delta is unreliable; the per-task creditsConsumed
   // reported on completion is the primary source and stays accurate.)
-  job.balanceBefore = await loadCredits();
+  const balanceBefore = await loadCredits();
 
   try {
-    job.taskId = await createTask(genInput, live);
-    live.setStatus("Generating… this can take a few minutes.");
-    await persistEntryTask(job); // let the server-side sweep finish it if this tab goes away
-    pollJob(job);
-  } catch (err) {
-    await failJob(job, err.message || String(err));
+    // Create the tasks one after another, lightly spaced: kie.ai allows 20 new
+    // requests per 10s and drops (doesn't queue) the rest; createTask also retries
+    // on a 429. One task failing to create doesn't stop the rest of the batch.
+    for (const [i, job] of jobs.entries()) {
+      if (i > 0) await sleep(BATCH_CREATE_SPACING_MS);
+      job.balanceBefore = balanceBefore;
+      job.live.setStatus("Submitting…");
+      try {
+        job.taskId = await createTask(genInput, job.live);
+        job.live.setStatus("Generating… this can take a few minutes.");
+        await persistEntryTask(job); // let the server-side sweep finish it if this tab goes away
+        pollJob(job);
+      } catch (err) {
+        await failJob(job, err.message || String(err));
+      }
+    }
   } finally {
     submitBtn.disabled = false;
   }
 });
+
+const BATCH_CREATE_SPACING_MS = 400; // ~2.5 creates/s — well inside 20 per 10s
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -4257,12 +4289,24 @@ async function checkServer() {
   try {
     const r = await fetch("/api/ping", { cache: "no-store" });
     offlineEl.classList.toggle("hidden", r.ok);
+    // Show the running server's release in the footer (links to the changelog).
+    const { version } = await r.json().catch(() => ({}));
+    const versionEl = document.getElementById("appVersion");
+    if (version && versionEl && !versionEl.childElementCount) {
+      const a = document.createElement("a");
+      a.href = "https://github.com/resiz3d/genie-ui/blob/main/CHANGELOG.md";
+      a.target = "_blank";
+      a.rel = "noopener";
+      a.textContent = `v${version}`;
+      versionEl.append(" · ", a);
+    }
   } catch {
     offlineEl.classList.remove("hidden");
   }
 }
 setInterval(checkServer, PING_INTERVAL_MS);
 window.addEventListener("focus", checkServer);
+checkServer(); // once at load too, so the footer version shows right away
 
 // --- host stats readout (CPU / RAM / GPU / VRAM) --------------------------------
 // Shown whenever a ComfyUI workflow is selected or a local run is in flight:
