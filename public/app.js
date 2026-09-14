@@ -6603,6 +6603,12 @@ function buildHistDetails(entry, input, comfyEntry, isImg) {
     push("Steps", v.steps);
     push("Seed", v.seed);
     push("Duration", v.duration != null && v.duration !== "" ? `${v.duration}s` : v.duration);
+    // Chain position in full, next to the settings it has to stay consistent with.
+    const chain = entry.continuation;
+    if (chain?.slot) {
+      push("Chain slot", chain.slot);
+      push("Continues from", chain.from ? `slot ${chain.from}` : "— chain start");
+    }
   } else if (isImg) {
     push("Aspect ratio", input.aspect_ratio);
     push("Quality", input.quality);
@@ -6902,7 +6908,23 @@ function renderHistory(entries) {
     const proj = filter === "all" ? ` · ${projectName(entry.projectId || "default")}` : "";
     if (comfyEntry) {
       const wfName = input.workflow || input.model.slice("comfy:".length).replace(/\.json$/i, "");
-      meta.textContent = `${date} · ComfyUI · ${wfName}${rt}${proj}`;
+      meta.textContent = `${date} · ComfyUI · ${wfName}`;
+      // Chain position, for a run that has one. "⛓ 6→9" = read slot 6, wrote slot 9;
+      // a bare "⛓ 9" is a chain start. What a slot *holds* is the workflow's business
+      // — GENie only allocates the integers — so nothing here names it. They are still
+      // the only thing that tells two runs of one chain apart, which is why they
+      // belong on the card rather than only in history.json.
+      const chain = entry.continuation;
+      if (chain?.slot) {
+        const tag = document.createElement("span");
+        tag.className = "hist-chain";
+        tag.textContent = `· ⛓ ${chain.from ? `${chain.from}→` : ""}${chain.slot}`;
+        tag.title = chain.from
+          ? `Continues slot ${chain.from} · this run writes slot ${chain.slot}`
+          : `Chain start · this run writes slot ${chain.slot}`;
+        meta.append(" ", tag);
+      }
+      meta.append(`${rt}${proj}`);
     } else if (isImg) {
       meta.textContent =
         `${date} · ${seedreamLabel(input.model)} · ${input.quality || "basic"} · ${input.aspect_ratio || "?"}` +
