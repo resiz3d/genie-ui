@@ -39,6 +39,7 @@ user drop-in can override a shipped entry — the same shipped-vs-yours idea as
 | `value_source` | `{ "input": "value" }` — marks a passthrough value provider (a Primitive\*). When another node's exposed input is *wired from* this node, recognition follows the link here to the real editable value. |
 | `bypassable` | `true` gives every instance an **enable/disable** checkbox at the top of its section; unchecked, the node is removed at generate time and its `model` link reconnected. For optional MODEL-in/MODEL-out patches (Sage Attention, attention backends, Sol-Attn, Spectrum — see `attention.json`). The same as a workflow's `_meta.bypassable`, without editing the export. |
 | `bypassed_by_default` | `true` with `bypassable` starts the checkbox **off**. Saved settings win once the workflow has run. |
+| `progress_passes` | `{ "passes": 2, "when": [{ "input": "…", "equals": true, "default": true }] }` — the node makes the sampler go over its steps `passes` times and reports them as one combined progress count (Spectrum's capture + replay reports `2 × steps`). When every `when` condition holds on the node's input (a wired or absent input counts as `default`), a run's card shows **pass 1 of 2 · step N/steps**, with the bar and time left for the current pass. See `spectrum_minimax_h3.json`. |
 | `recognize` | How this node becomes controls (below). |
 | _anything else_ | Free-form reference metadata (schema, install notes, tokenize hints). Ignored by the engine. |
 

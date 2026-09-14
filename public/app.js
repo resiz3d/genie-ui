@@ -2792,7 +2792,7 @@ async function pollComfyJob(job) {
   }
   // Still running — surface live step progress (drives the elapsed/ETA clock).
   const prog = data.data?.progress;
-  if (live && prog && prog.max > 0) live.setProgress(prog.value, prog.max);
+  if (live && prog && prog.max > 0) live.setProgress(prog.value, prog.max, prog.passes);
   setTimeout(() => pollComfyJob(job), POLL_INTERVAL_MS);
 }
 
@@ -2902,20 +2902,34 @@ function createLiveStatus(job) {
   let previewImg = null;
   let previewToken = 0;
   let baseStatus = "Generating…";
-  let progInfo = null; // { value, max, anchorT, anchorValue }
+  let progInfo = null; // { value, max, pass, passes, perPass, stepInPass, anchorT, anchorValue }
   const progStartedAt = job.startedAt || Date.now();
   let progTicker = null;
+  // A run whose sampler goes over the steps more than once (Spectrum's capture +
+  // replay) reports one combined count, e.g. 8/50 for step 8 of 25 in pass 1. Split it
+  // back into passes. The passes can run at very different speeds, so the bar, the
+  // percentage and the time left all describe the current pass only.
+  const splitPasses = (value, max, passes) => {
+    const n = Number.isInteger(passes) && passes > 1 && max % passes === 0 ? passes : 1;
+    const perPass = max / n;
+    const pass = Math.min(n, Math.max(1, Math.ceil(value / perPass)));
+    return { passes: n, perPass, pass, stepInPass: value - (pass - 1) * perPass };
+  };
   const paint = () => {
     if (!progInfo) { statusText.textContent = baseStatus; return; }
-    const { value, max, anchorT, anchorValue } = progInfo;
+    const { value, passes, perPass, pass, stepInPass, anchorT, anchorValue } = progInfo;
     const now = Date.now();
-    const pct = Math.max(0, Math.min(100, Math.round((value / max) * 100)));
+    const pct = Math.max(0, Math.min(100, Math.round((stepInPass / perPass) * 100)));
     const elapsed = fmtDuration(now - progStartedAt);
     let eta = "";
     const dv = value - anchorValue;
     const dt = now - anchorT;
-    if (value < max && dv > 0 && dt > 0) eta = ` · ~${fmtDuration((max - value) * (dt / dv))} left`;
-    statusText.textContent = `${baseStatus} step ${value}/${max} (${pct}%) · ${elapsed} elapsed${eta}`;
+    if (stepInPass < perPass && dv > 0 && dt > 0) {
+      const left = fmtDuration((perPass - stepInPass) * (dt / dv));
+      eta = passes > 1 && pass < passes ? ` · ~${left} left in this pass` : ` · ~${left} left`;
+    }
+    const passLabel = passes > 1 ? `pass ${pass} of ${passes} · ` : "";
+    statusText.textContent = `${baseStatus} ${passLabel}step ${stepInPass}/${perPass} (${pct}%) · ${elapsed} elapsed${eta}`;
   };
 
   return {
@@ -2924,11 +2938,16 @@ function createLiveStatus(job) {
     isComfy: (job.input?.model || "").startsWith("comfy:"),
     promptId: job.taskId || null,
     setStatus(text) { baseStatus = text; paint(); },
-    setProgress(value, max) {
+    setProgress(value, max, passes = 1) {
       if (!max || max <= 0) return;
-      if (!progInfo || value < progInfo.value) progInfo = { value, max, anchorT: Date.now(), anchorValue: value };
-      else progInfo = { value, max, anchorT: progInfo.anchorT, anchorValue: progInfo.anchorValue };
-      progressBar.style.width = `${Math.max(0, Math.min(100, Math.round((value / max) * 100)))}%`;
+      const split = splitPasses(value, max, passes);
+      // Restart the rate clock on a new run or a new pass, so each pass's time left
+      // comes from its own speed.
+      const restart = !progInfo || value < progInfo.value || split.pass !== progInfo.pass;
+      progInfo = restart
+        ? { value, max, ...split, anchorT: Date.now(), anchorValue: value }
+        : { value, max, ...split, anchorT: progInfo.anchorT, anchorValue: progInfo.anchorValue };
+      progressBar.style.width = `${Math.max(0, Math.min(100, Math.round((split.stepInPass / split.perPass) * 100)))}%`;
       progressWrap.classList.remove("hidden");
       paint();
       if (!progTicker) progTicker = setInterval(paint, 1000);

@@ -393,6 +393,29 @@ export function recognizeWorkflow(workflow, nodeTypes) {
   return { controls, references, handledNodeIds, bypassable };
 }
 
+// How many sampler passes one run reports as a single progress bar. Some nodes run
+// the sampler more than once and scale ComfyUI's progress `max` to match — Spectrum's
+// offline smoothing replay reports `2 × steps` for a capture pass plus a replay pass.
+// A node_types entry declares that with
+//   "progress_passes": { "passes": 2, "when": [{ "input": "…", "equals": true, "default": true }] }
+// and it applies when every `when` condition holds on the node's literal input (a
+// wired or absent input counts as its `default`). Call this on the prepared workflow
+// (values applied, bypassed nodes removed). Returns 1 when nothing multiplies.
+export function progressPasses(workflow, nodeTypes) {
+  let passes = 1;
+  for (const node of Object.values(workflow || {})) {
+    const spec = nodeTypes.get(node?.class_type)?.progress_passes;
+    if (!spec || !Number.isInteger(spec.passes) || spec.passes < 2) continue;
+    const holds = (spec.when || []).every((c) => {
+      const raw = node.inputs?.[c.input];
+      const v = raw === undefined || asLink(raw) ? c.default : raw;
+      return v === c.equals;
+    });
+    if (holds) passes = Math.max(passes, spec.passes);
+  }
+  return passes;
+}
+
 // Find the largest numeric node id in a workflow (new injected nodes get ids above
 // it, so they never collide with the export's own ids).
 function maxNumericId(workflow) {

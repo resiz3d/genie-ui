@@ -10,6 +10,15 @@ heading for that version with the date, commit, then tag the commit `vX.Y.Z`.
 
 ## [Unreleased]
 
+### Changed
+
+- A ComfyUI run that goes over its sampler steps twice now shows it on the card:
+  **pass 1 of 2 · step 8/25** instead of **step 8/50**, with the bar and time left
+  for the current pass. The time left used to assume the fast second pass took as
+  long as the first. This applies to MiniMax H3 workflows using Spectrum with
+  **Offline smoothing replay** on; other nodes can opt in through a new
+  `progress_passes` field in `node_types/`.
+
 ## [1.0.0] - 2026-09-13
 
 First versioned release. GENie is a local front-end and project manager for your own

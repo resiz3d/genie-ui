@@ -2,7 +2,7 @@
   "115": {
     "inputs": {
       "aspect_ratio": "3:4 (Portrait Standard)",
-      "megapixels": 0.4,
+      "megapixels": 0.5,
       "multiple": 32
     },
     "class_type": "ResolutionSelector",
@@ -62,7 +62,7 @@
   },
   "123": {
     "inputs": {
-      "sampler_name": "res_multistep"
+      "sampler_name": "euler"
     },
     "class_type": "KSamplerSelect",
     "_meta": {
@@ -71,11 +71,11 @@
   },
   "124": {
     "inputs": {
-      "scheduler": "simple",
-      "steps": 10,
+      "scheduler": "beta",
+      "steps": 25,
       "denoise": 1,
       "model": [
-        "408",
+        "246",
         0
       ]
     },
@@ -115,7 +115,7 @@
   "126": {
     "inputs": {
       "model": [
-        "408",
+        "246",
         0
       ],
       "conditioning": [
@@ -126,16 +126,6 @@
     "class_type": "BasicGuider",
     "_meta": {
       "title": "Basic Guider"
-    }
-  },
-  "127": {
-    "inputs": {
-      "unet_name": "Minimax\\Minimax-h3_Singularity_ref2va_Pruned_v1.3_int8.safetensors",
-      "weight_dtype": "default"
-    },
-    "class_type": "UNETLoader",
-    "_meta": {
-      "title": "Load Diffusion Model"
     }
   },
   "128": {
@@ -151,7 +141,7 @@
   },
   "129": {
     "inputs": {
-      "noise_seed": 123
+      "noise_seed": 994948839296972
     },
     "class_type": "RandomNoise",
     "_meta": {
@@ -212,7 +202,7 @@
         0
       ],
       "ref_images.ref_image_0": [
-        "137",
+        "263",
         0
       ]
     },
@@ -221,52 +211,16 @@
       "title": "MiniMax H3 Reference to Video"
     }
   },
-  "137": {
-    "inputs": {
-      "image": "1a.jpg"
-    },
-    "class_type": "LoadImage",
-    "_meta": {
-      "title": "Load Image"
-    }
-  },
   "138": {
     "inputs": {
-      "value": "Reference 2 Video Prompt here"
+      "value": "Prompt here."
     },
     "class_type": "PrimitiveStringMultiline",
     "_meta": {
       "title": "Input Text (Prompt)"
     }
   },
-  "404": {
-    "inputs": {
-      "sage_attention": "disabled",
-      "allow_compile": true,
-      "model": [
-        "127",
-        0
-      ]
-    },
-    "class_type": "PathchSageAttentionKJ",
-    "_meta": {
-      "title": "Patch Sage Attention KJ"
-    }
-  },
-  "406": {
-    "inputs": {
-      "attention": "comfy kitchen attention",
-      "model": [
-        "404",
-        0
-      ]
-    },
-    "class_type": "ModelAttentionBackend",
-    "_meta": {
-      "title": "Model Attention Backend"
-    }
-  },
-  "407": {
+  "151": {
     "inputs": {
       "tau": 1.5,
       "start_percent": 0.2,
@@ -281,7 +235,7 @@
       "use_tma": true,
       "dense_blocks": "33-35,39-42, -1",
       "model": [
-        "406",
+        "231",
         0
       ]
     },
@@ -290,7 +244,30 @@
       "title": "Patch Sol-Attn"
     }
   },
-  "408": {
+  "170": {
+    "inputs": {
+      "unet_name": "Minimax\\Minimax-h3_Singularity_ref2va_Pruned_v1.3_int8.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "Load Diffusion Model"
+    }
+  },
+  "231": {
+    "inputs": {
+      "attention": "comfy kitchen attention",
+      "model": [
+        "283",
+        0
+      ]
+    },
+    "class_type": "ModelAttentionBackend",
+    "_meta": {
+      "title": "Model Attention Backend"
+    }
+  },
+  "246": {
     "inputs": {
       "enabled": true,
       "blend_weight": 0.5,
@@ -319,7 +296,7 @@
       "generic_correction_attenuation": "no_attenuation",
       "sa_pece_forecast_policy": "balanced",
       "model": [
-        "407",
+        "151",
         0
       ]
     },
@@ -328,15 +305,39 @@
       "title": "Spectrum Apply MiniMax H3"
     }
   },
-  "409": {
+  "263": {
     "inputs": {
-      "frame_rate": 8,
+      "image": "she-hulk.webp"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image"
+    }
+  },
+  "283": {
+    "inputs": {
+      "lora_name": "MiniMax\\BreastExpansion-MinimaxH3-v1-brstgrw.safetensors",
+      "strength_model": 1,
+      "model": [
+        "170",
+        0
+      ]
+    },
+    "class_type": "LoraLoaderModelOnly",
+    "_meta": {
+      "title": "Load LoRA"
+    }
+  },
+  "284": {
+    "inputs": {
+      "frame_rate": 24,
       "loop_count": 0,
-      "filename_prefix": "video/ComfyUI",
-      "format": "video/h265-mp4",
-      "pix_fmt": "yuv420p10le",
-      "crf": 22,
+      "filename_prefix": "video",
+      "format": "video/h264-mp4",
+      "pix_fmt": "yuv420p",
+      "crf": 19,
       "save_metadata": true,
+      "trim_to_audio": false,
       "pingpong": false,
       "save_output": true,
       "images": [

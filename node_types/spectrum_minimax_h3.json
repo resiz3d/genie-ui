@@ -1,9 +1,16 @@
 {
-  "_comment": "Spectrum for MiniMax H3 (ComfyUI-Spectrum-MiniMax-H3) — forecasts some sampler steps' features instead of running the transformer, trading a little fidelity for speed. A MODEL patch like the attention nodes, so it's `bypassable` (the toggle removes it; that also covers the node's own `enabled` input, which is left baked). The everyday knobs are exposed; the experimental/research switches (model_aware_*, generic_correction_*, anchor_residual_feedback, selective_rollback_correction, sa_pece_forecast_policy, debug) keep the export's values.",
+  "_comment": "Spectrum for MiniMax H3 (ComfyUI-Spectrum-MiniMax-H3) — forecasts some sampler steps' features instead of running the transformer, trading a little fidelity for speed. A MODEL patch like the attention nodes, so it's `bypassable` (the toggle removes it; that also covers the node's own `enabled` input, which is left baked). The everyday knobs are exposed; the experimental/research switches (model_aware_*, generic_correction_*, anchor_residual_feedback, selective_rollback_correction, sa_pece_forecast_policy, debug) keep the export's values. `progress_passes`: with offline smoothing replay on, Spectrum runs a capture pass then a transformer-free replay pass and reports 2 × steps to ComfyUI's progress bar, so GENie shows 'pass 1 of 2 · step N/steps' instead.",
   "nodes": {
     "SpectrumApplyMiniMaxH3": {
       "display_name": "Spectrum Apply MiniMax H3",
       "bypassable": true,
+      "progress_passes": {
+        "passes": 2,
+        "when": [
+          { "input": "enabled", "equals": true, "default": true },
+          { "input": "offline_smoothing_replay", "equals": true, "default": true }
+        ]
+      },
       "recognize": {
         "variants": [
           {

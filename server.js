@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { randomUUID, createHash, timingSafeEqual } from "node:crypto";
 import { spawn, execFile } from "node:child_process";
 import os from "node:os";
-import { loadNodeTypes, recognizeWorkflow, applyRecognizedValues, applyReferenceCollections } from "./comfy-recognize.js";
+import { loadNodeTypes, recognizeWorkflow, applyRecognizedValues, applyReferenceCollections, progressPasses } from "./comfy-recognize.js";
 import "dotenv/config";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -1471,6 +1471,23 @@ function ensureComfyWs() {
   });
 }
 
+// Sampler passes behind each prompt's progress bar, recorded when it's queued. Falls
+// back to the run's History entry after a server restart, then caches the answer.
+const comfyProgressPasses = new Map(); // promptId → passes
+function progressPassesFor(promptId) {
+  if (!comfyProgressPasses.has(promptId)) {
+    let passes = 1;
+    try {
+      passes = readJson(HISTORY_FILE).find((e) => e.taskId === promptId)?.progressPasses || 1;
+    } catch {
+      /* unreadable history — assume a single pass */
+    }
+    if (comfyProgressPasses.size > 500) comfyProgressPasses.clear(); // bounded; entries re-derive
+    comfyProgressPasses.set(promptId, passes);
+  }
+  return comfyProgressPasses.get(promptId);
+}
+
 // Drop progress we haven't heard about in 10 min (finished/abandoned prompts).
 function pruneComfyProgress() {
   const cutoff = Date.now() - 10 * 60 * 1000;
@@ -1560,6 +1577,7 @@ app.post("/api/comfy/generate", async (req, res) => {
     return res.status(400).json({ code: 400, msg: "Unknown workflow file" });
   }
   let workflow, tailResult;
+  let passes = 1; // sampler passes behind one progress bar (see progressPasses)
   let continuation = null; // null unless this workflow declares the continuation tokens
   let continuationValues = null; // just the role tokens GENie filled, for the record
   let runValues = values || {};
@@ -1606,6 +1624,7 @@ app.post("/api/comfy/generate", async (req, res) => {
     tailResult = await applyTails(workflow, tokenNodes, tails); // trim references to their last N seconds
     for (const id of Array.isArray(bypass) ? bypass : []) bypassNode(workflow, String(id)); // disabled patch nodes
     workflow = injectLoras(workflow, loras); // splice in any dynamically-added LoRAs
+    passes = progressPasses(workflow, loadNodeTypes(NODE_TYPES_DIR)); // after values + bypass
   } catch (err) {
     return res.status(400).json({ code: 400, msg: err.message || "Workflow could not be prepared" });
   }
@@ -1624,6 +1643,7 @@ app.post("/api/comfy/generate", async (req, res) => {
     if (!r.ok || !body.prompt_id) {
       return res.status(r.status || 502).json({ code: r.status || 502, msg: formatComfyPromptError(body) });
     }
+    comfyProgressPasses.set(body.prompt_id, passes);
     // Create the pending History entry now, so the server-side sweep can finish the
     // run even if the client never makes a second call.
     let historyId = null;
@@ -1648,6 +1668,7 @@ app.post("/api/comfy/generate", async (req, res) => {
         continuation,
         status: "pending",
       });
+      if (passes > 1) entry.progressPasses = passes; // so a server restart mid-run still knows
       const entries = readJson(HISTORY_FILE);
       entries.unshift(entry);
       writeJson(HISTORY_FILE, entries);
@@ -1726,7 +1747,7 @@ app.get("/api/comfy/status", async (req, res) => {
   ensureComfyWs(); // keep the progress socket alive while a run is polled
   pruneComfyProgress();
   const prog = comfyProgress.get(promptId);
-  const progress = prog ? { value: prog.value, max: prog.max } : undefined;
+  const progress = prog ? { value: prog.value, max: prog.max, passes: progressPassesFor(promptId) } : undefined;
   try {
     const r = await fetch(`${COMFYUI_URL}/history/${encodeURIComponent(promptId)}`);
     const hist = await r.json().catch(() => ({}));
