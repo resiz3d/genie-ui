@@ -10,6 +10,34 @@ heading for that version with the date, commit, then tag the commit `vX.Y.Z`.
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-09-17
+
+### Added
+
+- **MiniMax H3 (Hailuo 03) on kie.ai** — three new cloud models in the model
+  dropdown: **text-to-video**, **image-to-video** (first and/or last frame) and
+  **reference-to-video** (up to 9 images, 3 videos and 3 audio references). 4–15s
+  clips at **768P or 2K** with native audio, so the form drops the Generate-audio,
+  Web-search and NSFW-checker switches for these models, swaps in H3's own
+  resolution tiers, and hides Aspect ratio for image-to-video (which has no such
+  parameter). GENie also checks H3's input rules before submitting: image-to-video
+  needs a frame, and reference-to-video needs an image or video reference — audio
+  can't stand alone. API details are in [docs/kie-api/minimax-h3.md](docs/kie-api/minimax-h3.md).
+- **Free VRAM** in the ComfyUI host-stats strip — unloads ComfyUI's models and clears
+  its cache. With a run in flight it takes effect once that run finishes; the next
+  run reloads its models.
+- **Reset** on each recognized node's section header — puts that section's controls
+  back to recommended values, never the workflow's own baked ones. The value comes
+  from a new `recommended` field in `node_types/`, else ComfyUI's node default from
+  `/object_info`; text clears, a dropdown takes its first choice, and a number with
+  neither keeps its value. Controls locked by an armed continuation are left alone,
+  and it asks first if a typed prompt would be wiped.
+- **Model Sparse Attention** (ComfyUI core's `BlockSparseAttention`) is recognized,
+  replacing the deprecated kijai `SolAttnPatch` entry. Its `method` is a DynamicCombo,
+  so recognition now resolves the dotted inputs an API export stores for those
+  (`selection.tau`) from the chosen option's schema.
+- Spectrum MiniMax H3 exposes **model-aware mode** and its **risk threshold**.
+
 ### Changed
 
 - A ComfyUI run that goes over its sampler steps twice now shows it on the card:
@@ -18,6 +46,12 @@ heading for that version with the date, commit, then tag the commit `vX.Y.Z`.
   long as the first. This applies to MiniMax H3 workflows using Spectrum with
   **Offline smoothing replay** on; other nodes can opt in through a new
   `progress_passes` field in `node_types/`.
+- Extra LoRAs splice onto the workflow's model loader (or the last LoRA already
+  stacked on it) instead of wherever the model chain was first found, so they sit
+  **ahead of** MODEL patches like attention backends, sparse attention and Spectrum
+  rather than between those and the sampler.
+- A ComfyUI number input whose step `/object_info` doesn't describe now accepts
+  decimals instead of being rounded to whole numbers by the browser.
 
 ## [1.0.0] - 2026-09-13
 

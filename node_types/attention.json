@@ -1,5 +1,5 @@
 {
-  "_comment": "Attention patches — MODEL-in/MODEL-out nodes chained between the diffusion-model loader and the sampler. Each is `bypassable`, so the form offers an enable/disable toggle at the top of its section and a disabled node is removed at generate time with its `model` link reconnected (for anyone without the custom node installed). Numbers and combos enrich from /object_info. SolAttnPatch's optional `tau_profile` is a forced link input, so it stays graph-driven. Note: KJNodes documents PathchSageAttentionKJ as a global patch that isn't undone by removing the node — run it once with `disabled` to revert.",
+  "_comment": "Attention patches — MODEL-in/MODEL-out nodes chained between the diffusion-model loader and the sampler. Each is `bypassable`, so the form offers an enable/disable toggle at the top of its section and a disabled node is removed at generate time with its `model` link reconnected (for anyone without the custom node installed). Numbers and combos enrich from /object_info. BlockSparseAttention is ComfyUI core's sparse attention (it replaces the deprecated kijai SolAttnPatch, and Spectrum MiniMax H3 audits it so forecasts carry across its sparse transitions); its `method` is a DynamicCombo, so the API export stores the choice as `selection` and the chosen method's inputs as dotted keys — only `sol-attn`'s `selection.tau` is exposed, the method stays as exported (sla/vsa need trained weights). Its dense_blocks parser takes only non-negative indices ('0, 1, 47-49'; MiniMax H3 has 50 blocks, 0–49) — a '-1' would silently mean block 1. Place it after Model Attention Backend, which becomes its dense fallback. Note: KJNodes documents PathchSageAttentionKJ as a global patch that isn't undone by removing the node — run it once with `disabled` to revert.",
   "nodes": {
     "PathchSageAttentionKJ": {
       "display_name": "Patch Sage Attention KJ",
@@ -11,7 +11,7 @@
             "group": "Sage Attention",
             "collapsed": true,
             "expose": {
-              "sage_attention": { "name": "sage_attention",     "label": "Sage attention", "control": "combo",  "width": "2/3", "order": 60 },
+              "sage_attention": { "name": "sage_attention",     "label": "Sage attention", "control": "combo",  "width": "2/3", "order": 60, "recommended": "auto" },
               "allow_compile":  { "name": "sage_allow_compile", "label": "Allow compile",  "control": "toggle", "width": "1/3", "order": 61 }
             }
           }
@@ -34,27 +34,23 @@
         ]
       }
     },
-    "SolAttnPatch": {
-      "display_name": "Patch Sol-Attn",
+    "BlockSparseAttention": {
+      "display_name": "Model Sparse Attention",
       "bypassable": true,
       "recognize": {
         "variants": [
           {
             "match": [{ "when": "any" }],
-            "group": "Sol-Attn (sparse attention)",
+            "group": "Sparse Attention (Sol-Attn)",
             "collapsed": true,
             "expose": {
-              "tau":               { "name": "sol_tau",               "label": "Tau (sparsity)",    "control": "number", "width": "1/4", "order": 63.01 },
-              "start_percent":     { "name": "sol_start_percent",     "label": "Start %",           "control": "number", "width": "1/4", "order": 63.02 },
-              "end_percent":       { "name": "sol_end_percent",       "label": "End %",             "control": "number", "width": "1/4", "order": 63.03 },
-              "min_tokens":        { "name": "sol_min_tokens",        "label": "Min tokens",        "control": "number", "width": "1/4", "order": 63.04 },
-              "sink_conditioning": { "name": "sol_sink_conditioning", "label": "Sink conditioning", "control": "combo",  "width": "1/2", "order": 63.05 },
-              "dense_blocks":      { "name": "sol_dense_blocks",      "label": "Dense blocks",      "control": "text",   "width": "1/2", "order": 63.06 },
-              "int8_qk":           { "name": "sol_int8_qk",           "label": "INT8 QK",           "control": "toggle", "width": "1/4", "order": 63.07 },
-              "int8_pv":           { "name": "sol_int8_pv",           "label": "INT8 PV",           "control": "toggle", "width": "1/4", "order": 63.08 },
-              "use_tma":           { "name": "sol_use_tma",           "label": "TMA kernels",       "control": "toggle", "width": "1/4", "order": 63.09 },
-              "morton":            { "name": "sol_morton",            "label": "Morton reorder",    "control": "toggle", "width": "1/4", "order": 63.10 },
-              "morton_curve":      { "name": "sol_morton_curve",      "label": "Morton curve",      "control": "combo",  "width": "1/2", "order": 63.11 }
+              "selection.tau":     { "name": "sparse_tau",               "label": "Tau (sparsity)",    "control": "number", "width": "1/4", "order": 63.01 },
+              "start_percent":     { "name": "sparse_start_percent",     "label": "Start %",           "control": "number", "width": "1/4", "order": 63.02 },
+              "end_percent":       { "name": "sparse_end_percent",       "label": "End %",             "control": "number", "width": "1/4", "order": 63.03 },
+              "min_tokens":        { "name": "sparse_min_tokens",        "label": "Min tokens",        "control": "number", "width": "1/4", "order": 63.04 },
+              "sink_conditioning": { "name": "sparse_sink_conditioning", "label": "Sink conditioning", "control": "combo",  "width": "1/2", "order": 63.05 },
+              "extra_tokens":      { "name": "sparse_extra_tokens",      "label": "Extra tokens",      "control": "number", "width": "1/2", "order": 63.06 },
+              "dense_blocks":      { "name": "sparse_dense_blocks",      "label": "Dense blocks",      "control": "text",   "width": "full", "order": 63.07 }
             }
           }
         ]

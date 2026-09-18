@@ -89,7 +89,11 @@ you like.
 
 These are spliced into the workflow at generate time — the app inserts a chain of
 `LoraLoader` nodes between the checkpoint's MODEL/CLIP and everything that consumes
-them, so **any checkpoint workflow** gets extra LoRAs without being pre-wired. If a
+them, so **any checkpoint workflow** gets extra LoRAs without being pre-wired. The
+MODEL splice point is found by walking the model chain up from the sampler (or its
+guider): extra LoRAs go right after the model loader — or after LoRAs already stacked
+directly on it — so they sit ahead of MODEL patches like attention backends, sparse attention
+and Spectrum rather than between those and the sampler. If a
 workflow has no MODEL input to attach to (e.g. some video pipelines), adding a LoRA
 surfaces an error (the run can't be queued). Workflows without a CLIP encoder use
 `LoraLoaderModelOnly` (model-only) automatically.
@@ -117,7 +121,7 @@ its sole link input).
 Common patch nodes don't need the flag: their [`node_types/`](../node_types/) entry is
 marked `bypassable`, so a raw export gets the checkbox at the top of the node's section
 as-is. That currently covers `PathchSageAttentionKJ`, `ModelAttentionBackend`,
-`SolAttnPatch` and `SpectrumApplyMiniMaxH3`.
+`BlockSparseAttention` (core's Model Sparse Attention) and `SpectrumApplyMiniMaxH3`.
 
 Add `_meta.bypassed_by_default: true` and the toggle starts **off**, for a node that
 shouldn't impose anything until it's asked for. Your saved settings win once the

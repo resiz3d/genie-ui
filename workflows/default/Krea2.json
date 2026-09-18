@@ -38,7 +38,7 @@
       "sampler_name": "euler",
       "scheduler": "simple",
       "denoise": 1,
-      "model": ["77", 0],
+      "model": ["55", 0],
       "positive": ["51", 0],
       "negative": ["58", 0],
       "latent_image": ["52", 0]

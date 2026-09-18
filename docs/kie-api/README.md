@@ -1,4 +1,4 @@
-# kie.ai API reference (Seedance / Seedream)
+# kie.ai API reference (Seedance / Seedream / MiniMax H3)
 
 Local copies of the kie.ai model API docs this tool talks to, so we don't have to
 re-check the web. One file per model family:
@@ -6,6 +6,8 @@ re-check the web. One file per model family:
 - [seedance-2-5.md](seedance-2-5.md) — `bytedance/seedance-2-5`
 - [seedance-2-0.md](seedance-2-0.md) — `bytedance/seedance-2` and `bytedance/seedance-2-fast`
 - [seedance-2-0-mini.md](seedance-2-0-mini.md) — `bytedance/seedance-2-mini`
+- [minimax-h3.md](minimax-h3.md) — `minimax-h3/text-to-video`,
+  `minimax-h3/image-to-video`, `minimax-h3/reference-to-video`
 
 Seedream (image) models are used by the tool too but aren't documented here yet.
 
@@ -16,6 +18,7 @@ Seedream (image) models are used by the tool too but aren't documented here yet.
 | Seedance 2.5 | Official kie.ai API docs (pasted in full into the project) | High — authoritative param table with types/defaults |
 | Seedance 2.0 / Fast | Playground **Form** view at <https://kie.ai/seedance-2-0> | Good — param names + option lists read off the live form |
 | Seedance 2.0 Mini | Playground **Form** view at <https://kie.ai/seedance-2-0-mini> | Good — same |
+| MiniMax H3 | Official OpenAPI specs under <https://docs.kie.ai/market/minimax-h3/> (retrieved 2026-09-17) | High — full schemas with types/enums/defaults |
 
 Retrieved **2026-08-18**. The 2.0/Mini entries come from the rendered playground
 form (which reliably shows a field only when the model supports it), not a formal

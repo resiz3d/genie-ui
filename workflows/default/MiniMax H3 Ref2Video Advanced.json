@@ -222,26 +222,23 @@
   },
   "151": {
     "inputs": {
-      "tau": 1.5,
+      "selection": "sol-attn",
+      "selection.tau": 1.5,
       "start_percent": 0.2,
       "end_percent": 0.9,
-      "min_tokens": 4096,
-      "int8_qk": true,
-      "sink_conditioning": "exact_kv",
-      "morton": false,
-      "morton_curve": "2d_frame",
-      "int8_pv": true,
+      "dense_blocks": "33-35, 39-42, 49",
+      "min_tokens": 12288,
+      "extra_tokens": 256,
+      "sink_conditioning": "exact_kv_and_rows",
       "verbose": false,
-      "use_tma": true,
-      "dense_blocks": "33-35,39-42, -1",
       "model": [
         "231",
         0
       ]
     },
-    "class_type": "SolAttnPatch",
+    "class_type": "BlockSparseAttention",
     "_meta": {
-      "title": "Patch Sol-Attn"
+      "title": "Model Sparse Attention"
     }
   },
   "170": {

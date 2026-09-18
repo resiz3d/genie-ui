@@ -54,6 +54,9 @@
               <option value="seedream/5-lite-text-to-image">Seedream 5.0 Lite (text-to-image)</option>
               <option value="seedream/5-pro-image-to-image">Seedream 5.0 Pro (image-to-image)</option>
               <option value="seedream/5-pro-text-to-image">Seedream 5.0 Pro (text-to-image)</option>
+              <option value="minimax-h3/text-to-video">MiniMax H3 (text-to-video)</option>
+              <option value="minimax-h3/image-to-video">MiniMax H3 (image-to-video)</option>
+              <option value="minimax-h3/reference-to-video">MiniMax H3 (reference-to-video)</option>
             </optgroup>
           </select>
         </label>
@@ -182,7 +185,7 @@
             </select>
           </label>
 
-          <label>
+          <label id="aspectField">
             Aspect ratio
             <select id="aspect_ratio">
               <option value="16:9" selected>16:9</option>
@@ -207,7 +210,7 @@
           <label class="inline" id="webSearchField">
             <input id="web_search" type="checkbox" /> Web search
           </label>
-          <label class="inline">
+          <label class="inline" id="nsfwField">
             <input id="nsfw_checker" type="checkbox" /> NSFW checker
           </label>
           <label class="inline hidden" id="returnLastFrameField">
@@ -233,7 +236,10 @@
       </form>
 
       <!-- Live host stats while a local ComfyUI run is in flight. -->
-      <div id="comfyStats" class="comfy-stats hidden" title="Host CPU / GPU utilization and VRAM usage"></div>
+      <div id="comfyStats" class="comfy-stats hidden">
+        <span id="comfyStatsText" title="Host CPU / GPU utilization and VRAM usage"></span>
+        <button type="button" id="freeVramBtn" class="link-btn" title="Unload ComfyUI's models and clear its cache. Applies once any running job finishes; the next run reloads models.">Free VRAM</button>
+      </div>
 
       <pre id="error" class="hidden"></pre>
 

@@ -46,11 +46,11 @@
             "group": "Video Combine",
             "collapsed": true,
             "expose": {
-              "filename_prefix": { "name": "filename_prefix", "label": "Filename & path", "control": "text",   "width": "full", "order": 85 },
-              "format":          { "name": "output_format",   "label": "Format",          "control": "combo",  "width": "1/2",  "order": 86 },
-              "pix_fmt":         { "name": "pix_fmt",         "label": "Pixel format",    "control": "combo",  "width": "1/2",  "order": 87 },
-              "frame_rate":      { "name": "fps",             "label": "Frame rate",      "control": "number", "width": "1/2",  "order": 88 },
-              "crf":             { "name": "crf",             "label": "CRF (quality)",   "control": "number", "width": "1/2",  "order": 89 }
+              "filename_prefix": { "name": "filename_prefix", "label": "Filename & path", "control": "text",   "width": "full", "order": 85, "recommended": "video" },
+              "format":          { "name": "output_format",   "label": "Format",          "control": "combo",  "width": "1/2",  "order": 86, "recommended": "video/h264-mp4" },
+              "pix_fmt":         { "name": "pix_fmt",         "label": "Pixel format",    "control": "combo",  "width": "1/2",  "order": 87, "recommended": "yuv420p" },
+              "frame_rate":      { "name": "fps",             "label": "Frame rate",      "control": "number", "width": "1/2",  "order": 88, "recommended": 24 },
+              "crf":             { "name": "crf",             "label": "CRF (quality)",   "control": "number", "width": "1/2",  "order": 89, "recommended": 19 }
             }
           }
         ]

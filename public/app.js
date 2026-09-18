@@ -1058,7 +1058,8 @@ function ratePerSec(model, resolution, audioOn) {
     model,
     (e) =>
       e.input?.resolution === resolution &&
-      (e.input?.generate_audio !== false) === audioOn &&
+      // H3 has no generate_audio param, so every run of it is an audio run.
+      (audioOn === null || (e.input?.generate_audio !== false) === audioOn) &&
       e.input?.duration > 0
   )
     .slice(0, RECENT_RATE_SAMPLES)
@@ -1088,7 +1089,7 @@ function updateEstimate() {
 
   const resolution = document.getElementById("resolution").value;
   const duration = Number(document.getElementById("duration").value) || 0;
-  const audioOn = document.getElementById("generate_audio").checked;
+  const audioOn = isH3() ? null : document.getElementById("generate_audio").checked;
   const r = ratePerSec(model, resolution, audioOn);
   if (!r || !duration) {
     const label = `${videoModelLabel(model)} at ${resolution}`;
@@ -1096,7 +1097,7 @@ function updateEstimate() {
     estimateEl.title = "";
     return;
   }
-  const refSecs = refVideoSeconds();
+  const refSecs = usesRefMedia() ? refVideoSeconds() : 0;
   const est = Math.round(r.rate * (duration + refSecs));
   const refNote = refSecs > 0 ? ` (incl. ~${Math.round(refSecs)}s video ref)` : "";
   const overLimit = refSecs > 15 ? ` ⚠ video refs exceed the 15s total limit` : "";
@@ -1133,8 +1134,19 @@ const IMAGE_ASPECTS = ["1:1", "4:3", "3:4", "16:9", "9:16", "2:3", "3:2", "21:9"
 const IMAGE_FORMATS = [["png", "PNG"], ["jpeg", "JPEG"]];
 const VIDEO_FORMATS = [["mp4", "mp4"], ["mov", "mov"]];
 
+// Resolution options by model family: [value, label]. Seedance uses the familiar
+// ladder; MiniMax H3 has its own two-tier naming and rejects anything else.
+const SEEDANCE_RESOLUTIONS = [["480p", "480p"], ["720p", "720p"], ["1080p", "1080p"], ["4k", "4K"]];
+const H3_RESOLUTIONS = [["768P", "768p"], ["2K", "2K"]];
+
 const isSeedream = () => modelSelect.value.startsWith("seedream/");
 const is25 = () => modelSelect.value === "bytedance/seedance-2-5";
+// MiniMax H3 (Hailuo 03) — kie.ai splits it into one model id per generation mode,
+// so the mode is the model choice rather than a toggle inside one model.
+const isH3 = () => modelSelect.value.startsWith("minimax-h3/");
+const isH3T2V = () => modelSelect.value === "minimax-h3/text-to-video";
+const isH3I2V = () => modelSelect.value === "minimax-h3/image-to-video";
+const isH3Ref = () => modelSelect.value === "minimax-h3/reference-to-video";
 // Local ComfyUI workflows are selected as `comfy:<file.json>`.
 const isComfy = () => modelSelect.value.startsWith("comfy:");
 const comfyFile = () => modelSelect.value.slice("comfy:".length);
@@ -1149,7 +1161,13 @@ const isSeedanceVideo = () => modelSelect.value.startsWith("bytedance/seedance-"
 function frameMode() {
   return document.querySelector('input[name="imageSource"]:checked')?.value || "refs";
 }
-const usesFrames = () => isSeedanceVideo() && frameMode() === "frames";
+// H3 image-to-video has no reference-image alternative — it is always the frame form.
+const usesFrames = () => isH3I2V() || (isSeedanceVideo() && frameMode() === "frames");
+// Which reference fields the active model+mode actually sends. Image models take
+// neither; H3 takes video/audio only in reference-to-video, and takes reference
+// images in that mode alone too.
+const usesRefMedia = () => !isSeedream() && (!isH3() || isH3Ref());
+const usesRefImages = () => !isT2I() && !isH3T2V() && !usesFrames();
 const isI2I = () => isSeedream() && modelSelect.value.endsWith("-image-to-image");
 const isT2I = () => isSeedream() && modelSelect.value.endsWith("-text-to-image");
 // all seedream variants end in "-to-image"; video models never do
@@ -1169,7 +1187,12 @@ const MAX_RESOLUTION = {
 
 // Models whose aspect_ratio list includes "adaptive" (2.5 and 2.0 Mini per the
 // kie.ai docs; 2.0 and Fast do not offer it).
-const ADAPTIVE_ASPECT_MODELS = new Set(["bytedance/seedance-2-5", "bytedance/seedance-2-mini"]);
+// H3 reference-to-video offers it too (and defaults to it); H3 text-to-video does not.
+const ADAPTIVE_ASPECT_MODELS = new Set([
+  "bytedance/seedance-2-5",
+  "bytedance/seedance-2-mini",
+  "minimax-h3/reference-to-video",
+]);
 const hasAdaptiveAspect = () => ADAPTIVE_ASPECT_MODELS.has(modelSelect.value);
 // Index into RESOLUTION_ORDER of the current model's ceiling (default: 4k).
 const maxResolutionIndex = () =>
@@ -1180,10 +1203,16 @@ const VIDEO_VARIANT_LABEL = {
   "bytedance/seedance-2-5": "2.5",
   "bytedance/seedance-2-fast": "Fast",
   "bytedance/seedance-2-mini": "Mini",
+  "minimax-h3/text-to-video": "H3 t2v",
+  "minimax-h3/image-to-video": "H3 i2v",
+  "minimax-h3/reference-to-video": "H3 ref2v",
 };
 
 // Full display name for a video model id.
 function videoModelLabel(model) {
+  if ((model || "").startsWith("minimax-h3/")) {
+    return `MiniMax H3 (${model.slice("minimax-h3/".length)})`;
+  }
   if (model === "bytedance/seedance-2-5") return "Seedance 2.5";
   if (model === "bytedance/seedance-2-fast") return "Seedance 2 Fast";
   if (model === "bytedance/seedance-2-mini") return "Seedance 2 Mini";
@@ -1223,6 +1252,15 @@ function setAspectOptions(values, preferred = "16:9") {
     : values[0];
 }
 
+// Repopulate the resolution select for the active model family. Keeps the current
+// choice when the new family still offers it, otherwise falls back to `def`.
+function setResolutionOptions(values, def) {
+  const cur = resolutionSelect.value;
+  resolutionSelect.innerHTML = "";
+  for (const [v, label] of values) resolutionSelect.appendChild(new Option(label, v));
+  resolutionSelect.value = values.some(([v]) => v === cur) ? cur : def;
+}
+
 // Repopulate the output-format select for the active output medium.
 const outputFormatSelect = document.getElementById("output_format");
 function setFormatOptions(values, def) {
@@ -1258,17 +1296,29 @@ function applyModelUI() {
   const seedream = isSeedream();
   const maxResIdx = maxResolutionIndex();
   const frames = is25();
-  for (const id of ["videoField", "audioField", "resolutionField", "durationField", "genAudioField", "webSearchField"]) {
+  const h3 = isH3();
+  // Reference video/audio belong to Seedance and to H3's reference-to-video only.
+  for (const id of ["videoField", "audioField"]) {
+    document.getElementById(id).classList.toggle("hidden", !usesRefMedia());
+  }
+  for (const id of ["resolutionField", "durationField"]) {
     document.getElementById(id).classList.toggle("hidden", seedream);
   }
+  // H3 generates audio natively and documents neither web_search nor nsfw_checker.
+  for (const id of ["genAudioField", "webSearchField"]) {
+    document.getElementById(id).classList.toggle("hidden", seedream || h3);
+  }
+  document.getElementById("nsfwField").classList.toggle("hidden", h3);
+  // H3 image-to-video takes no aspect_ratio — the frames decide it.
+  document.getElementById("aspectField").classList.toggle("hidden", isH3I2V());
   // Seedance video models make reference images and first/last frames mutually
   // exclusive, so a toggle chooses which set is shown. `refsHidden` hides
   // reference images (text-to-image, or any Seedance model in frames mode); the
   // frame dropzones show only in that mode. "return last frame" is a 2.5-only
-  // output option.
+  // output option. H3 needs no toggle: its mode is the model id.
   const seedanceVideo = isSeedanceVideo();
   const framesMode = usesFrames();
-  const refsHidden = isT2I() || framesMode;
+  const refsHidden = !usesRefImages();
   document.getElementById("imageSourceField").classList.toggle("hidden", !seedanceVideo);
   document.getElementById("imageField").classList.toggle("hidden", refsHidden);
   document.getElementById("galleryWrap").classList.toggle("hidden", refsHidden);
@@ -1285,15 +1335,21 @@ function applyModelUI() {
   if (seedream) setQualityLabels();
   setAspectOptions(
     seedream ? IMAGE_ASPECTS : hasAdaptiveAspect() ? VIDEO_ASPECTS_ADAPTIVE : VIDEO_ASPECTS,
-    frames ? "adaptive" : "16:9" // only 2.5 documents adaptive as its default
+    // 2.5 and H3 reference-to-video are the ones that document adaptive as default
+    frames || isH3Ref() ? "adaptive" : "16:9"
   );
-  // Disable any resolution above this model's ceiling; if the current selection
-  // is now disabled, drop to the highest allowed option.
-  for (const opt of resolutionSelect.options) {
-    opt.disabled = RESOLUTION_ORDER.indexOf(opt.value) > maxResIdx;
-  }
-  if (RESOLUTION_ORDER.indexOf(resolutionSelect.value) > maxResIdx) {
-    resolutionSelect.value = RESOLUTION_ORDER[maxResIdx];
+  if (h3) {
+    setResolutionOptions(H3_RESOLUTIONS, "2K");
+  } else {
+    setResolutionOptions(SEEDANCE_RESOLUTIONS, "720p");
+    // Disable any resolution above this model's ceiling; if the current selection
+    // is now disabled, drop to the highest allowed option.
+    for (const opt of resolutionSelect.options) {
+      opt.disabled = RESOLUTION_ORDER.indexOf(opt.value) > maxResIdx;
+    }
+    if (RESOLUTION_ORDER.indexOf(resolutionSelect.value) > maxResIdx) {
+      resolutionSelect.value = RESOLUTION_ORDER[maxResIdx];
+    }
   }
   // Seedance 2.5 allows up to 30s; the other video models cap at 15s.
   const durInput = document.getElementById("duration");
@@ -1905,6 +1961,7 @@ async function renderComfyControls() {
   // control mounts: its group's <details> body in grouped mode, or the flat grid.
   const grouped = tokens.some((t) => t.group);
   const groupBodies = new Map(); // group key → body element (created lazily, in order)
+  const groupResets = new Map(); // group key → its summary's Reset button
   // Mark a section's only control, whose label can defer to the section's summary.
   const groupSizes = new Map();
   for (const t of tokens) if (t.group) groupSizes.set(t.group.key, (groupSizes.get(t.group.key) || 0) + 1);
@@ -1922,7 +1979,23 @@ async function renderComfyControls() {
       details.open = !token.group.collapsed; // loaders / save node start closed
       details.style.gridColumn = "span 12";
       const summary = document.createElement("summary");
-      summary.textContent = token.group.label || "Options";
+      const label = token.group.label || "Options";
+      summary.textContent = label;
+      // Reset this node's controls to recommended values (see comfyResetValue). A
+      // button inside <summary> would also toggle the section, so the click stops here.
+      const reset = document.createElement("button");
+      reset.type = "button";
+      reset.className = "link-btn comfy-group-reset";
+      reset.textContent = "Reset";
+      reset.title = "Reset to recommended values (not the workflow's)";
+      const key = token.group.key;
+      reset.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        resetComfyGroup(key, label);
+      });
+      summary.appendChild(reset);
+      groupResets.set(key, reset);
       body = document.createElement("div");
       body.className = "comfy-node-group-body comfy-grid";
       details.append(summary, body);
@@ -1967,6 +2040,11 @@ async function renderComfyControls() {
       // numbers, text, inline-option selects, and non-file object_info combos (sampler)
       renderScalarControl(it.token, it.type, mainContainer(it.token));
     }
+  }
+  // A section with nothing to reset (only media, or numbers with no known default)
+  // keeps a plain header.
+  for (const [key, btn] of groupResets) {
+    btn.hidden = !comfyFields.some((f) => f.groupKey === key && f.reset);
   }
 
   // "ComfyUI Settings" drawer (collapsed): the installed-file/choice pickers from
@@ -2038,6 +2116,17 @@ async function renderComfyControls() {
   } catch {
     /* no saved settings — token defaults stand */
   }
+}
+
+// A node section's Reset: every control in it goes to its recommended value (the
+// node_types entry's, else ComfyUI's node default; prompts and other text clear). Locked
+// controls (pinned for an armed continuation) are left alone, and so is the section's
+// enable/disable checkbox. Asks first if a typed prompt would be wiped.
+function resetComfyGroup(key, label) {
+  const fields = comfyFields.filter((f) => f.groupKey === key && f.reset && !f.locked);
+  if (!fields.length) return;
+  if (fields.some((f) => f.wouldClear?.()) && !confirm(`Reset "${label}"?\n\nThis clears the prompt text you've entered.`)) return;
+  for (const f of fields) f.reset();
 }
 
 // Enable/disable for the workflow's bypassable patch nodes. Each node gets a
@@ -2273,6 +2362,20 @@ function makeSearchableSelect(options, initialValue = "", placeholder = "Type to
   return root;
 }
 
+// What a node section's Reset puts back in one control — never the workflow's own
+// value: the node_types entry's `recommended` value, else ComfyUI's node default
+// (steps 20, a filename prefix), else blank for text (a prompt) or the first choice
+// for a dropdown (ComfyUI's implicit default, e.g. the first installed model).
+// `undefined` means nothing to reset to — a number with no default keeps its value.
+function comfyResetValue(token, type, choices) {
+  const known = (v) => v !== undefined && v !== null && (type !== "select" || choices.some((o) => o.value === String(v)));
+  if (known(token.recommended)) return token.recommended;
+  if (known(token.nodeDefault)) return token.nodeDefault;
+  if (type === "select") return choices[0]?.value;
+  if (type === "text" || type === "textarea") return "";
+  return undefined;
+}
+
 // Build one scalar control (select / number / text / textarea) and register it,
 // appending it to `container` (the main grid, or the ComfyUI Settings drawer).
 function renderScalarControl(token, type, container = comfyControlsEl) {
@@ -2325,14 +2428,18 @@ function renderScalarControl(token, type, container = comfyControlsEl) {
     field.classList.add("field-toggle");
     field.appendChild(label);
     container.appendChild(field);
-    comfyFields.push({
+    const resetTo = comfyResetValue(token, type, []);
+    const toggleCtrl = {
       name: token.name,
       getValue: async () => input.checked,
       peek: () => input.checked,
       set: (v) => { input.checked = asBool(v); },
       pin: !!token.pin,
-      lock: (on) => { input.disabled = !!on; field.classList.toggle("locked", !!on); },
-    });
+      lock: (on) => { input.disabled = !!on; toggleCtrl.locked = !!on; field.classList.toggle("locked", !!on); },
+      groupKey: token.group?.key ?? null,
+      reset: resetTo === undefined ? null : () => { input.checked = asBool(resetTo); },
+    };
+    comfyFields.push(toggleCtrl);
     return;
   }
   if (type === "select") {
@@ -2357,7 +2464,9 @@ function renderScalarControl(token, type, container = comfyControlsEl) {
     if (type === "number") {
       if (token.min != null) input.min = token.min;
       if (token.max != null) input.max = token.max;
-      if (token.step != null) input.step = token.step;
+      // No step known (offline, or an input /object_info doesn't describe): allow any
+      // value, or the browser's default step of 1 rejects decimals like 1.5.
+      input.step = token.step != null ? token.step : "any";
     }
     if (type === "number" && token.name.toLowerCase().includes("seed")) {
       // "Control after generate" mirrors ComfyUI's seed widget: how the seed
@@ -2381,6 +2490,7 @@ function renderScalarControl(token, type, container = comfyControlsEl) {
   field.appendChild(input);
   container.appendChild(field);
   const readValue = () => (type === "number" || numericSelect ? Number(input.value) : input.value);
+  const resetTo = comfyResetValue(token, type, parsedOptions);
   const ctrl = {
     name: token.name,
     getValue: async () => readValue(),
@@ -2389,7 +2499,12 @@ function renderScalarControl(token, type, container = comfyControlsEl) {
     // Declared "; pin": must not drift between a run and its continuation, so the
     // form locks it while one is armed.
     pin: !!token.pin,
-    lock: (on) => { input.disabled = !!on; field.classList.toggle("locked", !!on); },
+    lock: (on) => { input.disabled = !!on; ctrl.locked = !!on; field.classList.toggle("locked", !!on); },
+    // The node section's Reset (see resetComfyGroup).
+    groupKey: token.group?.key ?? null,
+    reset: resetTo === undefined ? null : () => { input.value = type === "select" ? String(resetTo) : resetTo; },
+    // True when Reset would blank a typed multi-line text (a prompt), so it asks first.
+    wouldClear: () => type === "textarea" && resetTo === "" && String(input.value).trim() !== "",
   };
   if (afterMode) {
     ctrl.advance = () => {
@@ -2797,12 +2912,14 @@ async function pollComfyJob(job) {
 }
 
 // --- prompt length counter -----------------------------------------------
-// Caps per the model docs: Seedance 20,000; Seedream Lite 3,000; Pro 5,000.
+// Caps per the model docs: Seedance 20,000; Seedream Lite 3,000; Pro 5,000;
+// MiniMax H3 7,000.
 const promptEl = document.getElementById("prompt");
 const promptCount = document.getElementById("promptCount");
 const promptCapHint = document.getElementById("promptCapHint");
 
 function promptCap() {
+  if (isH3()) return 7000;
   if (!isSeedream()) return 20000;
   return isSeedreamPro() ? 5000 : 3000;
 }
@@ -3100,6 +3217,30 @@ function collectInput(resolved) {
     if (isSeedreamPro()) input.output_format = document.getElementById("output_format").value;
     return input;
   }
+  // MiniMax H3: a much smaller parameter set than Seedance — no generate_audio
+  // (audio is native), web_search, nsfw_checker, output_format or return_last_frame,
+  // and each mode accepts only its own reference fields.
+  if (isH3()) {
+    const input = {
+      model: modelSelect.value,
+      prompt: document.getElementById("prompt").value.trim(),
+      duration: Number(document.getElementById("duration").value),
+      resolution: resolutionSelect.value,
+    };
+    if (isH3I2V()) {
+      // image-to-video takes a first and/or last frame, and no aspect_ratio.
+      if (resolved.firstFrame?.[0]) input.first_frame_url = resolved.firstFrame[0];
+      if (resolved.lastFrame?.[0]) input.last_frame_url = resolved.lastFrame[0];
+    } else {
+      input.aspect_ratio = aspectSelect.value;
+    }
+    if (isH3Ref()) {
+      input.reference_image_urls = resolved.image;
+      input.reference_video_urls = resolved.video;
+      input.reference_audio_urls = resolved.audio;
+    }
+    return input;
+  }
   const input = {
     model: modelSelect.value,
     prompt: document.getElementById("prompt").value.trim(),
@@ -3148,6 +3289,16 @@ form.addEventListener("submit", async (e) => {
     setError("Seedream image-to-image needs at least one reference image.");
     return;
   }
+  const ready = (kind) => lists[kind].items.some((i) => i.status === "ready");
+  if (isH3I2V() && !ready("firstFrame") && !ready("lastFrame")) {
+    setError("MiniMax H3 image-to-video needs a first frame, a last frame, or both.");
+    return;
+  }
+  // The API rejects a reference-to-video run carrying only audio.
+  if (isH3Ref() && !ready("image") && !ready("video")) {
+    setError("MiniMax H3 reference-to-video needs at least one reference image or video.");
+    return;
+  }
   if (promptEl.value.length > promptCap()) {
     setError(
       `Prompt is ${promptEl.value.length.toLocaleString()} characters — this model's limit is ${promptCap().toLocaleString()}.`
@@ -3161,10 +3312,12 @@ form.addEventListener("submit", async (e) => {
   // another generation while this one keeps polling in the background.
   submitBtn.disabled = true;
 
+  // Only the fields the active model actually sends are uploaded.
+  const refMedia = usesRefMedia();
   const mediaLocalIds = {
-    image: isT2I() || usesFrames() ? [] : lists.image.localIds(),
-    video: isSeedream() ? [] : lists.video.localIds(),
-    audio: isSeedream() ? [] : lists.audio.localIds(),
+    image: usesRefImages() ? lists.image.localIds() : [],
+    video: refMedia ? lists.video.localIds() : [],
+    audio: refMedia ? lists.audio.localIds() : [],
     firstFrame: usesFrames() ? lists.firstFrame.localIds() : [],
     lastFrame: usesFrames() ? lists.lastFrame.localIds() : [],
   };
@@ -3174,7 +3327,7 @@ form.addEventListener("submit", async (e) => {
   const count = queueCount();
   const storedInput = collectInput({ image: [], video: [], audio: [], firstFrame: [], lastFrame: [] });
   const projectId = activeProjectId; // pin now so a mid-run project switch can't misfile it
-  const refSecs = isSeedream() ? 0 : refVideoSeconds();
+  const refSecs = refMedia ? refVideoSeconds() : 0;
   const jobs = [];
 
   // Create the pending History entries up front (before the upload), so every run has
@@ -3209,9 +3362,9 @@ form.addEventListener("submit", async (e) => {
     resolved = {
       // only upload the reference kinds the selected model+mode actually uses
       // (2.5 forbids mixing reference images with first/last frames)
-      image: isT2I() || usesFrames() ? [] : await lists.image.resolve(),
-      video: isSeedream() ? [] : await lists.video.resolve(),
-      audio: isSeedream() ? [] : await lists.audio.resolve(),
+      image: usesRefImages() ? await lists.image.resolve() : [],
+      video: refMedia ? await lists.video.resolve() : [],
+      audio: refMedia ? await lists.audio.resolve() : [],
       firstFrame: usesFrames() ? await lists.firstFrame.resolve() : [],
       lastFrame: usesFrames() ? await lists.lastFrame.resolve() : [],
     };
@@ -3508,6 +3661,7 @@ function creditCategory(model) {
   if (m.startsWith("comfy:")) return "ComfyUI (local)";
   if (m.startsWith("seedream/"))
     return m.includes("5-pro") ? "Seedream Pro" : "Seedream Lite";
+  if (m.startsWith("minimax-h3/")) return "MiniMax H3";
   if (m === "bytedance/seedance-2-5") return "Seedance 2.5";
   if (m === "bytedance/seedance-2-fast") return "Seedance 2 Fast";
   if (m === "bytedance/seedance-2-mini") return "Seedance 2 Mini";
@@ -3881,8 +4035,11 @@ function renderHistory(entries) {
         `${cost}${rt}${proj}`;
     } else {
       const variant = VIDEO_VARIANT_LABEL[input.model] ? ` · ${VIDEO_VARIANT_LABEL[input.model]}` : "";
+      // H3 image-to-video has no aspect_ratio at all — leave the segment out rather
+      // than printing a "?" for a setting the model never had.
+      const ratio = input.aspect_ratio ? ` · ${input.aspect_ratio}` : "";
       meta.textContent =
-        `${date}${variant} · ${input.resolution || "?"} · ${input.aspect_ratio || "?"} · ` +
+        `${date}${variant} · ${input.resolution || "?"}${ratio} · ` +
         `${input.duration || "?"}s${cost}${rt}${proj}`;
     }
 
@@ -4167,7 +4324,9 @@ async function applyEntry(entry) {
   if (modeRadio) modeRadio.checked = true;
   applyModelUI(); // shape the form (and aspect options) before filling values
   document.getElementById("prompt").value = input.prompt || "";
-  document.getElementById("resolution").value = input.resolution || "720p";
+  // applyModelUI already populated this model family's options and picked a
+  // default; only override when the saved entry recorded one.
+  if (input.resolution) resolutionSelect.value = input.resolution;
   if (input.aspect_ratio) aspectSelect.value = input.aspect_ratio;
   qualitySelect.value = input.quality || "basic";
   // applyModelUI already set the format options + default for this model; only
@@ -4332,6 +4491,8 @@ checkServer(); // once at load too, so the footer version shows right away
 // polls every 2s during an active run, every 5s while idle. Hidden (and not polled)
 // otherwise, so we don't shell out to nvidia-smi when ComfyUI isn't in play.
 const comfyStatsEl = document.getElementById("comfyStats");
+const comfyStatsTextEl = document.getElementById("comfyStatsText");
+const freeVramBtn = document.getElementById("freeVramBtn");
 const COMFY_STATS_ACTIVE_MS = 2000;
 const COMFY_STATS_IDLE_MS = 5000;
 let comfyStatsTimer = null;
@@ -4352,8 +4513,31 @@ function renderComfyStats(d) {
   } else {
     parts.push("VRAM –");
   }
-  comfyStatsEl.textContent = `⚙ ${parts.join("   ·   ")}`;
+  comfyStatsTextEl.textContent = `⚙ ${parts.join("   ·   ")}`;
 }
+
+// "Free VRAM": ComfyUI unloads its models and clears its cache between jobs, so with a
+// run in flight it only takes effect once that run finishes. The readout refreshes
+// shortly after so the drop shows.
+freeVramBtn.addEventListener("click", async () => {
+  const label = freeVramBtn.textContent;
+  const running = [...liveStatus.values()].some((l) => l.isComfy && l.running);
+  freeVramBtn.disabled = true;
+  freeVramBtn.textContent = "Freeing…";
+  let msg;
+  try {
+    const d = await fetch("/api/comfy/free", { method: "POST" }).then((r) => r.json());
+    msg = d?.code === 200 ? (running ? "Frees after this run" : "Freed") : "Couldn't free";
+  } catch {
+    msg = "Couldn't free";
+  }
+  freeVramBtn.textContent = msg;
+  scheduleComfyStats(1500);
+  setTimeout(() => {
+    freeVramBtn.textContent = label;
+    freeVramBtn.disabled = false;
+  }, 3000);
+});
 
 function scheduleComfyStats(delay) {
   clearTimeout(comfyStatsTimer);

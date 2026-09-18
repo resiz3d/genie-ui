@@ -1,6 +1,6 @@
 {
   "name": "genie-ui",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Local front-end and project manager for ComfyUI, with optional kie.ai cloud models (Seedance / Seedream)",
   "type": "module",
   "scripts": {

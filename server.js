@@ -486,6 +486,9 @@ const ALLOWED_MODELS = new Set([
   "seedream/5-lite-text-to-image",
   "seedream/5-pro-image-to-image",
   "seedream/5-pro-text-to-image",
+  "minimax-h3/text-to-video",
+  "minimax-h3/image-to-video",
+  "minimax-h3/reference-to-video",
 ]);
 
 app.post("/api/create", requireKieKey, (req, res) => {
@@ -642,6 +645,7 @@ function controlModel(workflow, text) {
       label: c.label || null,
       control: c.control || null,
       multiline: c.multiline || undefined,
+      recommended: c.recommended,
       group: c.group || null,
       recognized: true,
     });
@@ -1023,16 +1027,20 @@ function mapTokenNodes(workflow) {
 // (uploadable) from `vae_name` (a model-file picker whose token happens to be named
 // "video_vae").
 function enrichToken(token, nodeMap, objectInfo, workflow = null) {
-  if (token.options && token.options.length) return token;
   const loc = nodeMap.get(token.name);
   if (!loc) return token;
   const info = objectInfo?.[loc.classType];
   const spec =
     info?.input?.required?.[loc.input] ||
     info?.input?.optional?.[loc.input] ||
-    formatWidgetSpec(info, loc, workflow);
+    formatWidgetSpec(info, loc, workflow) ||
+    dynamicComboSpec(info, loc, workflow);
   if (!Array.isArray(spec)) return token;
   const [type, cfg] = spec;
+  // ComfyUI's own default for the input — what a section's Reset falls back to when
+  // the node_types entry doesn't name a recommended value.
+  if (cfg && cfg.default !== undefined) token = { ...token, nodeDefault: cfg.default };
+  if (token.options && token.options.length) return token;
   if (type === "BOOLEAN") return { ...token, bool: true };
   // A combo (enum) is reported one of two ways: legacy nodes put the choices array
   // directly in `type` (e.g. VAELoader.vae_name); newer-schema nodes report the
@@ -1084,6 +1092,27 @@ function formatWidgetSpec(info, loc, workflow) {
   return null;
 }
 
+// A DynamicCombo input (COMFY_DYNAMICCOMBO_V3 — e.g. BlockSparseAttention's `method`)
+// grows per-choice inputs that the API export stores as dotted keys (`selection.tau`)
+// and /object_info nests under the combo's `options[].inputs`. Resolve such a key from
+// the option the node is set to, in the ordinary [type, cfg] input-spec shape.
+function dynamicComboSpec(info, loc, workflow) {
+  const dot = (loc.input || "").lastIndexOf(".");
+  if (dot <= 0) return null;
+  const comboKey = loc.input.slice(0, dot);
+  const childKey = loc.input.slice(dot + 1);
+  const spec = info?.input?.required?.[comboKey] || info?.input?.optional?.[comboKey];
+  if (!Array.isArray(spec) || spec[0] !== "COMFY_DYNAMICCOMBO_V3") return null;
+  const current = workflow?.[loc.id]?.inputs?.[comboKey];
+  const options = Array.isArray(spec[1]?.options) ? spec[1].options : [];
+  for (const option of [options.find((o) => o?.key === current), ...options]) {
+    const inputs = option?.inputs;
+    const child = inputs?.required?.[childKey] || inputs?.optional?.[childKey];
+    if (Array.isArray(child)) return child;
+  }
+  return null;
+}
+
 // The installed LoRA file list (for the dynamic-LoRA picker).
 function loraOptionsFrom(objectInfo) {
   return (
@@ -1098,6 +1127,35 @@ const clampStrength = (v) => Math.max(-5, Math.min(5, Number(v) || 0));
 const linkEq = (a, b) =>
   Array.isArray(a) && a.length === 2 && Array.isArray(b) && String(a[0]) === String(b[0]) && a[1] === b[1];
 
+// The MODEL link extra LoRAs splice onto: the model loader's output, or the last
+// LoRA already stacked directly on it — so they land ahead of MODEL patches
+// (attention backends, sparse attention, Spectrum, …) rather than between those and the
+// sampler. Found by walking the `model` chain up from the node that samples with it
+// (a sampler, else a guider — SamplerCustomAdvanced takes its model via the guider).
+function loraModelSource(workflow) {
+  const modelLink = (node) => (Array.isArray(node?.inputs?.model) && node.inputs.model.length === 2 ? node.inputs.model : null);
+  const samplerClasses = new Set(["KSampler", "KSamplerAdvanced", "SamplerCustom", "SamplerCustomAdvanced"]);
+  const nodes = Object.values(workflow);
+  const start =
+    nodes.find((n) => samplerClasses.has(n?.class_type) && modelLink(n)) ||
+    nodes.find((n) => /guider/i.test(n?.class_type || "") && modelLink(n)) ||
+    nodes.find((n) => modelLink(n));
+  if (!start) return null;
+
+  // Upstream links, nearest the sampler first; the last is the loader's output.
+  const chain = [];
+  const seen = new Set();
+  for (let link = modelLink(start); link && !seen.has(String(link[0])); link = modelLink(workflow[link[0]])) {
+    seen.add(String(link[0]));
+    chain.push(link);
+  }
+  let source = chain[chain.length - 1];
+  for (let i = chain.length - 2; i >= 0 && /lora/i.test(workflow[chain[i][0]]?.class_type || ""); i--) {
+    source = chain[i];
+  }
+  return source;
+}
+
 // Splice a chain of LoraLoader nodes between the workflow's MODEL/CLIP source and
 // everything that consumes them — so any workflow gets extra LoRAs without being
 // pre-wired. `loras` is [{name, strength}]. Throws if no MODEL source is found.
@@ -1105,20 +1163,7 @@ function injectLoras(workflow, loras) {
   const enabled = (Array.isArray(loras) ? loras : []).filter((l) => l && l.name);
   if (!enabled.length) return workflow;
 
-  const samplerClasses = new Set(["KSampler", "KSamplerAdvanced", "SamplerCustom", "SamplerCustomAdvanced"]);
-  const linkInput = (pred) => {
-    // Prefer a sampler's model link; fall back to any node with a `model` link input.
-    for (const node of Object.values(workflow)) {
-      if (samplerClasses.has(node.class_type) && Array.isArray(node.inputs?.model) && pred("model", node)) {
-        return node.inputs.model;
-      }
-    }
-    for (const node of Object.values(workflow)) {
-      if (Array.isArray(node.inputs?.model)) return node.inputs.model;
-    }
-    return null;
-  };
-  const modelSource = linkInput(() => true);
+  const modelSource = loraModelSource(workflow);
   if (!modelSource) throw new Error("Couldn't find a MODEL input to attach LoRAs to (is this a checkpoint workflow?).");
 
   let clipSource = null;
@@ -1807,6 +1852,24 @@ app.post("/api/comfy/cancel", async (req, res) => {
   }
 });
 
+// Free ComfyUI's VRAM: unload every model and drop its execution cache (ComfyUI's
+// POST /free). ComfyUI applies it between jobs — right away when idle, or once the
+// running job finishes — and the next run reloads its models from disk.
+app.post("/api/comfy/free", async (req, res) => {
+  try {
+    const r = await fetch(`${COMFYUI_URL}/free`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ unload_models: true, free_memory: true }),
+    });
+    if (!r.ok) return res.status(502).json({ code: 502, msg: `ComfyUI refused to free memory (HTTP ${r.status})` });
+    res.json({ code: 200, msg: "freeing" });
+  } catch (err) {
+    console.error("ComfyUI free error:", err);
+    res.status(502).json({ code: 502, msg: `Could not reach ComfyUI at ${COMFYUI_URL}` });
+  }
+});
+
 // --- server-side completion watcher ------------------------------------------
 // A pending ComfyUI run is finished by whichever poller sees it done first: the
 // browser, OR this background sweep. The sweep is the safety net — it copies the
@@ -2139,7 +2202,12 @@ function entryTagSet(entry) {
 // Output size of a generation in megapixels, best-effort from its inputs: ComfyUI
 // width×height, else a ComfyUI megapixels token (already MP), else an approximate
 // value for a kie.ai resolution tier (16:9 nominal). null when unknown.
-const KIE_RES_MP = { "480p": 0.41, "720p": 0.92, "1080p": 2.07, "4k": 8.29 };
+// MiniMax H3 names its two tiers 768P / 2K instead of the Seedance ladder; both
+// are nominal 16:9 areas (1366x768 and 2560x1440).
+const KIE_RES_MP = {
+  "480p": 0.41, "720p": 0.92, "1080p": 2.07, "4k": 8.29,
+  "768P": 1.05, "2K": 3.69,
+};
 function entryMegapixels(input) {
   const v = (input && input.values) || {};
   const w = Number(v.width);
@@ -2211,6 +2279,10 @@ function modelLabel(model) {
   if (m === "bytedance/seedance-2") return "Seedance 2";
   if (m === "bytedance/seedance-2-fast") return "Seedance 2 Fast";
   if (m === "bytedance/seedance-2-mini") return "Seedance 2 Mini";
+  if (m.startsWith("minimax-h3/")) {
+    const mode = m.slice("minimax-h3/".length);
+    return `MiniMax H3 (${mode})`;
+  }
   const family = m.includes("5-pro") ? "Seedream 5.0 Pro" : "Seedream 5.0 Lite";
   if (m.includes("text-to-image")) return `${family} (text-to-image)`;
   if (m.includes("image-to-image")) return `${family} (image-to-image)`;

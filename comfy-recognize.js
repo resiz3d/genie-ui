@@ -328,6 +328,7 @@ export function recognizeWorkflow(workflow, nodeTypes) {
         width: spec.width || null,
         order: Number.isFinite(spec.order) ? spec.order : null,
         multiline: spec.control === "text" && spec.multiline === true ? true : undefined,
+        recommended: spec.recommended, // what the section's Reset restores, over ComfyUI's node default
         group,
         // The node whose /object_info describes this input's choices/range. For a
         // literal that's the node itself; for a traced value it's still the

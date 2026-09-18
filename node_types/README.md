@@ -37,7 +37,7 @@ user drop-in can override a shipped entry — the same shipped-vs-yours idea as
 | `display_name` | Human label (reference/UI only). |
 | `output` | `true` marks a terminal/sink node (SaveImage, VideoCombine). The `feeds_output` predicate walks toward these. |
 | `value_source` | `{ "input": "value" }` — marks a passthrough value provider (a Primitive\*). When another node's exposed input is *wired from* this node, recognition follows the link here to the real editable value. |
-| `bypassable` | `true` gives every instance an **enable/disable** checkbox at the top of its section; unchecked, the node is removed at generate time and its `model` link reconnected. For optional MODEL-in/MODEL-out patches (Sage Attention, attention backends, Sol-Attn, Spectrum — see `attention.json`). The same as a workflow's `_meta.bypassable`, without editing the export. |
+| `bypassable` | `true` gives every instance an **enable/disable** checkbox at the top of its section; unchecked, the node is removed at generate time and its `model` link reconnected. For optional MODEL-in/MODEL-out patches (Sage Attention, attention backends, sparse attention, Spectrum — see `attention.json`). The same as a workflow's `_meta.bypassable`, without editing the export. |
 | `bypassed_by_default` | `true` with `bypassable` starts the checkbox **off**. Saved settings win once the workflow has run. |
 | `progress_passes` | `{ "passes": 2, "when": [{ "input": "…", "equals": true, "default": true }] }` — the node makes the sampler go over its steps `passes` times and reports them as one combined progress count (Spectrum's capture + replay reports `2 × steps`). When every `when` condition holds on the node's input (a wired or absent input counts as `default`), a run's card shows **pass 1 of 2 · step N/steps**, with the bar and time left for the current pass. See `spectrum_minimax_h3.json`. |
 | `recognize` | How this node becomes controls (below). |
@@ -87,6 +87,7 @@ user drop-in can override a shipped entry — the same shipped-vs-yours idea as
 | `control` | `number` \| `text` \| `combo` \| `seed` \| `media` \| `toggle`. Combos/numbers still enrich from ComfyUI `/object_info` (installed files, real min/max), and a `BOOLEAN` input renders as a checkbox. The declared kind also picks the widget when ComfyUI is offline, so a name like `audio_blend_weight` isn't mistaken for an upload. Per-format widgets that `/object_info` only describes under a combo's `formats` (VHS Video Combine's `crf`, `pix_fmt`) enrich from there. |
 | `multiline` | `true` with `control: "text"` for a textarea. |
 | `options` | Inline dropdown choices, if you don't want `/object_info` to fill them. |
+| `recommended` | The value the node section's **Reset** button restores. Without it, Reset uses ComfyUI's own default for the input from `/object_info` (which for patch nodes like Spectrum and Model Sparse Attention is already the author's recommended value); with neither, text clears to empty, a dropdown takes its first choice and a number keeps its value. Reset never restores the workflow's baked value. Set it only where the node's default isn't the right recommendation (e.g. KJ Sage Attention, whose default is `disabled`). |
 | `width` | Grid span: `full`, `1/2`, `1/3`, `1/4`, `2/3`, `3/4`. |
 | `order` | Sort position (ascending). |
 

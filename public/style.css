@@ -417,6 +417,15 @@ video,
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 0.8rem;
   letter-spacing: 0.02em;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.25rem 0.75rem;
+}
+.comfy-stats .link-btn {
+  font-family: inherit;
+  white-space: nowrap;
 }
 
 .job-card {
@@ -1431,6 +1440,10 @@ img.zoomable {
   font-weight: 600;
   color: var(--text);
   list-style-position: inside;
+}
+.comfy-node-group > summary .comfy-group-reset {
+  float: right;
+  font-weight: normal;
 }
 .comfy-node-group[open] > summary {
   border-bottom: 1px solid var(--border);

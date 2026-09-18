@@ -1,5 +1,5 @@
 {
-  "_comment": "Spectrum for MiniMax H3 (ComfyUI-Spectrum-MiniMax-H3) — forecasts some sampler steps' features instead of running the transformer, trading a little fidelity for speed. A MODEL patch like the attention nodes, so it's `bypassable` (the toggle removes it; that also covers the node's own `enabled` input, which is left baked). The everyday knobs are exposed; the experimental/research switches (model_aware_*, generic_correction_*, anchor_residual_feedback, selective_rollback_correction, sa_pece_forecast_policy, debug) keep the export's values. `progress_passes`: with offline smoothing replay on, Spectrum runs a capture pass then a transformer-free replay pass and reports 2 × steps to ComfyUI's progress bar, so GENie shows 'pass 1 of 2 · step N/steps' instead.",
+  "_comment": "Spectrum for MiniMax H3 (ComfyUI-Spectrum-MiniMax-H3) — forecasts some sampler steps' features instead of running the transformer, trading a little fidelity for speed. A MODEL patch like the attention nodes, so it's `bypassable` (the toggle removes it; that also covers the node's own `enabled` input, which is left baked). The everyday knobs are exposed, plus model_aware_mode/risk threshold (`full` with offline replay off is the maintainer's ER-SDE quality path); the experimental/research switches (model_aware_trust_shrinkage, model_aware_replay_generic_correction, generic_correction_*, anchor_residual_feedback, selective_rollback_correction, sa_pece_forecast_policy, debug) keep the export's values. `progress_passes`: with offline smoothing replay on, Spectrum runs a capture pass then a transformer-free replay pass and reports 2 × steps to ComfyUI's progress bar, so GENie shows 'pass 1 of 2 · step N/steps' instead.",
   "nodes": {
     "SpectrumApplyMiniMaxH3": {
       "display_name": "Spectrum Apply MiniMax H3",
@@ -30,7 +30,9 @@
               "bootstrap_first_forecast": { "name": "spectrum_bootstrap",          "label": "Bootstrap first forecast", "control": "toggle", "width": "1/2", "order": 64.10 },
               "offline_smoothing_replay": { "name": "spectrum_offline_replay",     "label": "Offline smoothing replay", "control": "toggle", "width": "1/2", "order": 64.11 },
               "history_storage":          { "name": "spectrum_history_storage",    "label": "History storage",          "control": "combo",  "width": "1/2", "order": 64.12 },
-              "offline_archive_storage":  { "name": "spectrum_archive_storage",    "label": "Replay archive storage",   "control": "combo",  "width": "1/2", "order": 64.13 }
+              "offline_archive_storage":  { "name": "spectrum_archive_storage",    "label": "Replay archive storage",   "control": "combo",  "width": "1/2", "order": 64.13 },
+              "model_aware_mode":           { "name": "spectrum_model_aware_mode",      "label": "Model-aware mode",      "control": "combo",  "width": "1/2", "order": 64.14, "options": ["off", "schedule", "schedule_confidence", "full"] },
+              "model_aware_risk_threshold": { "name": "spectrum_model_aware_risk",      "label": "Model-aware risk threshold", "control": "number", "width": "1/2", "order": 64.15 }
             }
           }
         ]
