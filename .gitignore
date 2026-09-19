@@ -8,6 +8,7 @@ exports/
 history.json
 images.json
 projects.json
+projects/
 settings/
 
 # legacy folder names (pre-rename) — ignored so old copies don't get committed

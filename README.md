@@ -190,7 +190,8 @@ Whichever method you use, your personal stuff is always kept:
 - **`.env`** — your API key, password, and any settings
 - **`history.json`, `images.json`, `projects.json`** — your generation history,
   gallery, and projects
-- **the `output` and `input` folders** — your generated results and reference media
+- **the `output`, `input` and `projects` folders** — your generated results,
+  reference media, and each project's saved prompts
 
 > 💡 Five-second safety net: before updating, make a copy of your whole app
 > folder (right-click → Copy, then Paste) so you can fall back to it if anything
@@ -207,7 +208,7 @@ You're not using git, so you re-download and carry your personal files across:
    what's there when asked:
    - the file `.env`
    - any of `history.json`, `images.json`, `projects.json` that exist
-   - the `output` folder and the `input` folder
+   - the `output`, `input` and `projects` folders
 
    *(These files are hidden from GitHub on purpose, so the new download won't
    contain them — that's why you copy your own across.)*
@@ -310,6 +311,7 @@ exports/<name>/    shareable history bundles from the Export button (git-ignored
 history.json       generation history (git-ignored, created at runtime)
 images.json        saved-media gallery manifest (git-ignored, created at runtime)
 projects.json      project list (git-ignored, created at runtime)
+projects/<project>/prompts.json  the project's saved prompts (git-ignored, created at runtime)
 ```
 
 The `output/` and `input/` locations can be moved off the app folder by setting

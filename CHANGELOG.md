@@ -10,6 +10,104 @@ heading for that version with the date, commit, then tag the commit `vX.Y.Z`.
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-09-19
+
+### Added
+
+- **Prompt lock (🔒): keep the prompt and references when switching models.** The
+  kie.ai form and each ComfyUI workflow were separate forms, so switching from a
+  local draft (e.g. MiniMax H3 on ComfyUI) to the cloud model for the final run
+  left your prompt and reference images behind. Now, while the lock on the prompt
+  is on (the default, remembered per browser), a switch between ComfyUI and
+  kie.ai — or between two workflows — brings the prompt and the reference images,
+  videos and audio with it, in order, so `<Picture N>` still points at the same
+  file. What you carry beats a workflow's saved settings. An empty prompt or empty
+  reference list never wipes the other side's. Resolution, duration and other
+  settings stay per model. Hosted-URL references can't go to a local workflow;
+  you'll see a note when one is left behind.
+- **Saved Prompts.** A **💾 Save prompt** button on the prompt saves the prompt
+  text, its reference images/videos/audio and the duration under a title you
+  choose, per project (`projects/<project>/prompts.json`). The prompt's header is
+  now two tabs, **Prompt** and **Saved Prompts**; the second lists the project's
+  saved prompts as compact cards (filterable; the tab you were on is remembered
+  across reloads), ordered Drupal-style by **weight**: lighter (lower) rises to
+  the top, heavier sinks, default 0. Drag a
+  card, or use its ▲ ▼ (Alt+↑/↓), to reorder — that renumbers the weights 0, 1,
+  2… in the new order. Clicking a card opens an editor for its title, prompt,
+  duration, weight and references — × drops one, and **＋ Add media** picks more
+  from the project's gallery (click again to take one out) or uploads/drops new
+  files straight into the prompt — with
+  **Import** (into the current model or workflow — replaces the prompt,
+  references and duration), **Duplicate**, **Move to…** / **Copy to…** another
+  project and **Delete**. Works for kie.ai models and for a ComfyUI workflow's
+  main prompt. References point at gallery files (nothing is duplicated); one
+  deleted from the gallery shows as missing and is skipped on import. Deleting a
+  project moves its saved prompts to Default.
+- **Link a History card to a saved prompt.** A finished History card has a
+  **📌 Saved prompt** dropdown: pick one of its project's saved prompts and that
+  output (image, or video — it plays with sound on hover) becomes the prompt card's
+  thumbnail, and shows in the prompt's editor under **Output**. Each prompt shows
+  one take, so linking another replaces it; unlink from the dropdown or the
+  editor. A duplicated or copied prompt starts unlinked; deleting the History
+  entry drops the thumbnail. On a linked card, **📌 Re-import** restores the run's
+  model and settings but takes the prompt text, references and duration from
+  the saved prompt (its current version), and **✎ Edit prompt** opens that
+  prompt's editor — even when the card is from another project.
+- **Generate straight from a saved prompt.** Press **▶** on a saved-prompt card to
+  make it the project's active prompt (remembered per browser). While the **Saved
+  Prompts** tab is open, Generate (marked 📌) sends that prompt's text in place of
+  the Prompt tab's; settings stay as the form has them, and your draft in the
+  Prompt tab is untouched. A Default prompt sends only its text (references come
+  from the form); a MiniMax prompt also loads its own references into the form's
+  reference fields, in its order, since its `<Picture N>` labels are numbered from
+  them. Switch back to the Prompt
+  tab and Generate uses the textarea again. Works for kie.ai models and ComfyUI
+  workflows. The run's History card links itself to the saved prompt once it has
+  an output, so a failed or cancelled run never replaces the prompt's thumbnail.
+- **Saved prompt formats: Default and MiniMax H3.** A saved prompt now has a
+  format, and each format has its own edit form. **Default** is the plain text as
+  before. **MiniMax H3** stores fields instead of text and compiles them into the
+  six sections of MiniMax's full-reference prompt format whenever the prompt is
+  used (Generate, Import, preview) — the compiled text isn't stored, so nothing is
+  kept twice:
+  - `subject_definitions` comes from the references' gallery key + definition
+    (`<sibella>, seen in <Picture 1>, is …`), plus subjects without an image typed
+    on the prompt (e.g. `<new>`). Keys ignore case (`Sibella` and `sibella` are
+    one subject; keys are stored lowercase), a definition typed on the prompt
+    overrides the image's gallery one, and a definition that already starts with
+    `<sibella> is …` (or just `is …`) isn't doubled. Only subjects with a definition get
+    a line: a reference whose key isn't defined anywhere (say a second image of
+    a subject, cited as `@manuela_sheet` in `<manuela>`'s definition) is just an
+    `@key` token.
+  - **@key tokens:** write `@sibella` anywhere in a MiniMax prompt to mean the
+    reference file with that key; it compiles to its current label (`<Picture 1>`,
+    or `<Picture 1> and <Picture 2>` for a key on several files), so re-ordering
+    the references keeps every mention on the right file. A shot that mentions
+    `@sibella` counts as `<sibella>` appearing in it.
+  - The **reference media** (their thumbnails, key and definition boxes, and
+    ＋ Add media) sit between subject_definitions and summary in this form, so the
+    images are in view while you write the definitions.
+  - `summary`: free text — you write the `[reference generation] …` prefix.
+  - `retention_analysis`: written under each subject, right below its definition
+    (e.g. `fully_preserved - …`); "(appears in [Shot N])" is added from which
+    shots mention the subject's `<label>`, and `@shots` in the text becomes that
+    same list (`[Shot 1], [Shot 3]`).
+  - `detailed_description`: a style opening, Shot 1, and a list of **cuts** you add
+    and remove, each with a time — compiled as `[Shot N] At 00:05.000, …`. Cuts
+    keep themselves in time order: change a cut's time and it moves (and renumbers)
+    into place when you finish typing.
+  - `overall_soundscape` and `non_diegetic_music`.
+  The editor shows the compiled prompt live. **＋ New MiniMax prompt** (Saved
+  Prompts tab) starts one from the form's references; the Save dialog has a
+  **Format** choice (picked for you when the text already has MiniMax sections);
+  and **⇄ To MiniMax** / **⇄ To plain text** convert an existing prompt, splitting
+  text on its section headers, `[Shot N]` markers and "At 00:15.000" paragraphs.
+- **Subject key and definition on gallery media.** Each gallery file can now carry
+  a key (e.g. `@sibella`) and a definition of what it shows. Every reference in
+  the saved-prompt editor has a key field and a definition box, saved with
+  **Save changes**. They're stored on the gallery item, so every prompt using that
+  file shares them. Groundwork for LLM-assisted prompting.
+
 ## [1.0.1] - 2026-09-17
 
 ### Added

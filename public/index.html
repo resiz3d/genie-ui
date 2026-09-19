@@ -68,8 +68,12 @@
 
         <div class="field" id="promptField">
           <div class="field-head">
-            <span>Prompt <span class="hint" id="promptCapHint"></span></span>
-            <span class="char-count" id="promptCount"></span>
+            <!-- Becomes the Prompt / Saved Prompts tab strip (see installPromptTools). -->
+            <span id="promptLabel">Prompt <span class="hint" id="promptCapHint"></span></span>
+            <span class="field-head-tools">
+              <button type="button" class="link-btn carry-lock" id="carryLock"></button>
+              <span class="char-count" id="promptCount"></span>
+            </span>
           </div>
           <textarea
             id="prompt"
@@ -295,6 +299,93 @@
         <div class="modal-actions">
           <button type="button" id="exportCancel" class="btn-secondary">Cancel</button>
           <button type="button" id="exportConfirm">📦 Export</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="savePromptModal" class="modal hidden">
+      <div class="modal-box" role="dialog" aria-labelledby="savePromptHeading">
+        <h3 id="savePromptHeading">Save prompt</h3>
+        <p class="muted sp-save-summary" id="savePromptSummary"></p>
+        <label>
+          Title
+          <input type="text" id="savePromptTitle" maxlength="200" autocomplete="off" />
+        </label>
+        <label class="sp-save-format">
+          Format
+          <select id="savePromptFormat">
+            <option value="default">Default — the text as written</option>
+            <option value="minimax">MiniMax H3 — split into sections, shots and subjects</option>
+          </select>
+        </label>
+        <p class="sp-save-warn hidden" id="savePromptWarn"></p>
+        <div class="modal-actions">
+          <button type="button" id="savePromptCancel" class="btn-secondary">Cancel</button>
+          <button type="button" id="savePromptConfirm">💾 Save</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Opened by clicking a Saved Prompts card; filled by openPromptEditor(). -->
+    <div id="promptEditModal" class="modal hidden">
+      <div class="modal-box pe-box" role="dialog" aria-labelledby="peHeading">
+        <div class="pe-head">
+          <h3 id="peHeading">Saved prompt <span class="pe-type" id="peType"></span></h3>
+          <button type="button" id="peClose" class="link-btn pe-close" title="Close (Esc)">×</button>
+        </div>
+        <div class="pe-actions" id="peActions"></div>
+        <label>
+          Title
+          <input type="text" id="peTitle" maxlength="200" autocomplete="off" />
+        </label>
+        <div id="peDefault">
+          <label>
+            Prompt
+            <textarea id="pePrompt" rows="10"></textarea>
+          </label>
+        </div>
+        <!-- MiniMax H3 format: sections built by renderMinimaxForm(). -->
+        <div id="peMinimax" class="pe-mm hidden"></div>
+        <div class="pe-row">
+          <label>
+            Duration (s)
+            <input type="number" id="peDuration" min="1" step="1" placeholder="—" />
+          </label>
+          <label title="Sort order: lighter (lower, can be negative) rises to the top, heavier sinks. Default 0.">
+            Weight
+            <input type="number" id="peWeight" step="1" placeholder="0" />
+          </label>
+        </div>
+        <div class="pe-refs-head">Output <span class="hint">(the linked History card's result — the card's thumbnail)</span></div>
+        <div class="pe-output" id="peOutput"></div>
+        <!-- References live here for a Default prompt; a MiniMax prompt moves this block
+             into its form, between subject_definitions and summary (see renderMinimaxForm). -->
+        <div id="peRefsHome">
+          <div id="peRefsBlock">
+            <div class="pe-refs-head">
+              References <span class="hint">(key and definition are saved on the gallery file, shared by every prompt using it)</span>
+            </div>
+            <p class="dz-hint hidden" id="peRefsEmpty">No reference media — add some below.</p>
+            <div class="sp-refs" id="peRefs"></div>
+            <details class="gallery-wrap pe-picker" id="pePicker">
+              <summary>＋ Add media <span class="hint">(from this project's gallery, or upload / drop files)</span></summary>
+              <div class="pe-picker-bar">
+                <button type="button" class="pe-kind" data-kind="all">All</button>
+                <button type="button" class="pe-kind" data-kind="image">Images</button>
+                <button type="button" class="pe-kind" data-kind="video">Videos</button>
+                <button type="button" class="pe-kind" data-kind="audio">Audio</button>
+                <button type="button" class="btn-secondary pe-upload" id="pePickerUpload">⤒ Upload…</button>
+                <input type="file" id="pePickerFile" accept="image/*,video/*,audio/*" multiple hidden />
+              </div>
+              <p class="dz-hint hidden" id="pePickerEmpty">Nothing in this project's gallery yet — upload or drop files here.</p>
+              <div class="thumbs gallery" id="pePickerGrid"></div>
+            </details>
+          </div>
+        </div>
+        <p class="muted pe-meta" id="peMeta"></p>
+        <div class="modal-actions">
+          <button type="button" id="peCancel" class="btn-secondary">Cancel</button>
+          <button type="button" id="peSave">Save changes</button>
         </div>
       </div>
     </div>

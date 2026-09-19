@@ -713,6 +713,7 @@ async function loadProjects() {
   });
   if (!projects.some((p) => p.id === activeProjectId)) activeProjectId = "default";
   renderProjectControls();
+  loadSavedPrompts(); // project names in the cards (and a vanished active project) changed
 }
 
 function renderProjectControls() {
@@ -749,6 +750,7 @@ function setActiveProject(id) {
   localStorage.setItem(PROJECT_KEY, id);
   projectSelect.value = id;
   historyFilter.value = id;
+  loadSavedPrompts();
   renderGallery(galleryItems);
   historyPage = 1; // changing the filtered set starts back at the first page
   renderHistory(historyEntries);
@@ -1287,6 +1289,8 @@ function applyModelUI() {
     for (const id of KIE_FIELDS) document.getElementById(id).classList.add("hidden");
     estimateEl.classList.add("hidden");
     comfyRenderPromise = renderComfyControls(); // async (fetches ComfyUI options); awaited on re-import
+    comfyRenderPromise.then(syncPromptTabs, () => {}); // saved-prompts panel → the workflow's prompt
+    syncPromptTabs(); // meanwhile, off the (now hidden) kie.ai prompt
     updateModelChrome();
     return;
   }
@@ -1358,6 +1362,7 @@ function applyModelUI() {
   updatePromptCount(); // the cap depends on the selected model
   updateEstimate();
   updateModelChrome();
+  syncPromptTabs(); // saved-prompts panel → the kie.ai prompt
 }
 
 // Retitle the page and the Generate button for the selected model.
@@ -1436,9 +1441,138 @@ function armContinuation(state, parentValues) {
   renderContinueBanner();
 }
 
-modelSelect.addEventListener("change", () => {
+// --- carry prompt + references across model switches ------------------------------
+// The kie.ai form and each ComfyUI workflow's controls are separate forms, so switching
+// models (e.g. a low-res local MiniMax H3 draft → the H3 API for the final) would
+// otherwise leave the prompt and references behind. While the prompt's lock is on
+// (the default), a switch copies them into the newly shown form. Only these travel:
+// resolution, duration, etc. mean different things per model/workflow.
+const CARRY_KEY = "genie_carry_on_switch";
+let carryOnSwitch = true;
+try {
+  carryOnSwitch = localStorage.getItem(CARRY_KEY) !== "0";
+} catch {
+  /* storage blocked — default on */
+}
+const CARRY_KINDS = ["image", "video", "audio"];
+let carrySeq = 0; // the latest switch; an older one's late ComfyUI render doesn't apply
+
+// A ComfyUI text token that is the positive prompt (tokenized workflows name it freely).
+function isCarryPromptName(name) {
+  return /prompt|positive/i.test(name) && !/negative/i.test(name);
+}
+
+function paintCarryLock(btn) {
+  btn.textContent = carryOnSwitch ? "🔒" : "🔓";
+  btn.classList.toggle("on", carryOnSwitch);
+  btn.setAttribute("aria-pressed", String(carryOnSwitch));
+  btn.title = carryOnSwitch
+    ? "Locked: the prompt and reference media come with you when you switch models. Click to unlock."
+    : "Unlocked: switching models leaves the prompt and reference media behind. Click to lock.";
+}
+
+function makeCarryLock(btn = document.createElement("button")) {
+  btn.type = "button";
+  btn.classList.add("link-btn", "carry-lock");
+  paintCarryLock(btn);
+  btn.addEventListener("click", () => {
+    carryOnSwitch = !carryOnSwitch;
+    try {
+      localStorage.setItem(CARRY_KEY, carryOnSwitch ? "1" : "0");
+    } catch {
+      /* storage blocked — non-fatal */
+    }
+    document.querySelectorAll(".carry-lock").forEach(paintCarryLock);
+  });
+  return btn;
+}
+makeCarryLock(document.getElementById("carryLock"));
+
+// Read the prompt + references from the form currently on screen. Called before the
+// switch re-shapes anything, so the DOM still reflects the model being left (which is
+// why this goes by what's shown rather than by modelSelect, already the new value).
+// `media[kind]` is present only when the form had files of that kind, so an empty (or
+// missing) field never wipes the destination's — the same rule as an empty prompt.
+function snapshotCarry() {
+  const media = {};
+  if (!comfyControlsEl.classList.contains("hidden")) {
+    for (const f of comfyFields) {
+      if (!CARRY_KINDS.includes(f.mediaKind) || typeof f.peekMedia !== "function") continue;
+      const files = f.peekMedia();
+      if (files.length) (media[f.mediaKind] ||= []).push(...files);
+    }
+    const p = comfyFields.find((f) => f.isPrompt);
+    return { prompt: p ? String(p.peek() ?? "") : null, media, urlOnly: 0 };
+  }
+  // A list this model hides (e.g. reference images in Seedance frames mode) isn't in use.
+  const fieldFor = { image: "imageField", video: "videoField", audio: "audioField" };
+  let urlOnly = 0; // hosted-URL references with no saved file (a local run can't use them)
+  for (const kind of CARRY_KINDS) {
+    if (document.getElementById(fieldFor[kind]).classList.contains("hidden")) continue;
+    const ready = lists[kind].items.filter((i) => i.status === "ready");
+    urlOnly += ready.filter((i) => !i.localId).length;
+    const files = ready
+      .filter((i) => i.localId)
+      .map((i) => ({ id: i.localId, url: i.thumb, name: i.name, tail: i.tailSec || 0 }));
+    if (files.length) media[kind] = files;
+  }
+  return { prompt: promptEl.value, media, urlOnly };
+}
+
+// Write a snapshot into the form now on screen (after any saved workflow settings, so
+// what you carried wins). An empty prompt never overwrites one that's there.
+function applyCarry(snap) {
+  const prompt = snap.prompt?.trim() ? snap.prompt : null;
+  if (isComfy()) {
+    const p = comfyFields.find((f) => f.isPrompt);
+    if (p && prompt != null) p.set(prompt);
+    for (const kind of CARRY_KINDS) {
+      if (!snap.media[kind]) continue;
+      // Spread across this workflow's fields of the kind, in order (like a re-import).
+      let queue = snap.media[kind];
+      for (const f of comfyFields) {
+        if (f.mediaKind !== kind || typeof f.setMedia !== "function") continue;
+        f.setMedia(queue.slice(0, f.capacity || 1));
+        queue = queue.slice(f.capacity || 1);
+      }
+    }
+    refreshComfyRefTags();
+    if (snap.urlOnly) {
+      setError(
+        `${snap.urlOnly} URL reference${snap.urlOnly === 1 ? " wasn't" : "s weren't"} carried over — ` +
+          `local workflows need a saved file.`
+      );
+    }
+    return;
+  }
+  if (prompt != null) {
+    promptEl.value = prompt;
+    updatePromptCount();
+  }
+  // Loaded even into a list this model hides (e.g. H3 text-to-video): the kie.ai form
+  // keeps it for the next model that takes references, and hidden lists aren't sent.
+  for (const kind of CARRY_KINDS) {
+    if (!snap.media[kind]) continue;
+    lists[kind].items = [];
+    for (const m of snap.media[kind]) {
+      lists[kind].addFromGallery({ id: m.id, localUrl: m.url, name: m.name, tail: m.tail });
+    }
+    lists[kind].render();
+  }
+  updateEstimate();
+}
+
+modelSelect.addEventListener("change", async () => {
   disarmContinuation(); // the controls it referred to are about to be rebuilt
+  // kie.ai → kie.ai shares one form, so there's nothing to carry.
+  const leavingComfy = !comfyControlsEl.classList.contains("hidden");
+  const snap = carryOnSwitch && (leavingComfy || isComfy()) ? snapshotCarry() : null;
+  const seq = ++carrySeq;
   applyModelUI();
+  if (snap) {
+    if (isComfy()) await comfyRenderPromise; // controls + saved settings first
+    if (seq === carrySeq) applyCarry(snap);
+  }
   scheduleComfyStats(0); // show/hide the host-stats strip promptly on model switch
   try {
     localStorage.setItem(MODEL_KEY, modelSelect.value);
@@ -2486,13 +2620,34 @@ function renderScalarControl(token, type, container = comfyControlsEl) {
       head.appendChild(dice);
     }
   }
+  // The workflow's main prompt (the first one, if a workflow tokenizes several) is
+  // what a model switch carries over, so it wears the lock — see carryOnSwitch.
+  const isPrompt =
+    type === "textarea" && isCarryPromptName(token.name) && !comfyFields.some((f) => f.isPrompt);
+  if (isPrompt) {
+    const tools = document.createElement("span");
+    tools.className = "field-head-tools";
+    tools.appendChild(makeCarryLock());
+    head.appendChild(tools);
+  }
   if (!head.childElementCount) head.remove(); // label suppressed and nothing else in the head
   field.appendChild(input);
   container.appendChild(field);
+  if (isPrompt) {
+    // Prompt / Saved Prompts tabs + Save, like the kie.ai prompt.
+    installPromptTools({
+      field,
+      head,
+      textarea: input,
+      labelEl: echoesGroup ? null : head.firstElementChild,
+      labelText: echoesGroup ? "Prompt" : labelText,
+    });
+  }
   const readValue = () => (type === "number" || numericSelect ? Number(input.value) : input.value);
   const resetTo = comfyResetValue(token, type, parsedOptions);
   const ctrl = {
     name: token.name,
+    isPrompt,
     getValue: async () => readValue(),
     peek: readValue, // sync read, for saving last-used defaults
     set: (v) => { input.value = v; },
@@ -2721,7 +2876,8 @@ async function saveComfySettings(file) {
 
 // Gather token values (uploading media to ComfyUI as needed). Empty optional media
 // controls are returned in `prune` so the server can drop their loader nodes.
-async function collectComfyValues() {
+// `promptOverride` (an active saved prompt's export) replaces the main prompt field's value.
+async function collectComfyValues(promptOverride = null) {
   const values = {};
   const prune = [];
   const references = {}; // { collectionName: [comfyFilename, …] } for injected ref media
@@ -2742,7 +2898,7 @@ async function collectComfyValues() {
       prune.push(f.name); // nothing selected — prune this reference loader
       continue;
     }
-    values[f.name] = await f.getValue();
+    values[f.name] = f.isPrompt && promptOverride != null ? promptOverride : await f.getValue();
   }
   return { values, prune, tails, references };
 }
@@ -2770,9 +2926,13 @@ async function submitComfy() {
   const allLoras = comfyLoraControl ? comfyLoraControl.getLoras() : [];
   const enabledLoras = allLoras.filter((l) => l.enabled !== false); // only these get injected
   const bypass = comfyBypassControl ? comfyBypassControl.getDisabled() : [];
+  const fromSaved = comfyFields.some((f) => f.isPrompt) ? runSavedPrompt() : null;
+  const promptOverride = fromSaved ? exportSavedPromptText(fromSaved) : null;
+  const mediaNotes = loadRunMedia(fromSaved); // before the fields are read below
+  if (mediaNotes.length) setError(mediaNotes.join("\n"));
   try {
     for (let i = 0; i < count; i++) {
-      const { values, prune, tails, references } = await collectComfyValues();
+      const { values, prune, tails, references } = await collectComfyValues(promptOverride);
       const mediaIds = { image: [], video: [], audio: [] };
       for (const f of comfyFields) {
         if (f.isMultiMedia || f.isReferenceCollection) mediaIds[f.mediaKind]?.push(...f.localIds());
@@ -2785,6 +2945,10 @@ async function submitComfy() {
       if (allLoras.length) input.loras = allLoras; // store the full loadout (incl. disabled) for re-import
       if (bypass.length) input.bypass = bypass;
       if (typeof values.prompt === "string" && values.prompt.trim()) input.prompt = values.prompt.trim();
+      if (fromSaved) {
+        if (!input.prompt && promptOverride.trim()) input.prompt = promptOverride.trim();
+        input.savedPrompt = savedPromptStamp(fromSaved); // History only, not sent to ComfyUI
+      }
       await queueComfyRun(wf, values, prune, mediaIds, input, enabledLoras, bypass, tails, cont, references);
       // Advance seeds for the next queued run (no-op when the mode is "fixed").
       for (const f of comfyFields) if (typeof f.advance === "function") f.advance();
@@ -2933,6 +3097,1853 @@ function updatePromptCount() {
 }
 promptEl.addEventListener("input", updatePromptCount);
 updatePromptCount();
+
+// --- saved prompts ----------------------------------------------------------------
+// Each project keeps a list of titled prompts (text + reference media + duration) on
+// the server (projects/<slug>/prompts.json). The Prompt field gets two tabs: "Prompt"
+// (the textarea) and "Saved Prompts" (cards). Both the kie.ai prompt and a ComfyUI
+// workflow's main prompt get the tabs; one shared cards panel moves into whichever is
+// on screen. Saving and importing go through snapshotCarry()/applyCarry(), so a saved
+// prompt means the same thing to a kie.ai model and a ComfyUI workflow.
+let savedPrompts = []; // the active project's, newest first
+let savedPromptsSeq = 0; // the latest load; a slower earlier one doesn't overwrite it
+// "prompt" | "saved", shared by every prompt field; remembered per browser across reloads.
+const PROMPT_TAB_KEY = "genie_prompt_tab";
+let promptTab = "prompt";
+try {
+  if (localStorage.getItem(PROMPT_TAB_KEY) === "saved") promptTab = "saved";
+} catch {
+  /* storage blocked — start on the Prompt tab */
+}
+let savedPromptsFilter = "";
+const promptHosts = []; // [{ field, textarea, tabs: { prompt, saved } }]
+
+// --- the active saved prompt ---
+// One saved prompt per project can be made "active" (▶ on its card). While the Saved
+// Prompts tab is showing, Generate sends that prompt's exported text in place of the
+// textarea's — nothing else in the form changes, and the textarea keeps your draft —
+// and the run records it (input.savedPrompt), so the server links the new History
+// card to the prompt once it has an output. Remembered per project, per browser.
+const ACTIVE_PROMPT_KEY = "genie_active_saved_prompt";
+let activeSavedPromptIds = {}; // projectId → saved prompt id
+try {
+  activeSavedPromptIds = JSON.parse(localStorage.getItem(ACTIVE_PROMPT_KEY) || "{}") || {};
+} catch {
+  /* storage blocked or corrupt — start empty */
+}
+
+function setActiveSavedPrompt(id) {
+  if (id) activeSavedPromptIds[activeProjectId] = id;
+  else delete activeSavedPromptIds[activeProjectId];
+  try {
+    localStorage.setItem(ACTIVE_PROMPT_KEY, JSON.stringify(activeSavedPromptIds));
+  } catch {
+    /* non-fatal */
+  }
+  renderSavedPrompts();
+}
+
+// The active project's active saved prompt (whether or not its tab is showing).
+function activeSavedPrompt() {
+  const id = activeSavedPromptIds[activeProjectId];
+  return (id && savedPrompts.find((p) => p.id === id)) || null;
+}
+
+// What a saved prompt contributes to a run's prompt field: its text, or — for a
+// structured format — the text compiled from its fields. The one place every run,
+// import and preview gets a saved prompt's text from.
+function exportSavedPromptText(p) {
+  if (p.type === "minimax") return compileMinimax(p.minimax, p.refs || []);
+  return p.prompt || "";
+}
+
+// --- MiniMax H3 prompt format ---------------------------------------------------
+// A saved prompt of type "minimax" stores fields, not text, and is compiled into the
+// six sections of MiniMax's full-reference rewrite format (VIDEO_PROMPT_WRITING_GUIDE_ref_en):
+//   subject_definitions  — from the references' gallery key + definition (so a subject
+//                          is described once, on its image), plus extra subjects that
+//                          have no image
+//   summary              — free text (the author writes the "[task type] …" prefix)
+//   retention_analysis   — one line per subject, written under that subject in the
+//                          form; "(appears in [Shot N])" is added from which shots
+//                          mention the subject's <label>
+//   detailed_description — a style opening, then [Shot 1] and each cut as
+//                          "[Shot N] At MM:SS.mmm, …"
+//   overall_soundscape, non_diegetic_music
+// Stored shape (p.minimax):
+//   { summary, style, shots: [{ at: seconds|null, text }],
+//     subjects: [{ key, definition }], retention: { "<label>": "fully_preserved - …" },
+//     soundscape, music }
+const MM_SECTIONS = [
+  "subject_definitions", "summary", "retention_analysis",
+  "detailed_description", "overall_soundscape", "non_diegetic_music",
+];
+const MM_REF_LABEL = { image: "Picture", video: "Video", audio: "Audio" };
+
+function blankMinimax() {
+  return {
+    summary: "",
+    style: "",
+    shots: [{ at: null, text: "" }],
+    subjects: [],
+    retention: {},
+    soundscape: "",
+    music: "",
+  };
+}
+
+// A MiniMax prompt in the current shape. Earlier ones kept the summary's task types as
+// checkboxes (summaryTypes) and retention as { marker, note }; both fold into text.
+function normalizeMinimax(mmIn) {
+  const mm = { ...blankMinimax(), ...(mmIn || {}) };
+  const types = Array.isArray(mm.summaryTypes) ? mm.summaryTypes.filter(Boolean) : [];
+  if (types.length && !String(mm.summary || "").trimStart().startsWith("[")) {
+    mm.summary = `[${types.join(" + ")}] ${mm.summary || ""}`.trim();
+  }
+  delete mm.summaryTypes;
+  mm.retention = Object.fromEntries(
+    Object.entries(mm.retention || {}).map(([k, v]) => [
+      k,
+      typeof v === "string" ? v : `${v?.marker || ""}${v?.note ? ` - ${v.note}` : ""}`.trim(),
+    ])
+  );
+  return mm;
+}
+
+// A subject key as the server stores it (see normalizeMediaKey): one lowercase word, no
+// @ or <>. Lowercase so "Sibella" on an image and "sibella" in a prompt are one subject.
+function normKey(k) {
+  return String(k ?? "")
+    .trim()
+    .replace(/^@+/, "")
+    .replace(/^<|>$/g, "")
+    .replace(/\s+/g, "_")
+    .replace(/[^\p{L}\p{N}_-]/gu, "")
+    .toLowerCase()
+    .slice(0, 40);
+}
+
+// 5 → "00:05.000", 62.5 → "01:02.500".
+function fmtShotTime(sec) {
+  const s = Math.max(0, Number(sec) || 0);
+  const m = Math.floor(s / 60);
+  return `${String(m).padStart(2, "0")}:${(s - m * 60).toFixed(3).padStart(6, "0")}`;
+}
+
+// "5", "5.5", "00:05.000", "1:02.5" → seconds; null if unreadable.
+function parseShotTime(v) {
+  const t = String(v ?? "").trim();
+  if (!t) return null;
+  const m = /^(?:(\d+):)?(\d+(?:\.\d+)?)$/.exec(t);
+  if (!m) return null;
+  return Number(m[1] || 0) * 60 + Number(m[2]);
+}
+
+// Cuts in playback order: Shot 1 (the opening, no time) stays first; the rest sort by
+// time, untimed ones last, ties keeping their order. Returns the sorted array — the
+// same one if it was already in order.
+function sortedShots(shots) {
+  const [first, ...cuts] = shots || [];
+  if (!first) return [];
+  const key = (s) => (s.at == null ? Infinity : s.at);
+  const sorted = cuts.map((s, i) => [s, i]).sort((a, b) => key(a[0]) - key(b[0]) || a[1] - b[1]).map((x) => x[0]);
+  return sorted.every((s, i) => s === cuts[i]) ? shots : [first, ...sorted];
+}
+
+const joinList = (a) => (a.length < 2 ? a.join("") : `${a.slice(0, -1).join(", ")} and ${a[a.length - 1]}`);
+
+// The subjects the prompt defines, in order: references first (grouped by key, so one
+// subject can come from several files), then the extra subjects typed on the prompt.
+// Each: { label, sources: ["<Picture 1>", …], definition, audio, fromRefs }.
+// A reference with neither key nor definition defines nothing (it's still sent as media).
+function minimaxSubjects(mm, refs) {
+  const n = { image: 0, video: 0, audio: 0 };
+  let anon = 0;
+  const out = [];
+  const byLabel = new Map();
+  for (const r of refs) {
+    if (r.missing) continue; // skipped on import too, so it takes no <Picture N> number
+    const src = `<${MM_REF_LABEL[r.kind] || "Picture"} ${++n[r.kind]}>`;
+    const key = normKey(r.key);
+    const def = String(r.definition || "").trim();
+    if (!key && !def) continue;
+    if (!key && r.kind === "audio") {
+      out.push({ label: src, sources: [], definition: def, audio: true, fromRefs: true });
+      continue;
+    }
+    const label = key ? `<${key}>` : `<Subject ${++anon}>`;
+    let s = byLabel.get(label);
+    if (!s) {
+      s = { label, sources: [], definition: "", audio: true, fromRefs: true };
+      byLabel.set(label, s);
+      out.push(s);
+    }
+    s.sources.push(src);
+    if (r.kind !== "audio") s.audio = false;
+    if (!s.definition && def) s.definition = def;
+  }
+  for (const x of mm.subjects || []) {
+    const key = normKey(x.key);
+    const def = String(x.definition || "").trim();
+    if (!key && !def) continue;
+    const label = key ? `<${key}>` : null;
+    const existing = label && byLabel.get(label);
+    if (existing) {
+      // The same subject as a reference: a definition typed on this prompt wins over the
+      // gallery file's (which stays the fallback for prompts that don't override it).
+      if (def) existing.definition = def;
+      existing.typed = true;
+      continue;
+    }
+    const s = { label, sources: [], definition: def, audio: false, fromRefs: false };
+    if (label) byLabel.set(label, s);
+    out.push(s);
+  }
+  // Only what's defined becomes a subject. A reference whose key has no definition
+  // anywhere (e.g. a second image of a subject, cited as @manuela_sheet inside another
+  // subject's definition) is just an @key token — it gets no line of its own.
+  return out.filter((s) => String(s.definition || "").trim());
+}
+
+// A definition as the end of a sentence: closed with a full stop unless it already is.
+const endSentence = (t) => (/[.!?…"”')\]]$/.test(t) ? t : `${t}.`);
+
+// @key tokens: writing @sibella anywhere in a MiniMax prompt refers to the reference
+// file(s) with that key, and compiles to their current labels ("<Picture 1>", or
+// "<Picture 1> and <Picture 2>" for a key on several files). Numbered like
+// minimaxSubjects, so re-ordering the references keeps every @key on the right file.
+function minimaxMediaTokens(refs) {
+  const n = { image: 0, video: 0, audio: 0 };
+  const map = new Map(); // key → ["<Picture 1>", …]
+  for (const r of refs) {
+    if (r.missing) continue;
+    const src = `<${MM_REF_LABEL[r.kind] || "Picture"} ${++n[r.kind]}>`;
+    const key = normKey(r.key);
+    if (key) (map.get(key) || map.set(key, []).get(key)).push(src);
+  }
+  return map;
+}
+
+const MEDIA_TOKEN_RE = /(?<![\p{L}\p{N}_@])@([\p{L}\p{N}_-]+)/gu;
+function resolveMediaTokens(text, tokens) {
+  if (!tokens?.size) return String(text || "");
+  return String(text || "").replace(MEDIA_TOKEN_RE, (m, k) => {
+    const src = tokens.get(k.toLowerCase());
+    return src ? joinList(src) : m; // an @word that isn't a reference key stays as written
+  });
+}
+
+// A definition without a lead-in the line adds itself: "<label> is …", "<label>, seen in
+// <Picture 1>, is …" or a bare "is …" (common when a whole line was pasted in).
+function definitionBody(label, def) {
+  let d = String(def || "").trim();
+  if (label) {
+    const esc = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    d = d.replace(new RegExp(`^${esc}\\s*(?:,[^,]*,\\s*)?(?:is\\b)?\\s*`, "i"), "");
+  }
+  return d.replace(/^is\s+/i, "").trim();
+}
+
+function minimaxSubjectLine(s, tokens = null) {
+  if (!s.label) return resolveMediaTokens(s.definition, tokens); // typed without a key: written as-is
+  const def = resolveMediaTokens(definitionBody(s.label, s.definition), tokens);
+  if (!s.sources.length) return `${s.label} is ${endSentence(def)}`;
+  // A definition that already names its files ("… seen in <Picture 1> …") is used as written.
+  if (def && s.sources.every((x) => def.includes(x))) return `${s.label} is ${endSentence(def)}`;
+  const verb = s.audio ? "heard in" : s.sources.some((x) => x.startsWith("<Audio")) ? "from" : "seen in";
+  return def
+    ? `${s.label}, ${verb} ${joinList(s.sources)}, is ${endSentence(def)}`
+    : `${s.label} is ${verb} ${joinList(s.sources)}.`;
+}
+
+// The shots (1-based) that mention a subject — by its <label>, or by @key for a keyed
+// subject (the reference token) — in any case: <Sibella> is <sibella>.
+function minimaxAppearances(mm, label) {
+  const l = label.toLowerCase();
+  const key = /^<([\p{L}\p{N}_-]+)>$/u.exec(l)?.[1];
+  const at = key ? new RegExp(`(?<![\\p{L}\\p{N}_@])@${key}(?![\\p{L}\\p{N}_-])`, "u") : null;
+  return (mm.shots || []).flatMap((s, i) => {
+    const t = String(s.text || "").toLowerCase();
+    return t.includes(l) || (at && at.test(t)) ? [i + 1] : [];
+  });
+}
+
+// One retention row per labelled subject: { label, audio, shots, text, line }. The
+// author writes the text ("fully_preserved - …"); a subject with none is left out.
+// @shots in a retention text: that subject's shots, "[Shot 1], [Shot 3]".
+const SHOTS_TOKEN_RE = /(?<![\p{L}\p{N}_@])@shots(?![\p{L}\p{N}_-])/giu;
+
+function minimaxRetention(mm, subjects, tokens = null) {
+  return subjects
+    .filter((s) => s.label)
+    .map((s) => {
+      const shots = s.audio ? [] : minimaxAppearances(mm, s.label);
+      const list = shots.map((i) => `[Shot ${i}]`).join(", ");
+      const raw = String(mm.retention?.[s.label] || "").trim().replace(SHOTS_TOKEN_RE, list || "no shots yet");
+      const text = resolveMediaTokens(raw, tokens);
+      const where = list ? ` (appears in ${list})` : "";
+      return { label: s.label, audio: s.audio, shots, text, line: text ? `${s.label}${where}: ${text}` : null };
+    });
+}
+
+// "appears in [Shot 1], [Shot 3]" for the form.
+function appearsText(r) {
+  if (r.audio) return "audio";
+  return r.shots.length ? `appears in ${r.shots.map((i) => `[Shot ${i}]`).join(", ")}` : "not in any shot yet";
+}
+
+function compileMinimax(mmIn, refs) {
+  const mm = normalizeMinimax(mmIn);
+  const subjects = minimaxSubjects(mm, refs);
+  const tokens = minimaxMediaTokens(refs);
+  const tok = (t) => resolveMediaTokens(String(t || "").trim(), tokens);
+  mm.shots = sortedShots(mm.shots);
+  const shots = mm.shots.map((s, i) => {
+    const text = tok(s.text);
+    return i === 0 ? `[Shot 1] ${text}` : `[Shot ${i + 1}] At ${fmtShotTime(s.at)}, ${text}`;
+  });
+  const section = (name, body) => `${name}:\n${String(body || "").trim() || "N/A"}`;
+  return [
+    section("subject_definitions", subjects.map((s) => minimaxSubjectLine(s, tokens)).join("\n")),
+    section("summary", tok(mm.summary)),
+    section("retention_analysis", minimaxRetention(mm, subjects, tokens).filter((r) => r.line).map((r) => r.line).join("\n")),
+    section("detailed_description", [tok(mm.style), ...shots].filter(Boolean).join("\n")),
+    section("overall_soundscape", tok(mm.soundscape)),
+    section("non_diegetic_music", tok(mm.music)),
+  ].join("\n\n");
+}
+
+// Best-effort: plain prompt text → MiniMax fields (for "Convert to MiniMax" and saving
+// in that format). Understands the section headers, [Shot N] At MM:SS.mmm markers,
+// "[task + type] summary" and retention lines. A subject line whose key already has a
+// definition on a reference's gallery file isn't copied (the gallery one is used).
+function parseMinimax(text, refs = []) {
+  const mm = blankMinimax();
+  text = String(text || "").replace(/\r\n/g, "\n");
+  const na = (s) => (/^n\/?a$/i.test(String(s || "").trim()) ? "" : String(s || "").trim());
+
+  const re = new RegExp(`^(${MM_SECTIONS.join("|")}):[ \\t]*`, "gm");
+  const marks = [];
+  let m;
+  while ((m = re.exec(text))) marks.push({ name: m[1], start: m.index, body: re.lastIndex });
+  const parts = {};
+  marks.forEach((x, i) => { parts[x.name] = text.slice(x.body, i + 1 < marks.length ? marks[i + 1].start : text.length).trim(); });
+  if (!marks.length) parts.detailed_description = text.trim();
+
+  const refKeys = new Set(refs.filter((r) => normKey(r.key) && String(r.definition || "").trim()).map((r) => normKey(r.key)));
+  for (const line of na(parts.subject_definitions).split("\n").map((l) => l.trim()).filter(Boolean)) {
+    const lm = /^<([^>]+)>\s*(?:,[^,]*,\s*)?is\s+([\s\S]*)$/i.exec(line);
+    if (!lm) { mm.subjects.push({ key: "", definition: line }); continue; }
+    if (/^(Picture|Video|Audio) \d+$/i.test(lm[1])) { mm.subjects.push({ key: "", definition: line }); continue; }
+    const key = normKey(lm[1]);
+    if (!refKeys.has(key)) mm.subjects.push({ key, definition: lm[2].trim() });
+  }
+
+  mm.summary = na(parts.summary);
+
+  // "<label> (appears in …): text" — the "appears in" part is regenerated, so it's dropped.
+  for (const line of na(parts.retention_analysis).split("\n").map((l) => l.trim()).filter(Boolean)) {
+    const rm = /^(<[^>]+>)\s*(?:\([^)]*\))?\s*:\s*([\s\S]*)$/.exec(line);
+    if (rm) mm.retention[rm[1]] = rm[2].trim();
+  }
+
+  const desc = na(parts.detailed_description);
+  const shotRe = /\[Shot (\d+)\]/g;
+  const hits = [];
+  while ((m = shotRe.exec(desc))) hits.push({ start: m.index, body: shotRe.lastIndex });
+  if (hits.length) {
+    mm.style = desc.slice(0, hits[0].start).trim();
+    mm.shots = hits.map((h, i) => {
+      let body = desc.slice(h.body, i + 1 < hits.length ? hits[i + 1].start : desc.length).trim();
+      let at = null;
+      const tm = /^At\s+(\d+:\d+(?:\.\d+)?|\d+(?:\.\d+)?)\s*,\s*/i.exec(body);
+      if (tm) { at = parseShotTime(tm[1]); body = body.slice(tm[0].length); }
+      return { at: i === 0 ? null : at ?? 0, text: body.trim() };
+    });
+  } else {
+    // No shot markers: a first paragraph is the style opening, the rest is Shot 1 —
+    // except that a paragraph opening "At MM:SS.mmm" starts a new shot (a cut).
+    const paras = desc.split(/\n\s*\n/).map((x) => x.trim()).filter(Boolean);
+    if (paras.length > 1) mm.style = paras.shift();
+    mm.shots = [{ at: null, text: "" }];
+    for (const para of paras) {
+      const tm = /^At\s+(\d+:\d+(?:\.\d+)?)\s*,?\s*/i.exec(para);
+      if (tm) {
+        mm.shots.push({ at: parseShotTime(tm[1]), text: para.slice(tm[0].length).trim() });
+      } else {
+        const cur = mm.shots[mm.shots.length - 1];
+        cur.text = cur.text ? `${cur.text}\n\n${para}` : para;
+      }
+    }
+  }
+  mm.soundscape = na(parts.overall_soundscape);
+  mm.music = na(parts.non_diegetic_music);
+  mm.shots = sortedShots(mm.shots);
+  return mm;
+}
+
+// The saved prompt Generate will use right now: only while the Saved Prompts tab is
+// the one showing on the prompt field on screen. Null means "use the textarea".
+function runSavedPrompt() {
+  if (promptTab !== "saved" || !activePromptHost()) return null;
+  return activeSavedPrompt();
+}
+
+// Stamped on the stored History input (never sent to a model) — what the server's
+// auto-link reads.
+function savedPromptStamp(p) {
+  return { id: p.id, projectId: activeProjectId, title: p.title };
+}
+
+const savedPanel = document.createElement("div");
+savedPanel.className = "saved-prompts hidden";
+savedPanel.innerHTML =
+  `<input type="search" class="sp-filter" placeholder="Filter saved prompts…" aria-label="Filter saved prompts" />` +
+  `<div class="sp-toolbar"><button type="button" class="link-btn sp-new-mm">＋ New MiniMax prompt</button></div>` +
+  `<p class="sp-run-note"></p>` +
+  `<p class="dz-hint sp-empty"></p>` +
+  `<div class="sp-list"></div>`;
+const savedFilterEl = savedPanel.querySelector(".sp-filter");
+const savedEmptyEl = savedPanel.querySelector(".sp-empty");
+const savedRunNoteEl = savedPanel.querySelector(".sp-run-note");
+// A blank MiniMax prompt with the form's current references and duration, opened for editing.
+savedPanel.querySelector(".sp-new-mm").addEventListener("click", async () => {
+  try {
+    const draft = currentPromptDraft();
+    const created = await promptsApi("/api/prompts", "POST", {
+      projectId: activeProjectId,
+      title: "New MiniMax prompt",
+      type: "minimax",
+      prompt: "",
+      minimax: blankMinimax(),
+      refs: draft.refs,
+      duration: draft.duration,
+    });
+    await loadSavedPrompts();
+    openPromptEditor(savedPrompts.find((p) => p.id === created.id) || created);
+    peTitle.select();
+  } catch (err) {
+    alert(err.message || String(err));
+  }
+});
+const savedListEl = savedPanel.querySelector(".sp-list");
+savedFilterEl.addEventListener("input", () => {
+  savedPromptsFilter = savedFilterEl.value.trim().toLowerCase();
+  renderSavedPrompts();
+});
+
+// Turn a prompt field's head into Prompt / Saved Prompts tabs and add the Save button.
+// `labelEl` (the field's label, if it has one) becomes the first tab; `keep` are nodes
+// from the old label that stay beside the tabs (the kie.ai character-cap hint).
+function installPromptTools({ field, head, textarea, labelEl = null, labelText = "Prompt", keep = [] }) {
+  const tabsEl = document.createElement("span");
+  tabsEl.className = "prompt-tabs";
+  tabsEl.setAttribute("role", "tablist");
+  const mkTab = (tab, text) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "prompt-tab";
+    b.setAttribute("role", "tab");
+    b.dataset.tab = tab;
+    b.textContent = text;
+    b.addEventListener("click", () => setPromptTab(tab));
+    tabsEl.appendChild(b);
+    return b;
+  };
+  const tabs = { prompt: mkTab("prompt", labelText), saved: mkTab("saved", "Saved Prompts") };
+  for (const n of keep) tabsEl.appendChild(n);
+  if (labelEl) labelEl.replaceWith(tabsEl);
+  else head.prepend(tabsEl);
+
+  let tools = head.querySelector(".field-head-tools");
+  if (!tools) {
+    tools = document.createElement("span");
+    tools.className = "field-head-tools";
+    head.appendChild(tools);
+  }
+  const save = document.createElement("button");
+  save.type = "button";
+  save.className = "link-btn save-prompt-btn";
+  save.textContent = "💾 Save prompt";
+  save.title = "Save this prompt, its reference media and duration to the project's Saved Prompts";
+  save.addEventListener("click", openSavePrompt);
+  tools.prepend(save);
+
+  // Drop hosts whose field a workflow re-render threw away.
+  for (let i = promptHosts.length - 1; i >= 0; i--) {
+    if (!promptHosts[i].field.isConnected) promptHosts.splice(i, 1);
+  }
+  promptHosts.push({ field, textarea, tabs });
+  syncPromptTabs();
+}
+
+// The prompt field on screen: the kie.ai one, or the active workflow's main prompt.
+function activePromptHost() {
+  return promptHosts.find((h) => h.field.isConnected && !h.field.closest(".hidden")) || null;
+}
+
+function setPromptTab(tab) {
+  promptTab = tab;
+  try {
+    localStorage.setItem(PROMPT_TAB_KEY, tab);
+  } catch {
+    /* non-fatal */
+  }
+  syncPromptTabs();
+  if (tab === "saved") loadSavedPrompts(); // pick up gallery moves/renames since the last load
+}
+
+// Paint every prompt field's tabs and put the cards panel in the one on screen.
+function syncPromptTabs() {
+  const label = `Saved Prompts${savedPrompts.length ? ` (${savedPrompts.length})` : ""}`;
+  for (const h of promptHosts) {
+    for (const [tab, btn] of Object.entries(h.tabs)) {
+      btn.classList.toggle("active", tab === promptTab);
+      btn.setAttribute("aria-selected", String(tab === promptTab));
+    }
+    h.tabs.saved.textContent = label;
+    h.textarea.classList.toggle("hidden", promptTab === "saved");
+  }
+  const host = activePromptHost();
+  if (host && savedPanel.parentElement !== host.field) host.field.appendChild(savedPanel);
+  savedPanel.classList.toggle("hidden", promptTab !== "saved" || !host);
+  syncGenerateLabel();
+}
+
+installPromptTools({
+  field: document.getElementById("promptField"),
+  head: document.querySelector("#promptField .field-head"),
+  textarea: promptEl,
+  labelEl: document.getElementById("promptLabel"),
+  keep: [promptCapHint],
+});
+
+async function loadSavedPrompts() {
+  const seq = ++savedPromptsSeq;
+  const projectId = activeProjectId;
+  try {
+    const res = await fetch(`/api/prompts?projectId=${encodeURIComponent(projectId)}`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.msg || "Failed to load saved prompts");
+    if (seq !== savedPromptsSeq) return;
+    savedPrompts = data.data || [];
+  } catch (err) {
+    console.error("Failed to load saved prompts:", err);
+    if (seq !== savedPromptsSeq) return;
+    savedPrompts = [];
+  }
+  // Other projects' lists may have changed too (a move/copy lands there).
+  projectPromptsCache.clear();
+  projectPromptsCache.set(projectId, Promise.resolve(savedPrompts));
+  renderSavedPrompts();
+  refreshHistoryPromptLinks();
+}
+
+// Saved prompts of any project (History can show other projects' cards), fetched once
+// and cached until the next loadSavedPrompts.
+const projectPromptsCache = new Map(); // projectId → Promise<prompt[]>
+function getProjectPrompts(projectId) {
+  if (!projectPromptsCache.has(projectId)) {
+    projectPromptsCache.set(
+      projectId,
+      fetch(`/api/prompts?projectId=${encodeURIComponent(projectId)}`)
+        .then((r) => r.json())
+        .then((d) => d.data || [])
+        .catch(() => [])
+    );
+  }
+  return projectPromptsCache.get(projectId);
+}
+
+// --- History ↔ saved prompt ---
+// A History card's 📌 dropdown links its output to one of its project's saved prompts
+// (the output becomes that prompt card's thumbnail). One card per prompt: linking a new
+// take replaces the prompt's old one, which is why every dropdown refreshes after a change.
+// `onLinked(prompt|null)` runs after every refresh, so the card can show or hide what
+// depends on the link (Edit prompt, and what Re-import uses).
+function makeHistoryPromptLink(entry, onLinked = () => {}) {
+  const projectId = entry.projectId || "default";
+  const sel = document.createElement("select");
+  sel.className = "hist-project hist-prompt-link";
+  sel.appendChild(new Option("📌 Saved prompt…", ""));
+  sel.disabled = true;
+  sel.refill = async () => {
+    const list = await getProjectPrompts(projectId);
+    const linked = list.find((p) => p.historyId === entry.id);
+    sel.innerHTML = "";
+    const first = new Option(
+      linked ? "✕ Unlink saved prompt" : list.length ? "📌 Link to saved prompt…" : "📌 No saved prompts",
+      ""
+    );
+    sel.appendChild(first);
+    for (const p of list) sel.appendChild(new Option(`📌 ${p.title}`, p.id));
+    sel.value = linked?.id || "";
+    sel.disabled = !list.length;
+    sel.classList.toggle("linked", !!linked);
+    sel.title = linked
+      ? `Linked to saved prompt "${linked.title}" — this output is its thumbnail`
+      : "Link this output to a saved prompt — it becomes that prompt card's thumbnail";
+    onLinked(linked || null);
+  };
+  sel.addEventListener("change", async () => {
+    sel.disabled = true;
+    try {
+      await promptsApi("/api/prompts/link", "POST", { projectId, historyId: entry.id, promptId: sel.value || null });
+      projectPromptsCache.delete(projectId);
+      if (projectId === activeProjectId) await loadSavedPrompts(); // refreshes the dropdowns too
+      else refreshHistoryPromptLinks();
+    } catch (err) {
+      alert(err.message || String(err));
+      sel.refill();
+    }
+  });
+  sel.refill();
+  return sel;
+}
+
+function refreshHistoryPromptLinks() {
+  historyEl.querySelectorAll(".hist-prompt-link").forEach((s) => s.refill?.());
+}
+
+// JSON request helper for the prompts API: throws the server's message on failure.
+async function promptsApi(url, method, body) {
+  const res = await fetch(url, {
+    method,
+    headers: body ? { "Content-Type": "application/json" } : undefined,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.msg || `Request failed (${res.status})`);
+  return data.data;
+}
+
+// The duration the form would generate: the kie.ai field, or a ComfyUI workflow's
+// duration/seconds control. Null when the model has none (e.g. Seedream images).
+function currentDuration() {
+  if (isComfy()) {
+    const f = comfyFields.find((c) => /duration|seconds/i.test(c.name || "") && typeof c.peek === "function");
+    const v = f ? Number(f.peek()) : NaN;
+    return Number.isFinite(v) && v > 0 ? v : null;
+  }
+  if (document.getElementById("durationField").classList.contains("hidden")) return null;
+  const v = Number(document.getElementById("duration").value);
+  return Number.isFinite(v) && v > 0 ? v : null;
+}
+
+function setCurrentDuration(seconds) {
+  if (!(seconds > 0)) return;
+  if (isComfy()) {
+    comfyFields.find((c) => /duration|seconds/i.test(c.name || "") && typeof c.set === "function")?.set(seconds);
+    return;
+  }
+  const el = document.getElementById("duration");
+  el.value = Math.min(Math.max(seconds, Number(el.min) || 1), Number(el.max) || seconds);
+  updateEstimate();
+}
+
+// What Save would store, read from the form on screen.
+function currentPromptDraft() {
+  const snap = snapshotCarry();
+  const refs = CARRY_KINDS.flatMap((kind) =>
+    (snap.media[kind] || []).map((m) => ({ id: m.id, kind, name: m.name, tail: m.tail || 0 }))
+  );
+  return { prompt: String(snap.prompt ?? ""), refs, duration: currentDuration(), urlOnly: snap.urlOnly };
+}
+
+const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+function refSummary(refs) {
+  const counts = { image: 0, video: 0, audio: 0 };
+  for (const r of refs) counts[r.kind] = (counts[r.kind] || 0) + 1;
+  const parts = [];
+  if (counts.image) parts.push(plural(counts.image, "image"));
+  if (counts.video) parts.push(plural(counts.video, "video"));
+  if (counts.audio) parts.push(`${counts.audio} audio`);
+  return parts.join(", ");
+}
+
+// --- save dialog ---
+const savePromptModal = document.getElementById("savePromptModal");
+const savePromptTitle = document.getElementById("savePromptTitle");
+const savePromptSummary = document.getElementById("savePromptSummary");
+const savePromptWarn = document.getElementById("savePromptWarn");
+const savePromptConfirm = document.getElementById("savePromptConfirm");
+const savePromptFormat = document.getElementById("savePromptFormat");
+let pendingSave = null;
+
+function openSavePrompt() {
+  const draft = currentPromptDraft();
+  if (!draft.prompt.trim() && !draft.refs.length) {
+    setError("Nothing to save yet — write a prompt first.");
+    return;
+  }
+  pendingSave = draft;
+  // Text already laid out in MiniMax's sections is offered as a MiniMax prompt.
+  savePromptFormat.value = /^(subject_definitions|detailed_description):/m.test(draft.prompt) ? "minimax" : "default";
+  const firstLine = draft.prompt.trim().split(/\n/)[0].replace(/\s+/g, " ");
+  savePromptTitle.value = firstLine.length > 60 ? `${firstLine.slice(0, 57).trimEnd()}…` : firstLine;
+  const bits = [
+    `${draft.prompt.length.toLocaleString()} characters`,
+    refSummary(draft.refs) || "no references",
+    draft.duration ? `${draft.duration}s` : null,
+  ].filter(Boolean);
+  savePromptSummary.textContent = `${projectName(activeProjectId)} · ${bits.join(" · ")}`;
+  savePromptWarn.textContent = draft.urlOnly
+    ? `${plural(draft.urlOnly, "URL reference")} can't be saved (only files saved in the gallery can).`
+    : "";
+  savePromptWarn.classList.toggle("hidden", !draft.urlOnly);
+  show(savePromptModal);
+  savePromptTitle.focus();
+  savePromptTitle.select();
+}
+
+function closeSavePrompt() {
+  pendingSave = null;
+  hide(savePromptModal);
+}
+
+async function confirmSavePrompt() {
+  if (!pendingSave) return;
+  const title = savePromptTitle.value.trim();
+  if (!title) {
+    savePromptTitle.focus();
+    return;
+  }
+  savePromptConfirm.disabled = true;
+  try {
+    const { prompt, refs, duration } = pendingSave;
+    const body = { projectId: activeProjectId, title, prompt, refs, duration, type: "default" };
+    if (savePromptFormat.value === "minimax") {
+      // Split the text into MiniMax's fields; subject lines for references that already
+      // have a gallery definition aren't copied (that definition is used instead).
+      const byId = new Map(galleryItems.map((g) => [g.id, g]));
+      const withSubjects = refs.map((r) => ({ ...r, key: byId.get(r.id)?.key || "", definition: byId.get(r.id)?.definition || "" }));
+      Object.assign(body, { type: "minimax", prompt: "", minimax: parseMinimax(prompt, withSubjects) });
+    }
+    await promptsApi("/api/prompts", "POST", body);
+    closeSavePrompt();
+    await loadSavedPrompts();
+    flashSaveButton();
+  } catch (err) {
+    alert(err.message || String(err));
+  } finally {
+    savePromptConfirm.disabled = false;
+  }
+}
+
+function flashSaveButton() {
+  const btn = activePromptHost()?.field.querySelector(".save-prompt-btn");
+  if (!btn) return;
+  btn.textContent = "✓ Saved";
+  setTimeout(() => { btn.textContent = "💾 Save prompt"; }, 1500);
+}
+
+savePromptConfirm.addEventListener("click", confirmSavePrompt);
+document.getElementById("savePromptCancel").addEventListener("click", closeSavePrompt);
+savePromptModal.addEventListener("click", (e) => { if (e.target === savePromptModal) closeSavePrompt(); });
+savePromptModal.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { e.preventDefault(); confirmSavePrompt(); }
+  if (e.key === "Escape") closeSavePrompt();
+});
+
+// --- import ---
+// Replace the form's prompt, reference media and duration with a saved prompt's.
+// Put a saved prompt's references into the form's reference fields, in its order —
+// replacing what's there (every kind is listed, empty ones too). `promptText`, when
+// given, goes into the prompt field as well. Returns notes on anything that couldn't
+// be placed (files gone from the gallery, or more files than the workflow has slots).
+function loadSavedPromptMedia(p, promptText = null) {
+  const media = { image: [], video: [], audio: [] };
+  for (const r of p.refs || []) {
+    if (!r.missing) media[r.kind]?.push({ id: r.id, url: r.url, name: r.name, tail: r.tail || 0 });
+  }
+  applyCarry({ prompt: promptText, media, urlOnly: 0 });
+
+  const notes = [];
+  const missing = (p.refs || []).filter((r) => r.missing).length;
+  if (missing) notes.push(`${plural(missing, "reference")} no longer in the gallery and ${missing === 1 ? "was" : "were"} skipped.`);
+  if (isComfy()) {
+    for (const kind of CARRY_KINDS) {
+      const room = comfyFields
+        .filter((f) => f.mediaKind === kind && typeof f.setMedia === "function")
+        .reduce((n, f) => n + (f.capacity || 1), 0);
+      if (media[kind].length > room) {
+        notes.push(`This workflow takes ${room} ${kind} reference${room === 1 ? "" : "s"}; ${media[kind].length - room} didn't fit.`);
+      }
+    }
+  }
+  return notes;
+}
+
+// A MiniMax prompt's text numbers its <Picture N> labels from its own reference list,
+// so generating from one sends those files, in that order: they're loaded into the
+// form's reference fields first. (A Default prompt stays text-only.)
+function loadRunMedia(p) {
+  return p?.type === "minimax" ? loadSavedPromptMedia(p) : [];
+}
+
+// `confirmReplace: false` skips the unsaved-prompt check (a History Re-import, which
+// has already replaced the form).
+async function importSavedPrompt(p, { confirmReplace = true } = {}) {
+  const draft = currentPromptDraft();
+  const text = exportSavedPromptText(p);
+  const unsaved =
+    draft.prompt.trim() && draft.prompt !== text && !savedPrompts.some((s) => exportSavedPromptText(s) === draft.prompt);
+  if (confirmReplace && unsaved && !confirm(`Import "${p.title}"?\n\nThis replaces the prompt you have now (it isn't saved).`)) return;
+  hide(errorEl);
+  disarmContinuation(); // the form no longer holds what the armed run was built from
+  if (isComfy()) await comfyRenderPromise; // controls must exist before they're filled
+
+  const notes = loadSavedPromptMedia(p, text);
+  setCurrentDuration(Number(p.duration));
+  if (notes.length) setError(notes.join("\n"));
+  setPromptTab("prompt");
+  activePromptHost()?.field.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+// --- cards ---
+// Cards are compact and never expand; clicking one opens the edit modal.
+function renderSavedPrompts() {
+  syncPromptTabs(); // the tab's count
+  const q = savedPromptsFilter;
+  const shown = q
+    ? savedPrompts.filter((p) => `${p.title}\n${exportSavedPromptText(p)}`.toLowerCase().includes(q))
+    : savedPrompts;
+  savedFilterEl.classList.toggle("hidden", savedPrompts.length < 2 && !q);
+  savedEmptyEl.textContent = savedPrompts.length
+    ? "No saved prompts match."
+    : `No saved prompts in ${projectName(activeProjectId)} yet — write one and click 💾 Save prompt.`;
+  savedEmptyEl.classList.toggle("hidden", shown.length > 0);
+  savedListEl.innerHTML = "";
+  for (const p of shown) savedListEl.appendChild(makeSavedPromptCard(p));
+  const active = activeSavedPrompt();
+  savedRunNoteEl.classList.toggle("on", !!active);
+  savedRunNoteEl.textContent = !savedPrompts.length
+    ? ""
+    : active
+      ? `▶ Generate uses “${active.title}” (${active.type === "minimax" ? "its prompt and its references, in order" : "its prompt text only"}) while this tab is open, and links the new History card to it.`
+      : "Press ▶ on a card to generate from it while this tab is open. Otherwise Generate uses the Prompt tab's text.";
+  savedRunNoteEl.classList.toggle("hidden", !savedPrompts.length);
+  syncGenerateLabel();
+}
+
+// Say on the Generate button when a saved prompt will be used.
+function syncGenerateLabel() {
+  submitBtn.classList.toggle("from-saved", !!runSavedPrompt());
+  submitBtn.title = runSavedPrompt() ? `Generate from the saved prompt “${runSavedPrompt().title}”` : "";
+}
+
+// --- manual order ---
+// The list is ordered by weight, Drupal-style: lighter on top, heavier sinks. Drag a
+// card onto another to put it there, or use its ▲ ▼ buttons (or Alt+↑/↓ on a focused
+// card); like Drupal's tabledrag, that renumbers the weights 0, 1, 2… in the new order.
+// It's shown at once and saved in the background.
+const SP_REORDER_TYPE = "application/x-genie-saved-prompt";
+
+async function moveSavedPrompt(id, toIndex) {
+  const from = savedPrompts.findIndex((p) => p.id === id);
+  if (from < 0) return;
+  toIndex = Math.max(0, Math.min(savedPrompts.length - 1, toIndex));
+  if (from === toIndex) return;
+  const [moved] = savedPrompts.splice(from, 1);
+  savedPrompts.splice(toIndex, 0, moved);
+  savedPrompts.forEach((p, i) => { p.weight = i; });
+  renderSavedPrompts();
+  savedListEl.querySelector(`[data-id="${CSS.escape(id)}"]`)?.focus();
+  try {
+    await promptsApi("/api/prompts/reorder", "POST", {
+      projectId: activeProjectId,
+      ids: savedPrompts.map((p) => p.id),
+    });
+  } catch (err) {
+    alert(`Couldn't save the new order: ${err.message || err}`);
+    loadSavedPrompts(); // back to what the server has
+  }
+}
+
+function wireCardReorder(card, p) {
+  card.draggable = true;
+  card.addEventListener("keydown", (e) => {
+    if (!e.altKey || (e.key !== "ArrowUp" && e.key !== "ArrowDown")) return;
+    e.preventDefault();
+    const i = savedPrompts.findIndex((x) => x.id === p.id);
+    moveSavedPrompt(p.id, i + (e.key === "ArrowUp" ? -1 : 1));
+  });
+  card.addEventListener("dragstart", (e) => {
+    e.dataTransfer.setData(SP_REORDER_TYPE, p.id);
+    e.dataTransfer.effectAllowed = "move";
+    card.classList.add("dragging");
+  });
+  card.addEventListener("dragend", () => {
+    card.classList.remove("dragging");
+    savedListEl.querySelectorAll(".drop-before, .drop-after").forEach((c) => c.classList.remove("drop-before", "drop-after"));
+  });
+  // Dropping on the top half of a card puts the dragged one above it, bottom half below.
+  const lowerHalf = (e) => {
+    const r = card.getBoundingClientRect();
+    return e.clientY > r.top + r.height / 2;
+  };
+  card.addEventListener("dragover", (e) => {
+    if (![...e.dataTransfer.types].includes(SP_REORDER_TYPE)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    const after = lowerHalf(e);
+    card.classList.toggle("drop-after", after);
+    card.classList.toggle("drop-before", !after);
+  });
+  card.addEventListener("dragleave", () => card.classList.remove("drop-before", "drop-after"));
+  card.addEventListener("drop", (e) => {
+    if (![...e.dataTransfer.types].includes(SP_REORDER_TYPE)) return;
+    e.preventDefault();
+    card.classList.remove("drop-before", "drop-after");
+    const id = e.dataTransfer.getData(SP_REORDER_TYPE);
+    if (id === p.id) return;
+    const from = savedPrompts.findIndex((x) => x.id === id);
+    let to = savedPrompts.findIndex((x) => x.id === p.id) + (lowerHalf(e) ? 1 : 0);
+    if (from < to) to--; // removing the dragged card first shifts everything after it up
+    moveSavedPrompt(id, to);
+  });
+}
+
+function makeCardMoveButtons(p) {
+  const wrap = document.createElement("span");
+  wrap.className = "sp-move";
+  const i = savedPrompts.findIndex((x) => x.id === p.id);
+  for (const [text, delta, title] of [["▲", -1, "Move up (Alt+↑)"], ["▼", 1, "Move down (Alt+↓)"]]) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "link-btn";
+    b.textContent = text;
+    b.title = title;
+    b.disabled = i + delta < 0 || i + delta >= savedPrompts.length;
+    b.addEventListener("click", (e) => {
+      e.stopPropagation(); // not a click on the card (which opens the editor)
+      moveSavedPrompt(p.id, i + delta);
+    });
+    wrap.appendChild(b);
+  }
+  return wrap;
+}
+
+function makeSavedPromptCard(p) {
+  const refs = p.refs || [];
+  const card = document.createElement("div");
+  card.className = "sp-card";
+  card.dataset.id = p.id;
+  card.tabIndex = 0;
+  card.setAttribute("role", "button");
+  card.title = "Click to view, edit or import";
+  card.addEventListener("click", () => openPromptEditor(p));
+  card.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      openPromptEditor(p);
+    }
+  });
+
+  const head = document.createElement("div");
+  head.className = "sp-head";
+  const title = document.createElement("span");
+  title.className = "sp-title";
+  title.textContent = p.title;
+  const meta = document.createElement("span");
+  meta.className = "sp-meta";
+  meta.textContent = [
+    p.duration ? `${p.duration}s` : null,
+    refSummary(refs) || null,
+    `weight ${p.weight ?? 0}`,
+    new Date(p.updatedAt || p.createdAt).toLocaleDateString(),
+  ].filter(Boolean).join(" · ");
+  // ▶ makes this the prompt Generate uses (while this tab is open); again to stop.
+  const isActive = activeSavedPrompt()?.id === p.id;
+  card.classList.toggle("run-active", isActive);
+  const use = document.createElement("button");
+  use.type = "button";
+  use.className = "sp-use" + (isActive ? " on" : "");
+  use.textContent = isActive ? "▶ Active" : "▶";
+  use.title = isActive
+    ? "Generate uses this prompt while the Saved Prompts tab is open — click to stop"
+    : "Use this prompt for Generate (while the Saved Prompts tab is open)";
+  use.addEventListener("click", (e) => {
+    e.stopPropagation(); // not a click on the card (which opens the editor)
+    setActiveSavedPrompt(isActive ? null : p.id);
+  });
+  head.prepend(use);
+  if (p.type === "minimax") {
+    const badge = document.createElement("span");
+    badge.className = "sp-type";
+    badge.textContent = "MiniMax";
+    badge.title = "MiniMax H3 format — compiled into its six sections when used";
+    title.prepend(badge);
+  }
+  head.append(title, meta);
+  if (!savedPromptsFilter) {
+    // Manual order (off while filtering, when neighbours on screen aren't real neighbours).
+    wireCardReorder(card, p);
+    head.appendChild(makeCardMoveButtons(p));
+  }
+  const snippet = document.createElement("div");
+  snippet.className = "sp-snippet";
+  snippet.textContent = savedPromptSnippet(p) || "(no prompt text)";
+  // Text and reference thumbnails; the linked History output (if any) sits to the left.
+  const main = document.createElement("div");
+  main.className = "sp-card-main";
+  main.append(head, snippet);
+  if (refs.length) {
+    const mini = document.createElement("div");
+    mini.className = "sp-mini";
+    for (const r of refs.slice(0, 8)) mini.appendChild(makeRefPreview(r, "sp-mini-thumb"));
+    if (refs.length > 8) {
+      const more = document.createElement("span");
+      more.className = "sp-mini-more";
+      more.textContent = `+${refs.length - 8}`;
+      mini.appendChild(more);
+    }
+    main.appendChild(mini);
+  }
+  if (p.output?.pending) {
+    card.classList.add("has-output");
+    const ph = document.createElement("div");
+    ph.className = "sp-output sp-output-pending";
+    ph.textContent = "⏳";
+    ph.title = "The linked run is still generating";
+    card.appendChild(ph);
+  } else if (p.output && !p.output.missing) {
+    card.classList.add("has-output");
+    card.appendChild(makeOutputPreview(p.output, "sp-output"));
+  }
+  card.appendChild(main);
+  return card;
+}
+
+// The linked History output as a still (a video shows its first frame, and plays with
+// sound while hovered).
+function makeOutputPreview(out, className) {
+  const box = document.createElement("div");
+  box.className = className;
+  box.title = "Output from the linked History card";
+  if (out.kind === "image") {
+    const im = document.createElement("img");
+    im.src = out.url;
+    im.loading = "lazy";
+    box.appendChild(im);
+  } else {
+    const v = document.createElement("video");
+    v.src = out.url;
+    v.muted = true;
+    v.loop = true;
+    v.playsInline = true;
+    v.preload = "metadata";
+    // Browsers block sound until the page has had a click; until then, play muted.
+    box.addEventListener("mouseenter", () => {
+      v.muted = false;
+      v.play().catch(() => {
+        v.muted = true;
+        v.play().catch(() => {});
+      });
+    });
+    box.addEventListener("mouseleave", () => { v.pause(); v.currentTime = 0; });
+    box.appendChild(v);
+  }
+  return box;
+}
+
+// A card's one- or two-line teaser: the text, or a MiniMax prompt's opening and first shot.
+function savedPromptSnippet(p) {
+  if (p.type !== "minimax") return p.prompt || "";
+  const mm = p.minimax || {};
+  const shots = mm.shots || [];
+  return [mm.style, shots[0]?.text, shots.length > 1 ? `(+${shots.length - 1} cut${shots.length > 2 ? "s" : ""})` : ""]
+    .filter((x) => String(x || "").trim())
+    .join(" ");
+}
+
+// A small preview of a saved reference (or a "missing" placeholder if its gallery
+// file was deleted).
+function makeRefPreview(r, className) {
+  const box = document.createElement("div");
+  box.className = `${className}${r.missing ? " missing" : ""}`;
+  box.title = r.missing ? `${r.name || "file"} — no longer in the gallery` : r.name || "";
+  if (r.missing) box.textContent = "?";
+  else box.appendChild(makeThumbContent(r.kind, { thumb: r.url, name: r.name }));
+  return box;
+}
+
+// --- edit modal ---
+// Title, prompt text, duration, weight, the reference list and each reference's key +
+// definition are edited here and written back together by Save changes. The key and
+// definition belong to the gallery file (every prompt using it shares them), so Save
+// writes those to the gallery; the rest goes to the saved prompt.
+const promptEditModal = document.getElementById("promptEditModal");
+const peTitle = document.getElementById("peTitle");
+const pePrompt = document.getElementById("pePrompt");
+const peDuration = document.getElementById("peDuration");
+const peWeight = document.getElementById("peWeight");
+const peRefs = document.getElementById("peRefs");
+const peRefsEmpty = document.getElementById("peRefsEmpty");
+const peMeta = document.getElementById("peMeta");
+const peActions = document.getElementById("peActions");
+const peSave = document.getElementById("peSave");
+const pePicker = document.getElementById("pePicker");
+const peOutput = document.getElementById("peOutput");
+const pePickerGrid = document.getElementById("pePickerGrid");
+const pePickerEmpty = document.getElementById("pePickerEmpty");
+const pePickerFile = document.getElementById("pePickerFile");
+// editing: { p, projectId, refs, subjects, historyId }
+//   historyId — the linked History entry (Unlink clears it; Save writes it)
+//   refs     — the working reference list (the picker adds, × removes)
+//   subjects — gallery id → { key, definition, origKey, origDefinition }, the working
+//              copy of each referenced file's key + definition
+let editing = null;
+let pickerKind = "all";
+
+const subjectOf = (r) => {
+  let s = editing.subjects.get(r.id);
+  if (!s) {
+    s = { key: r.key || "", definition: r.definition || "", origKey: r.key || "", origDefinition: r.definition || "" };
+    editing.subjects.set(r.id, s);
+  }
+  return s;
+};
+const subjectChanged = (s) => s.key !== s.origKey || s.definition !== s.origDefinition;
+
+// `projectId`: the project the prompt belongs to — the active one from the Saved
+// Prompts tab, or a History card's (which may be another project's).
+function openPromptEditor(p, projectId = activeProjectId) {
+  editing = {
+    p,
+    projectId,
+    type: p.type || "default",
+    mm: normalizeMinimax(structuredClone(p.minimax || null)), // the MiniMax fields being edited
+    refs: (p.refs || []).map((r) => ({ ...r })),
+    subjects: new Map(),
+    historyId: p.historyId || null,
+  };
+  peTitle.value = p.title;
+  pePrompt.value = p.prompt || "";
+  peDuration.value = p.duration || "";
+  peWeight.value = p.weight ?? 0;
+  peMeta.textContent =
+    `Saved ${new Date(p.createdAt).toLocaleString()}` +
+    (p.updatedAt && p.updatedAt !== p.createdAt ? ` · edited ${new Date(p.updatedAt).toLocaleString()}` : "");
+  pePicker.open = false;
+  renderEditorOutput();
+  renderEditorBody();
+  show(promptEditModal);
+  promptEditModal.querySelector(".modal-box").scrollTop = 0;
+  peTitle.focus();
+}
+
+// Show the edit form for the prompt's format (plain textarea, or the MiniMax sections).
+function renderEditorBody() {
+  const mm = editing.type === "minimax";
+  document.getElementById("peDefault").classList.toggle("hidden", mm);
+  peMinimax.classList.toggle("hidden", !mm);
+  const badge = document.getElementById("peType");
+  badge.textContent = mm ? "MiniMax H3" : "Default";
+  badge.classList.toggle("mm", mm);
+  if (mm) renderMinimaxForm();
+  else {
+    document.getElementById("peRefsHome").appendChild(peRefsBlock); // back from the MiniMax form
+    peMinimax.innerHTML = "";
+  }
+  renderEditorRefs(); // reference labels follow the format (<Picture 1> vs Image 1)
+  renderEditorActions();
+}
+
+// The modal's values, shaped like a saved prompt.
+function editorValues() {
+  const d = Number(peDuration.value);
+  const w = Number(peWeight.value);
+  return {
+    title: peTitle.value.trim(),
+    type: editing.type,
+    // Left out for MiniMax: the server clears the old text when it stores the type, so a
+    // server that doesn't know the format yet keeps the text rather than blanking it.
+    prompt: editing.type === "minimax" ? undefined : pePrompt.value,
+    minimax: editing.type === "minimax" ? editing.mm : null,
+    duration: Number.isFinite(d) && d > 0 ? d : null,
+    weight: peWeight.value.trim() !== "" && Number.isFinite(w) ? Math.round(w) : 0,
+    historyId: editing.historyId,
+    refs: editorLiveRefs(), // with unsaved key/definition edits, for Import's compile
+  };
+}
+
+function editorDirty() {
+  if (!editing) return false;
+  const v = editorValues();
+  const p = editing.p;
+  return (
+    v.title !== p.title ||
+    v.type !== (p.type || "default") ||
+    (v.type === "minimax"
+      ? JSON.stringify(v.minimax) !== JSON.stringify(p.minimax ? normalizeMinimax(p.minimax) : null)
+      : v.prompt !== (p.prompt || "")) ||
+    v.duration !== (p.duration || null) ||
+    v.weight !== (p.weight ?? 0) ||
+    v.historyId !== (p.historyId || null) ||
+    v.refs.map((r) => r.id).join() !== (p.refs || []).map((r) => r.id).join() ||
+    [...editing.subjects.values()].some(subjectChanged)
+  );
+}
+
+function closePromptEditor({ force = false } = {}) {
+  if (!editing) return;
+  if (!force && editorDirty() && !confirm("Discard your changes to this saved prompt?")) return;
+  editing = null;
+  hide(promptEditModal);
+}
+
+async function saveEditor() {
+  const v = editorValues();
+  if (!v.title) {
+    peTitle.focus();
+    throw new Error("The title can't be empty.");
+  }
+  // Key + definition edits for files still in the list go to the gallery first, so
+  // the prompt reloads with them.
+  const inList = new Set(v.refs.map((r) => r.id));
+  let galleryChanged = false;
+  for (const [id, s] of editing.subjects) {
+    if (!inList.has(id) || !subjectChanged(s)) continue;
+    const g = await promptsApi(`/api/images/${encodeURIComponent(id)}`, "PUT", { key: s.key, definition: s.definition });
+    Object.assign(s, { key: g.key || "", definition: g.definition || "" });
+    Object.assign(s, { origKey: s.key, origDefinition: s.definition });
+    galleryChanged = true;
+  }
+  const saved = await promptsApi(`/api/prompts/${encodeURIComponent(editing.p.id)}`, "PUT", {
+    projectId: editing.projectId,
+    ...v,
+    refs: v.refs.map(({ id, kind, name, tail }) => ({ id, kind, name, tail })),
+  });
+  editing.p = saved;
+  editing.mm = normalizeMinimax(structuredClone(saved.minimax || null)); // as the server normalized it
+  if (galleryChanged) loadGallery();
+  await loadSavedPrompts();
+  return saved;
+}
+
+// The linked History output: a preview (click for full size) and Unlink, or a hint on
+// how to link one.
+function renderEditorOutput() {
+  peOutput.innerHTML = "";
+  const out = editing.historyId && editing.historyId === editing.p.historyId ? editing.p.output : null;
+  if (out && !out.missing) {
+    const prev = makeOutputPreview(out, "pe-output-thumb");
+    prev.title = "Open full size";
+    prev.addEventListener("click", () => openLightbox(out.kind, out.url, editing.p.title));
+    const unlink = document.createElement("button");
+    unlink.type = "button";
+    unlink.className = "link-btn";
+    unlink.textContent = "✕ Unlink";
+    unlink.title = "Stop using this History output as the card's thumbnail (on Save)";
+    unlink.addEventListener("click", () => {
+      editing.historyId = null;
+      renderEditorOutput();
+    });
+    peOutput.append(prev, unlink);
+    return;
+  }
+  const hint = document.createElement("span");
+  hint.className = "hint";
+  hint.textContent = editing.p.output?.pending && editing.historyId === editing.p.historyId
+    ? "⏳ The linked run is still generating."
+    : editing.historyId
+    ? "The linked History card is gone (deleted, or its output is missing). Save to clear the link."
+    : editing.p.historyId
+      ? "Unlinked — Save to confirm."
+      : "None — use the 📌 dropdown on a History card to link its output here.";
+  peOutput.appendChild(hint);
+  if (editing.historyId) {
+    const clear = document.createElement("button");
+    clear.type = "button";
+    clear.className = "link-btn";
+    clear.textContent = "✕ Clear link";
+    clear.addEventListener("click", () => {
+      editing.historyId = null;
+      renderEditorOutput();
+    });
+    peOutput.appendChild(clear);
+  }
+}
+
+function renderEditorRefs() {
+  peRefs.innerHTML = "";
+  const seen = { image: 0, video: 0, audio: 0 };
+  for (const r of editing.refs) {
+    const n = ++seen[r.kind];
+    const label = editing.type === "minimax" ? `<${MM_REF_LABEL[r.kind] || "Picture"} ${n}>` : `${KIND_LABEL[r.kind] || "Image"} ${n}`;
+    peRefs.appendChild(makeRefTile(r, label));
+  }
+  peRefsEmpty.classList.toggle("hidden", editing.refs.length > 0);
+  if (pePicker.open) renderEditorPicker(); // keep its "added" marks in step
+  refreshMinimaxDerived(); // subjects come from the references
+}
+
+// A reference in the editor: preview, label and file name, × to drop it from this
+// prompt (the file stays in the gallery), and the file's key + definition.
+function makeRefTile(r, label) {
+  const tile = document.createElement("div");
+  tile.className = "sp-ref";
+  const prev = makeRefPreview(r, `thumb sp-ref-thumb${r.kind === "audio" ? " audio-thumb" : ""}`);
+  if (!r.missing && r.url) prev.appendChild(makeZoomButton(r.kind, r.url, r.name));
+  tile.appendChild(prev);
+
+  const info = document.createElement("div");
+  info.className = "sp-ref-info";
+  const top = document.createElement("div");
+  top.className = "sp-ref-top";
+  const lab = document.createElement("span");
+  lab.className = "sp-ref-label";
+  lab.textContent = label;
+  const rm = document.createElement("button");
+  rm.type = "button";
+  rm.className = "link-btn sp-ref-remove";
+  rm.textContent = "×";
+  rm.title = "Remove from this prompt (the file stays in the gallery)";
+  rm.addEventListener("click", () => {
+    editing.refs = editing.refs.filter((x) => x !== r);
+    renderEditorRefs();
+  });
+  top.append(lab, rm);
+  info.appendChild(top);
+  const name = document.createElement("div");
+  name.className = "sp-ref-name";
+  name.textContent = r.missing ? `${r.name || "file"} (missing)` : r.name;
+  name.title = name.textContent;
+  info.appendChild(name);
+
+  if (!r.missing) {
+    // The same file can be listed twice; both tiles edit one shared subject.
+    const s = subjectOf(r);
+    const key = document.createElement("input");
+    key.type = "text";
+    key.className = "sp-ref-key-input";
+    key.placeholder = "@key, e.g. sibella";
+    key.maxLength = 41;
+    key.value = s.key ? `@${s.key}` : "";
+    key.dataset.subject = r.id;
+    key.title = "What a prompt calls this subject. Saved on the gallery file.";
+    key.addEventListener("input", () => {
+      s.key = key.value.trim().replace(/^@+/, "");
+      peRefs.querySelectorAll(`.sp-ref-key-input[data-subject="${CSS.escape(r.id)}"]`).forEach((el) => {
+        if (el !== key) el.value = key.value;
+      });
+      refreshMinimaxDerived();
+    });
+    const def = document.createElement("textarea");
+    def.className = "sp-ref-def-input";
+    def.rows = 3;
+    def.placeholder = "Definition — who or what this is, e.g. “a red-haired woman in her 30s, green raincoat”";
+    def.value = s.definition;
+    def.dataset.subject = r.id;
+    def.title = "Saved on the gallery file, so every prompt using it shares this.";
+    def.addEventListener("input", () => {
+      s.definition = def.value;
+      peRefs.querySelectorAll(`.sp-ref-def-input[data-subject="${CSS.escape(r.id)}"]`).forEach((el) => {
+        if (el !== def) el.value = def.value;
+      });
+      refreshMinimaxDerived();
+    });
+    info.append(key, def);
+  }
+  tile.appendChild(info);
+  return tile;
+}
+
+// --- media picker (in the edit modal) ---
+// This project's gallery: click a file to add it to the prompt (again to take it out).
+// Upload adds new files to the gallery and straight into the prompt.
+function addEditorRef(item) {
+  editing.refs.push({
+    id: item.id,
+    kind: item.kind || "image",
+    name: item.name,
+    url: item.localUrl,
+    projectId: item.projectId || "default",
+    key: item.key || "",
+    definition: item.definition || "",
+  });
+}
+
+function renderEditorPicker() {
+  if (!editing) return;
+  pePicker.querySelectorAll(".pe-kind").forEach((b) => b.classList.toggle("active", b.dataset.kind === pickerKind));
+  const inPrompt = new Set(editing.refs.map((r) => r.id));
+  const items = galleryItems.filter(
+    (i) =>
+      (i.projectId || "default") === editing.projectId &&
+      (pickerKind === "all" || (i.kind || "image") === pickerKind)
+  );
+  pePickerGrid.innerHTML = "";
+  pePickerEmpty.classList.toggle("hidden", items.length > 0);
+  for (const item of items) {
+    const added = inPrompt.has(item.id);
+    const thumb = makeGalleryThumb(item, {
+      title: `${item.name} — click to ${added ? "remove from" : "add to"} this prompt`,
+      onPick: (it) => {
+        if (editing.refs.some((r) => r.id === it.id)) editing.refs = editing.refs.filter((r) => r.id !== it.id);
+        else addEditorRef(it);
+        renderEditorRefs();
+      },
+      refresh: renderEditorPicker,
+    });
+    thumb.classList.toggle("picked", added);
+    pePickerGrid.appendChild(thumb);
+  }
+}
+
+// Save dropped/browsed files to this project's gallery, then add them to the prompt.
+async function uploadEditorMedia(files) {
+  const ok = [...files].filter((f) => /^(image|video|audio)\//.test(f.type));
+  for (const file of ok) {
+    try {
+      const base64Data = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = () => reject(reader.error);
+        reader.readAsDataURL(file);
+      });
+      const res = await fetch("/api/upload", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ base64Data, fileName: file.name, projectId: editing?.projectId || activeProjectId }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.image?.id) throw new Error(data.msg || "Save failed");
+      if (editing) addEditorRef(data.image);
+    } catch (err) {
+      alert(`Couldn't save ${file.name}: ${err.message || err}`);
+    }
+  }
+  await loadGallery();
+  if (editing) renderEditorRefs();
+}
+
+pePicker.addEventListener("toggle", () => { if (pePicker.open) renderEditorPicker(); });
+pePicker.querySelectorAll(".pe-kind").forEach((b) =>
+  b.addEventListener("click", () => {
+    pickerKind = b.dataset.kind;
+    renderEditorPicker();
+  })
+);
+document.getElementById("pePickerUpload").addEventListener("click", () => pePickerFile.click());
+pePickerFile.addEventListener("change", () => {
+  uploadEditorMedia(pePickerFile.files);
+  pePickerFile.value = "";
+});
+["dragenter", "dragover"].forEach((evt) =>
+  pePicker.addEventListener(evt, (e) => {
+    if (!e.dataTransfer?.types?.includes("Files")) return;
+    e.preventDefault();
+    pePicker.classList.add("dragover");
+  })
+);
+["dragleave", "drop"].forEach((evt) =>
+  pePicker.addEventListener(evt, (e) => {
+    if (evt === "dragleave" && pePicker.contains(e.relatedTarget)) return;
+    pePicker.classList.remove("dragover");
+  })
+);
+pePicker.addEventListener("drop", (e) => {
+  if (!e.dataTransfer?.files?.length) return;
+  e.preventDefault();
+  pePicker.open = true;
+  uploadEditorMedia(e.dataTransfer.files);
+});
+
+// --- MiniMax edit form (in the saved-prompt editor) ---
+// Edits editing.mm in place. Typing only refreshes what's derived from it (the subject
+// lines, "appears in", warnings and the compiled preview) so the field keeps focus;
+// adding/removing a subject or cut rebuilds the form.
+const peMinimax = document.getElementById("peMinimax");
+const peRefsBlock = document.getElementById("peRefsBlock");
+
+// The editor's references as the compiler sees them: each with its working key +
+// definition (unsaved edits in the reference tiles included).
+function editorLiveRefs() {
+  return editing.refs.map((r) => {
+    const s = editing.subjects.get(r.id);
+    return s ? { ...r, key: normKey(s.key), definition: s.definition } : r;
+  });
+}
+
+function mmEl(tag, cls, text) {
+  const el = document.createElement(tag);
+  if (cls) el.className = cls;
+  if (text != null) el.textContent = text;
+  return el;
+}
+
+function mmSection(name, hint) {
+  const sec = mmEl("section", "pe-mm-sec");
+  const h = mmEl("div", "pe-mm-name", name);
+  if (hint) h.appendChild(mmEl("span", "hint", ` ${hint}`));
+  sec.appendChild(h);
+  return sec;
+}
+
+// A textarea bound to editing.mm[prop] (or to obj[prop] when given).
+function mmText(obj, prop, { rows = 3, placeholder = "", cls = "" } = {}) {
+  const ta = mmEl("textarea", cls);
+  ta.rows = rows;
+  ta.placeholder = placeholder;
+  ta.value = obj[prop] || "";
+  ta.addEventListener("input", () => {
+    obj[prop] = ta.value;
+    refreshMinimaxDerived();
+  });
+  return ta;
+}
+
+// A subject's retention_analysis line: "(appears in [Shot N])" is shown and compiled
+// automatically; the author writes the relationship and note. `getLabel()` is the
+// subject's current <label> (null while it has no key — no line then).
+function mmRetentionField(getLabel) {
+  const mm = editing.mm;
+  const wrap = mmEl("div", "pe-mm-retfield");
+  wrap.getLabel = getLabel;
+  const head = mmEl("div", "pe-mm-rethead");
+  head.append(mmEl("span", "pe-mm-retname", "retention_analysis"), mmEl("span", "pe-mm-appears"));
+  const ta = mmEl("textarea", "pe-mm-rettext");
+  ta.rows = 2;
+  ta.placeholder = "e.g. fully_preserved - her face, hair and outfit are kept. (partially_preserved, attribute_transfer, weak_reference; audio: fully_copy, partially_copy, reference) — @shots becomes this subject's shot list";
+  ta.value = (getLabel() && mm.retention[getLabel()]) || "";
+  ta.addEventListener("input", () => {
+    const label = getLabel();
+    if (!label) return;
+    mm.retention[label] = ta.value;
+    refreshMinimaxDerived();
+  });
+  wrap.append(head, ta);
+  return wrap;
+}
+
+function renderMinimaxForm() {
+  const mm = editing.mm;
+  peMinimax.innerHTML = "";
+
+  // subject_definitions — each subject with its retention_analysis line under it
+  const subj = mmSection("subject_definitions", "— each subject, with its retention_analysis below it");
+  const fromRefs = mmEl("div", "pe-mm-derived");
+  fromRefs.id = "mmRefSubjects"; // rows built by refreshMinimaxDerived (they follow the references)
+  subj.appendChild(fromRefs);
+  const extras = mmEl("div", "pe-mm-list");
+  mm.subjects.forEach((s, i) => {
+    const row = mmEl("div", "pe-mm-subject");
+    const key = mmEl("input", "pe-mm-key");
+    key.type = "text";
+    key.placeholder = "key, e.g. new";
+    key.value = s.key ? `<${s.key}>` : "";
+    key.title = "The subject's label — written as <key> in the shots";
+    key.addEventListener("input", () => {
+      // Renaming carries the subject's retention text over to the new label.
+      const before = s.key ? `<${s.key}>` : null;
+      s.key = normKey(key.value);
+      const after = s.key ? `<${s.key}>` : null;
+      if (before && after && before !== after && mm.retention[before] != null && mm.retention[after] == null) {
+        mm.retention[after] = mm.retention[before];
+        delete mm.retention[before];
+      }
+      refreshMinimaxDerived();
+    });
+    key.addEventListener("change", () => { key.value = s.key ? `<${s.key}>` : ""; });
+    const def = mmText(s, "definition", { rows: 5, placeholder: "who or what it is — e.g. a 20-year-old devil girl with red skin and short black horns." });
+    const rm = mmEl("button", "link-btn pe-mm-remove", "×");
+    rm.type = "button";
+    rm.title = "Remove this subject";
+    rm.addEventListener("click", () => {
+      mm.subjects.splice(i, 1);
+      renderMinimaxForm();
+    });
+    row.append(key, def, rm, mmRetentionField(() => (s.key ? `<${s.key}>` : null)));
+    extras.appendChild(row);
+  });
+  subj.appendChild(extras);
+  const addSubj = mmEl("button", "link-btn", "＋ Add a subject without an image");
+  addSubj.type = "button";
+  addSubj.addEventListener("click", () => {
+    mm.subjects.push({ key: "", definition: "" });
+    renderMinimaxForm();
+    peMinimax.querySelectorAll(".pe-mm-key").item(mm.subjects.length - 1)?.focus();
+  });
+  subj.appendChild(addSubj);
+  peMinimax.appendChild(subj);
+
+  // The references, right under the subjects they define — you look at the images while
+  // writing the definitions. (The block itself moves here; see renderEditorBody.)
+  const refsSec = mmSection("reference media", "— key and definition are saved on the gallery file and feed subject_definitions above. Write @key anywhere in this prompt to refer to a file: it compiles to its <Picture N>, so re-ordering keeps it right.");
+  refsSec.classList.add("pe-mm-refs");
+  refsSec.appendChild(peRefsBlock);
+  peMinimax.appendChild(refsSec);
+
+  // summary
+  const sum = mmSection("summary");
+  sum.appendChild(mmText(mm, "summary", {
+    rows: 5,
+    placeholder: "[reference generation] The target video shows <sibella> … — the task type in brackets, then one short paragraph on the video and what each reference is for.",
+  }));
+  peMinimax.appendChild(sum);
+
+  // detailed_description
+  const desc = mmSection("detailed_description", "— a style opening, then each shot in playback order");
+  desc.appendChild(mmText(mm, "style", { rows: 2, placeholder: "The target video uses a … style. (the opening, before [Shot 1])" }));
+  const shots = mmEl("div", "pe-mm-shots");
+  mm.shots.forEach((s, i) => {
+    const card = mmEl("div", "pe-mm-shot");
+    const head = mmEl("div", "pe-mm-shot-head");
+    head.appendChild(mmEl("span", "pe-mm-shot-name", `[Shot ${i + 1}]`));
+    if (i > 0) {
+      head.appendChild(mmEl("span", "hint", "At"));
+      const at = mmEl("input", "pe-mm-at");
+      at.type = "text";
+      at.inputMode = "decimal";
+      at.value = s.at == null ? "" : fmtShotTime(s.at);
+      at.placeholder = "00:05.000";
+      at.title = "When this cut happens — seconds (5) or MM:SS.mmm (00:05.000)";
+      at.addEventListener("input", () => {
+        s.at = parseShotTime(at.value);
+        refreshMinimaxDerived();
+      });
+      at.addEventListener("change", () => {
+        if (s.at != null) at.value = fmtShotTime(s.at);
+        const sorted = sortedShots(mm.shots);
+        if (sorted === mm.shots) return;
+        mm.shots = sorted;
+        renderMinimaxForm();
+        const moved = peMinimax.querySelectorAll(".pe-mm-shot")[mm.shots.indexOf(s)];
+        moved?.classList.add("pe-mm-moved");
+        moved?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      });
+      const warn = mmEl("span", "pe-mm-warn");
+      warn.dataset.shot = String(i);
+      const rm = mmEl("button", "link-btn pe-mm-remove", "×");
+      rm.type = "button";
+      rm.title = "Remove this cut";
+      rm.addEventListener("click", () => {
+        mm.shots.splice(i, 1);
+        renderMinimaxForm();
+      });
+      head.append(at, warn, rm);
+    } else {
+      head.appendChild(mmEl("span", "hint", "opening shot — no time"));
+    }
+    card.append(head, mmText(s, "text", {
+      rows: i === 0 ? 5 : 3,
+      placeholder: i === 0
+        ? "What the opening shot shows: composition, who's where (by <key>), action, camera, sound."
+        : "e.g. the shot cuts to a low angle shot of <new> laughing.",
+    }));
+    shots.appendChild(card);
+  });
+  desc.appendChild(shots);
+  const addCut = mmEl("button", "btn-secondary pe-mm-add-cut", "＋ Add cut");
+  addCut.type = "button";
+  addCut.addEventListener("click", () => {
+    const last = Math.max(0, ...mm.shots.slice(1).map((x) => x.at || 0));
+    mm.shots.push({ at: last + 5, text: "" });
+    renderMinimaxForm();
+    const tas = peMinimax.querySelectorAll(".pe-mm-shot textarea");
+    tas[tas.length - 1]?.focus();
+  });
+  desc.appendChild(addCut);
+  peMinimax.appendChild(desc);
+
+  const snd = mmSection("overall_soundscape", "— ambience and physical sounds across the whole video");
+  snd.appendChild(mmText(mm, "soundscape", { rows: 2, placeholder: "e.g. Quiet library room tone; pages rustle." }));
+  peMinimax.appendChild(snd);
+  const mus = mmSection("non_diegetic_music", "— music only the audience hears (empty = N/A)");
+  mus.appendChild(mmText(mm, "music", { rows: 2, placeholder: "e.g. Heavy metal rock and roll, fast tempo." }));
+  peMinimax.appendChild(mus);
+
+  // compiled preview
+  const prev = mmEl("details", "pe-mm-preview");
+  prev.appendChild(mmEl("summary", null, "Compiled prompt"));
+  const pre = mmEl("pre", "pe-mm-compiled");
+  pre.id = "mmCompiled";
+  prev.appendChild(pre);
+  peMinimax.appendChild(prev);
+
+  refreshMinimaxDerived();
+}
+
+// Everything computed from the fields: the reference subject lines, retention rows,
+// cut-time warnings and the compiled text.
+function refreshMinimaxDerived() {
+  if (!editing || editing.type !== "minimax") return;
+  const mm = editing.mm;
+  const refs = editorLiveRefs();
+  const subjects = minimaxSubjects(mm, refs);
+
+  const rows = new Map(minimaxRetention(mm, subjects).map((r) => [r.label, r]));
+  const fromRefs = document.getElementById("mmRefSubjects");
+  if (fromRefs) {
+    // Subjects defined only on their image (its definition box in reference media) have
+    // no row below, so they get a slim one here — just to hold their retention box. A
+    // subject also typed below keeps its retention there. Rebuilt only when that set
+    // changes, so a retention box keeps focus while typing.
+    const typed = new Set(mm.subjects.filter((x) => x.key).map((x) => `<${x.key}>`));
+    const lines = subjects.filter((x) => x.fromRefs && !typed.has(x.label));
+    const sig = lines.map((x) => x.label).join();
+    if (fromRefs.dataset.sig !== sig) {
+      fromRefs.dataset.sig = sig;
+      fromRefs.innerHTML = "";
+      for (const x of lines) {
+        const row = mmEl("div", "pe-mm-refsubj");
+        row.dataset.label = x.label;
+        const head = mmEl("div", "pe-mm-refsubj-head");
+        head.append(mmEl("code", "pe-mm-refsubj-label", x.label), mmEl("span", "hint", "— defined on its image in reference media below"));
+        row.append(head, mmRetentionField(() => x.label));
+        fromRefs.appendChild(row);
+      }
+    }
+  }
+  // Every retention box's "appears in", from its subject's current label.
+  peMinimax.querySelectorAll(".pe-mm-retfield").forEach((w) => {
+    const label = w.getLabel?.();
+    const r = label && rows.get(label);
+    const el = w.querySelector(".pe-mm-appears");
+    el.textContent = r ? appearsText(r) : label ? "add a definition to include it" : "give the subject a key first";
+    el.classList.toggle("none", !r || (!r.audio && !r.shots.length));
+    w.querySelector("textarea").disabled = !label;
+  });
+
+  // Cut-time notes: missing, out of order while typing, or a duplicate time. (Past the
+  // duration is fine.)
+  peMinimax.querySelectorAll(".pe-mm-warn").forEach((w) => {
+    const i = Number(w.dataset.shot);
+    const at = mm.shots[i]?.at;
+    const prevAt = i > 1 ? mm.shots[i - 1]?.at ?? 0 : 0;
+    w.textContent =
+      at == null ? "⚠ needs a time"
+        : at < prevAt ? "↕ moves into place when you're done"
+          : at === prevAt && i > 1 ? "⚠ same time as the previous cut"
+            : "";
+  });
+
+  const out = document.getElementById("mmCompiled");
+  if (out) {
+    const text = compileMinimax(mm, refs);
+    out.textContent = text;
+    const sum = out.parentElement.querySelector("summary");
+    if (sum) sum.textContent = `Compiled prompt (${text.length.toLocaleString()} characters)`;
+  }
+}
+
+// Import / Duplicate / Move / Copy / Delete. Import uses what the modal shows (and
+// offers to save edits first); the others act on the saved prompt.
+function renderEditorActions() {
+  peActions.innerHTML = "";
+  const btn = (text, title, onClick, cls = "btn-secondary") => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = cls;
+    b.textContent = text;
+    b.title = title;
+    b.addEventListener("click", async () => {
+      b.disabled = true;
+      try {
+        await onClick();
+      } catch (err) {
+        alert(err.message || String(err));
+      } finally {
+        b.disabled = false;
+      }
+    });
+    peActions.appendChild(b);
+    return b;
+  };
+  const base = () => `/api/prompts/${encodeURIComponent(editing.p.id)}`;
+  const projectId = editing.projectId;
+  // The project-level actions work on the saved version — check before dropping edits.
+  const okToLeaveEdits = () =>
+    !editorDirty() || confirm("You have unsaved changes. Continue without saving them?");
+
+  btn("⤓ Import", "Load this prompt, its references and duration into the form", async () => {
+    let p = { ...editing.p, ...editorValues() };
+    if (editorDirty() && confirm("Save your changes to this prompt before importing?")) p = await saveEditor();
+    closePromptEditor({ force: true });
+    await importSavedPrompt(p);
+  }, "sp-import");
+  if (editing.type === "minimax") {
+    btn("⇄ To plain text", "Turn this into a default prompt holding the compiled text (on Save)", async () => {
+      if (!confirm("Convert to a plain-text prompt?\n\nThe compiled MiniMax text becomes the prompt; the sections, cuts and retention settings are dropped when you save.")) return;
+      pePrompt.value = compileMinimax(editing.mm, editorLiveRefs());
+      editing.type = "default";
+      renderEditorBody();
+    });
+  } else {
+    btn("⇄ To MiniMax", "Split this prompt into MiniMax H3's sections, shots and subjects (on Save)", async () => {
+      editing.mm = parseMinimax(pePrompt.value, editorLiveRefs());
+      editing.type = "minimax";
+      renderEditorBody();
+    });
+  }
+  btn("⧉ Duplicate", "Make a copy of the saved prompt in this project and open it", async () => {
+    if (!okToLeaveEdits()) return;
+    const copy = await promptsApi(`${base()}/duplicate`, "POST", { projectId });
+    await loadSavedPrompts();
+    const fresh = (await getProjectPrompts(projectId)).find((x) => x.id === copy.id);
+    openPromptEditor(fresh || copy, projectId);
+  });
+
+  // Move / copy to another project: a dropdown of the other projects, like the gallery's ⇄.
+  const others = projects.filter((x) => x.id !== projectId);
+  for (const mode of others.length ? ["move", "copy"] : []) {
+    const sel = document.createElement("select");
+    sel.className = "sp-transfer";
+    sel.title = mode === "move" ? "Move to another project" : "Copy to another project";
+    const ph = new Option(mode === "move" ? "⇄ Move to…" : "⎘ Copy to…", "", true, true);
+    ph.disabled = true;
+    sel.appendChild(ph);
+    for (const x of others) sel.appendChild(new Option(x.name, x.id));
+    sel.addEventListener("change", async () => {
+      const to = sel.value;
+      sel.selectedIndex = 0;
+      if (!okToLeaveEdits()) return;
+      sel.disabled = true;
+      try {
+        await promptsApi(`${base()}/transfer`, "POST", { projectId, toProjectId: to, mode });
+        await loadSavedPrompts();
+        if (mode === "move") closePromptEditor({ force: true });
+        else alert(`Copied "${editing.p.title}" to ${projectName(to)}.`);
+      } catch (err) {
+        alert(err.message || String(err));
+      } finally {
+        sel.disabled = false;
+      }
+    });
+    peActions.appendChild(sel);
+  }
+
+  btn("🗑 Delete", "Delete this saved prompt (reference files stay in the gallery)", async () => {
+    if (!confirm(`Delete saved prompt "${editing.p.title}"?`)) return;
+    await promptsApi(`${base()}?projectId=${encodeURIComponent(projectId)}`, "DELETE");
+    closePromptEditor({ force: true });
+    await loadSavedPrompts();
+  }, "btn-secondary sp-delete");
+}
+
+peSave.addEventListener("click", async () => {
+  peSave.disabled = true;
+  try {
+    await saveEditor();
+    closePromptEditor({ force: true });
+  } catch (err) {
+    alert(err.message || String(err));
+  } finally {
+    peSave.disabled = false;
+  }
+});
+document.getElementById("peCancel").addEventListener("click", () => closePromptEditor());
+document.getElementById("peClose").addEventListener("click", () => closePromptEditor());
+promptEditModal.addEventListener("mousedown", (e) => {
+  if (e.target === promptEditModal) closePromptEditor();
+});
+promptEditModal.addEventListener("keydown", (e) => {
+  // Esc over a full-size view (opened from a thumbnail here) closes just that view.
+  if (e.key === "Escape" && lightbox.classList.contains("hidden")) closePromptEditor();
+});
 
 // --- helpers ----------------------------------------------------------------
 // Form-level error (validation / pre-submit failures). Per-run failures are
@@ -3204,11 +5215,13 @@ function closePreviewStream() {
   if (previewES) { previewES.close(); previewES = null; }
 }
 
-function collectInput(resolved) {
+// `prompt`: the text to send — the textarea's, or an active saved prompt's export.
+function collectInput(resolved, prompt = promptEl.value) {
+  prompt = String(prompt).trim();
   if (isSeedream()) {
     const input = {
       model: modelSelect.value,
-      prompt: document.getElementById("prompt").value.trim(),
+      prompt,
       aspect_ratio: aspectSelect.value,
       quality: qualitySelect.value,
       nsfw_checker: document.getElementById("nsfw_checker").checked,
@@ -3223,7 +5236,7 @@ function collectInput(resolved) {
   if (isH3()) {
     const input = {
       model: modelSelect.value,
-      prompt: document.getElementById("prompt").value.trim(),
+      prompt,
       duration: Number(document.getElementById("duration").value),
       resolution: resolutionSelect.value,
     };
@@ -3243,7 +5256,7 @@ function collectInput(resolved) {
   }
   const input = {
     model: modelSelect.value,
-    prompt: document.getElementById("prompt").value.trim(),
+    prompt,
     reference_image_urls: resolved.image,
     reference_video_urls: resolved.video,
     reference_audio_urls: resolved.audio,
@@ -3276,6 +5289,8 @@ form.addEventListener("submit", async (e) => {
     submitComfy();
     return;
   }
+  // An active MiniMax prompt brings its own references (before they're checked below).
+  const mediaNotes = loadRunMedia(runSavedPrompt());
 
   if (allItems().some((i) => i.status === "saving")) {
     setError("Some files are still saving — wait a moment and try again.");
@@ -3299,14 +5314,19 @@ form.addEventListener("submit", async (e) => {
     setError("MiniMax H3 reference-to-video needs at least one reference image or video.");
     return;
   }
-  if (promptEl.value.length > promptCap()) {
+  // Pinned now, so switching tabs (or the active prompt) mid-upload can't change the run.
+  const fromSaved = runSavedPrompt();
+  const promptText = fromSaved ? exportSavedPromptText(fromSaved) : promptEl.value;
+  if (promptText.length > promptCap()) {
     setError(
-      `Prompt is ${promptEl.value.length.toLocaleString()} characters — this model's limit is ${promptCap().toLocaleString()}.`
+      `${fromSaved ? `Saved prompt “${fromSaved.title}”` : "Prompt"} is ${promptText.length.toLocaleString()} characters — ` +
+        `this model's limit is ${promptCap().toLocaleString()}.`
     );
     return;
   }
 
   hide(errorEl);
+  if (mediaNotes.length) setError(mediaNotes.join("\n"));
   // Lock only for the upload→create window so a double-click can't double-submit
   // the same form. It re-enables once the task is created, freeing you to queue
   // another generation while this one keeps polling in the background.
@@ -3325,7 +5345,8 @@ form.addEventListener("submit", async (e) => {
   // ×N: one batch of identical requests. Each run gets its own job, History card and
   // kie.ai task, but the reference media is uploaded once and shared by all of them.
   const count = queueCount();
-  const storedInput = collectInput({ image: [], video: [], audio: [], firstFrame: [], lastFrame: [] });
+  const storedInput = collectInput({ image: [], video: [], audio: [], firstFrame: [], lastFrame: [] }, promptText);
+  if (fromSaved) storedInput.savedPrompt = savedPromptStamp(fromSaved); // History only, not sent to kie.ai
   const projectId = activeProjectId; // pin now so a mid-run project switch can't misfile it
   const refSecs = refMedia ? refVideoSeconds() : 0;
   const jobs = [];
@@ -3375,7 +5396,7 @@ form.addEventListener("submit", async (e) => {
     return;
   }
 
-  const genInput = collectInput(resolved); // real input (hosted URLs) for the API call
+  const genInput = collectInput(resolved, promptText); // real input (hosted URLs) for the API call
 
   // Snapshot the balance so we can measure actual cost on completion. (With
   // overlapping runs this delta is unreliable; the per-task creditsConsumed
@@ -3550,6 +5571,7 @@ async function attachHistoryResult(job, result, costCredits, runtimeMs) {
   }
 }
 
+let lastHistoryLinkKey = "";
 async function loadHistory() {
   try {
     const res = await fetch("/api/history");
@@ -3557,6 +5579,16 @@ async function loadHistory() {
     historyEntries = data.data || [];
     renderHistory(historyEntries);
     updateEstimate();
+    // A run generated from a saved prompt links itself when its output lands — or a
+    // linked run just finished — so the saved-prompt cards need a fresh look.
+    const linkKey = historyEntries
+      .filter((e) => e.savedPromptLinked || savedPrompts.some((p) => p.historyId === e.id))
+      .map((e) => `${e.id}:${e.status}`)
+      .join();
+    if (linkKey !== lastHistoryLinkKey) {
+      lastHistoryLinkKey = linkKey;
+      loadSavedPrompts();
+    }
   } catch (err) {
     console.error("Failed to load history:", err);
   }
@@ -4050,11 +6082,35 @@ function renderHistory(entries) {
     reimport.type = "button";
     reimport.className = "btn-secondary";
     reimport.textContent = "Re-import";
-    reimport.addEventListener("click", () => {
-      applyEntry(entry);
+    // Linked to a saved prompt (see makeHistoryPromptLink): Re-import still restores the
+    // run's model and settings, then takes the prompt text, references and duration
+    // from the saved prompt — its current version, edits included.
+    let linkedPrompt = null;
+    reimport.addEventListener("click", async () => {
+      const p = linkedPrompt;
+      await applyEntry(entry);
+      if (p) await importSavedPrompt(p, { confirmReplace: false });
       window.scrollTo({ top: 0, behavior: "smooth" });
     });
     actions.appendChild(reimport);
+
+    const editPromptBtn = document.createElement("button");
+    editPromptBtn.type = "button";
+    editPromptBtn.className = "btn-secondary hidden";
+    editPromptBtn.innerHTML = '<span class="btn-ico">✎</span> Edit prompt';
+    editPromptBtn.addEventListener("click", () => {
+      if (linkedPrompt) openPromptEditor(linkedPrompt, entry.projectId || "default");
+    });
+    actions.appendChild(editPromptBtn);
+    const onLinked = (p) => {
+      linkedPrompt = p;
+      editPromptBtn.classList.toggle("hidden", !p);
+      editPromptBtn.title = p ? `Edit the linked saved prompt "${p.title}"` : "";
+      reimport.innerHTML = p ? '<span class="btn-ico">📌</span> Re-import' : "Re-import";
+      reimport.title = p
+        ? `Load this run's model and settings with the linked saved prompt "${p.title}" (its text, references and duration)`
+        : "Load this run's prompt, references and settings into the form";
+    };
 
     // Continue / Re-roll, for a workflow that declares the continuation tokens and a
     // run that carries a slot. The workflow list is already in memory, so this
@@ -4197,6 +6253,8 @@ function renderHistory(entries) {
       });
       actions.appendChild(galleryBtn);
     }
+
+    if (output) actions.appendChild(makeHistoryPromptLink(entry, onLinked));
 
     // reassign the entry to another project (files stay where they are)
     const projSel = document.createElement("select");

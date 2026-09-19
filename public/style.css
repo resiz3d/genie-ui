@@ -257,6 +257,7 @@ label {
 textarea,
 input[type="number"],
 input[type="text"],
+input[type="search"],
 select {
   background: var(--bg);
   color: var(--text);
@@ -525,6 +526,28 @@ img.zoomable {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+
+.field-head-tools {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-left: auto; /* stays right even when the head has no label */
+}
+
+/* Prompt lock: carry the prompt + references across model switches. */
+.carry-lock {
+  font-size: 0.95rem;
+  line-height: 1;
+  opacity: 0.45;
+}
+
+.carry-lock.on {
+  opacity: 1;
+}
+
+.carry-lock:hover {
+  text-decoration: none;
 }
 
 .char-count {
@@ -1280,7 +1303,7 @@ img.zoomable {
 .lightbox {
   position: fixed;
   inset: 0;
-  z-index: 100;
+  z-index: 200; /* above .modal (100): a modal's thumbnails open full size on top of it */
   background: rgba(0, 0, 0, 0.85);
   display: flex;
   align-items: center;
@@ -1811,5 +1834,788 @@ img.zoomable {
   .comfy-node-group-body,
   .comfy-settings-body {
     padding: 10px 8px;
+  }
+}
+
+/* --- Saved prompts ------------------------------------------------------------
+   The Prompt field's head doubles as a Prompt / Saved Prompts tab strip; the cards
+   panel replaces the textarea while "Saved Prompts" is the active tab. */
+.prompt-tabs {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+.prompt-tab {
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 0.9rem;
+  font-weight: 500;
+  padding: 0.2rem 0.55rem;
+}
+.prompt-tab:first-child {
+  margin-left: -0.55rem; /* the first tab's text lines up with the other field labels */
+}
+.prompt-tab:hover:not(:disabled) {
+  background: none;
+  color: var(--text);
+}
+.prompt-tab.active {
+  color: var(--text);
+  border-color: var(--border);
+  background: var(--bg);
+}
+.prompt-tab.active:hover:not(:disabled) {
+  background: var(--bg);
+}
+.prompt-tabs .hint {
+  margin-left: 0.3rem;
+  font-size: 0.85rem;
+}
+.save-prompt-btn,
+.prompt-tab,
+.char-count {
+  white-space: nowrap;
+}
+/* A head with tabs wraps its tools onto their own line rather than squeezing the tabs. */
+.field-head:has(.prompt-tabs) {
+  flex-wrap: wrap;
+  gap: 0.3rem 0.6rem;
+}
+
+.saved-prompts {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-height: 8rem;
+  max-height: 34rem;
+  overflow-y: auto;
+  padding: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  font-weight: 400;
+}
+.sp-filter {
+  width: 100%;
+}
+.sp-empty {
+  padding: 2rem 0.5rem;
+}
+.sp-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+/* Cards don't expand — a click opens the edit modal. */
+.sp-card {
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  cursor: pointer;
+  padding: 0.55rem 0.7rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+.sp-card:hover,
+.sp-card:focus-visible {
+  border-color: var(--accent);
+  outline: none;
+}
+/* The active saved prompt: what Generate uses while the Saved Prompts tab is open. */
+.sp-use {
+  flex-shrink: 0;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 1;
+  padding: 0.25rem 0.5rem;
+  white-space: nowrap;
+}
+.sp-use:hover:not(:disabled) {
+  background: none;
+  border-color: var(--accent);
+  color: var(--text);
+}
+.sp-use.on,
+.sp-use.on:hover:not(:disabled) {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.sp-card.run-active {
+  border-color: var(--accent);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.sp-run-note {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+.sp-run-note.on {
+  color: var(--text);
+}
+/* Generate while a saved prompt is active. */
+#submitBtn.from-saved::before {
+  content: "📌 ";
+}
+.sp-output-pending {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 84px;
+  font-size: 1.4rem;
+}
+
+/* A card with a linked History output: the output on the left, text on the right. */
+.sp-card.has-output {
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 0.7rem;
+}
+.sp-card-main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  flex: 1;
+  min-width: 0;
+}
+/* The output keeps its own aspect ratio (portrait or landscape) — fixed width only. */
+.sp-output {
+  flex-shrink: 0;
+  width: 112px;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: var(--bg);
+}
+.sp-output img,
+.sp-output video {
+  width: 100%;
+  height: auto;
+  display: block;
+  pointer-events: none;
+}
+.sp-card.dragging {
+  opacity: 0.4;
+}
+/* Where a dragged card will land. */
+.sp-card.drop-before {
+  box-shadow: 0 -3px 0 var(--accent);
+}
+.sp-card.drop-after {
+  box-shadow: 0 3px 0 var(--accent);
+}
+.sp-move {
+  display: flex;
+  gap: 0.15rem;
+  margin-left: 0.25rem;
+}
+.sp-move .link-btn {
+  font-size: 0.7rem;
+  padding: 0.1rem 0.25rem;
+  color: var(--muted);
+}
+.sp-move .link-btn:hover:not(:disabled) {
+  color: var(--text);
+  text-decoration: none;
+}
+.sp-move .link-btn:disabled {
+  opacity: 0.25;
+}
+.sp-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+.sp-title {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.sp-title {
+  flex: 1;
+  min-width: 0;
+}
+.sp-meta {
+  color: var(--muted);
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+.sp-snippet {
+  color: var(--muted);
+  font-size: 0.82rem;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+.sp-mini {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem;
+}
+.sp-mini-thumb {
+  width: 36px;
+  height: 36px;
+  border-radius: 4px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+.sp-mini-thumb img,
+.sp-mini-thumb video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  pointer-events: none;
+}
+.sp-mini-thumb .audio-tile .audio-name {
+  display: none;
+}
+.sp-mini-thumb.missing,
+.sp-ref-thumb.missing {
+  border-style: dashed;
+}
+.sp-mini-more {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+/* Saved-prompt edit modal. */
+#promptEditModal .modal-box.pe-box {
+  width: min(760px, 96vw);
+  max-height: 92vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+.pe-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.pe-head h3 {
+  margin: 0;
+}
+.pe-close {
+  font-size: 1.5rem;
+  line-height: 1;
+  color: var(--muted);
+}
+.pe-close:hover {
+  color: var(--text);
+  text-decoration: none;
+}
+.pe-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+}
+.pe-row > label,
+.pe-row input {
+  min-width: 0;
+  width: 100%;
+}
+#promptEditModal .modal-box.pe-box {
+  overflow-x: hidden;
+}
+.pe-refs-head {
+  font-size: 0.9rem;
+  font-weight: 500;
+  margin-bottom: -0.35rem;
+}
+.pe-picker {
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  padding: 0.5rem 0.7rem;
+}
+.pe-picker.dragover {
+  border-color: var(--accent);
+  background: rgba(108, 140, 255, 0.08);
+}
+.pe-picker > summary {
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--accent);
+}
+.pe-picker[open] > summary {
+  margin-bottom: 0.6rem;
+}
+.pe-picker-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem;
+  margin-bottom: 0.6rem;
+}
+.pe-kind {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 500;
+  padding: 0.2rem 0.65rem;
+}
+.pe-kind:hover:not(:disabled) {
+  background: none;
+  color: var(--text);
+}
+.pe-kind.active {
+  border-color: var(--accent);
+  color: var(--text);
+}
+.pe-picker-bar .pe-upload {
+  margin-left: auto;
+  font-size: 0.75rem;
+  padding: 0.25rem 0.7rem;
+  border-radius: 6px;
+}
+/* A gallery file already in the prompt (click again to take it out). */
+.pe-picker .thumb.picked {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.pe-picker .thumb.picked::after {
+  content: "✓";
+  position: absolute;
+  left: 4px; /* bottom-right holds the gallery's × */
+  bottom: 4px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.sp-ref-key-input,
+.sp-ref-def-input {
+  width: 100%;
+  font-size: 0.8rem;
+  padding: 0.3rem 0.5rem;
+  font-weight: 400;
+}
+.sp-ref-key-input {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.sp-ref-def-input {
+  min-height: 3.5rem;
+}
+.pe-output {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+.pe-output .hint {
+  font-size: 0.8rem;
+}
+.pe-output-thumb {
+  width: 220px;
+  max-width: 100%;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  cursor: zoom-in;
+}
+.pe-output-thumb img,
+.pe-output-thumb video {
+  width: 100%;
+  height: auto;
+  display: block;
+  pointer-events: none;
+}
+/* History card: the saved-prompt dropdown, highlighted while linked. */
+.hist-actions .hist-prompt-link {
+  max-width: 190px;
+}
+.hist-actions .hist-prompt-link.linked {
+  border-color: var(--accent);
+  color: var(--text);
+}
+.pe-refs-head .hint {
+  font-size: 0.78rem;
+}
+.pe-meta {
+  margin: 0;
+  font-size: 0.78rem;
+}
+#pePrompt {
+  min-height: 10rem;
+}
+.pe-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+.pe-actions button,
+.pe-actions select {
+  font-size: 0.78rem;
+  padding: 0.35rem 0.7rem;
+  border-radius: 6px;
+  width: auto;
+}
+.pe-actions select {
+  max-width: 9.5rem;
+}
+.pe-actions .sp-delete {
+  margin-left: auto;
+}
+.pe-actions .sp-delete:hover:not(:disabled) {
+  border-color: var(--error);
+  color: var(--error);
+}
+.sp-refs {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 0.5rem;
+}
+.sp-ref {
+  display: flex;
+  gap: 0.6rem;
+  padding: 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  min-width: 0;
+}
+.thumb.sp-ref-thumb {
+  width: 84px;
+  height: 84px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+}
+.sp-ref-info {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.3rem;
+  min-width: 0;
+  flex: 1;
+  font-size: 0.8rem;
+}
+.sp-ref-top {
+  align-self: stretch;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+.sp-ref-label {
+  font-weight: 600;
+}
+.sp-ref-remove {
+  margin-left: auto;
+  font-size: 1rem;
+  line-height: 1;
+  color: var(--muted);
+}
+.sp-ref-remove:hover {
+  color: var(--error);
+  text-decoration: none;
+}
+.sp-ref-name {
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.sp-save-summary {
+  margin: 0 0 0.75rem;
+  font-size: 0.85rem;
+}
+.sp-save-warn {
+  margin: 0.5rem 0 0;
+  font-size: 0.8rem;
+  color: #ffb3b3;
+}
+#savePromptModal .modal-box {
+  width: min(440px, 92vw);
+}
+#savePromptModal .modal-actions {
+  margin-top: 1rem;
+}
+
+@media (max-width: 600px) {
+  .prompt-tabs .hint {
+    display: none; /* the character count beside Save already shows the cap */
+  }
+  .sp-head {
+    flex-direction: column;
+    gap: 0;
+  }
+  .sp-refs {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* --- Saved prompt formats: badges, and the MiniMax H3 edit form --- */
+.sp-type,
+.pe-type {
+  display: inline-block;
+  margin-right: 0.4rem;
+  padding: 0 0.4rem;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  color: var(--accent);
+  font-size: 0.68rem;
+  font-weight: 600;
+  line-height: 1.5;
+  vertical-align: middle;
+}
+.pe-type {
+  margin: 0 0 0 0.5rem;
+  border-color: var(--border);
+  color: var(--muted);
+}
+.pe-type.mm {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.sp-toolbar {
+  display: flex;
+  justify-content: flex-end;
+}
+.sp-save-format {
+  margin-top: 0.6rem;
+}
+
+.pe-mm {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+.pe-mm-sec {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.6rem 0.7rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+}
+.pe-mm-name {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+.pe-mm-name .hint {
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-weight: 400;
+  font-size: 0.75rem;
+}
+.pe-mm textarea,
+.pe-mm input[type="text"],
+.pe-mm select {
+  font-size: 0.82rem;
+  padding: 0.4rem 0.55rem;
+  width: 100%;
+  min-width: 0;
+}
+/* In the MiniMax form, the references block sits in its own section (which has the heading). */
+.pe-mm-refs .pe-refs-head {
+  display: none;
+}
+#peRefsBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+.pe-mm-derived {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.pe-mm-derived .hint {
+  font-size: 0.78rem;
+}
+.pe-mm-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.pe-mm-subject {
+  display: grid;
+  grid-template-columns: 9rem 1fr auto;
+  gap: 0.4rem;
+  align-items: start;
+}
+.pe-mm-key,
+.pe-mm-at {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+/* A subject's retention_analysis line, under its definition. */
+.pe-mm-subject .pe-mm-retfield {
+  grid-column: 2 / 3;
+}
+.pe-mm-refsubj-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  font-size: 0.8rem;
+}
+.pe-mm-refsubj-label {
+  color: var(--accent);
+  font-size: 0.82rem;
+}
+.pe-mm-refsubj-head .hint {
+  font-size: 0.75rem;
+}
+.pe-mm-refsubj {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+.pe-mm-retfield {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+.pe-mm-rethead {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  font-size: 0.72rem;
+}
+.pe-mm-retname {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--muted);
+}
+.pe-mm-appears {
+  color: var(--accent);
+}
+.pe-mm-appears.none {
+  color: #e0b060;
+}
+.pe-mm .pe-mm-rettext {
+  font-size: 0.78rem;
+}
+.pe-mm-list {
+  gap: 0.8rem;
+}
+.pe-mm-remove {
+  font-size: 1.1rem;
+  line-height: 1;
+  color: var(--muted);
+  padding: 0.3rem 0.2rem;
+}
+.pe-mm-remove:hover {
+  color: var(--error);
+  text-decoration: none;
+}
+.pe-mm-shots {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.pe-mm-shot {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 0.45rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+}
+/* A cut that just moved into time order. */
+.pe-mm-shot.pe-mm-moved {
+  animation: pe-mm-moved 1.2s ease-out;
+}
+@keyframes pe-mm-moved {
+  from {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--accent);
+  }
+}
+.pe-mm-shot-head {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.8rem;
+}
+.pe-mm-shot-name {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.pe-mm-shot-head .hint {
+  font-size: 0.75rem;
+}
+.pe-mm input[type="text"].pe-mm-at {
+  width: 6.2em; /* just fits 00:00.000 */
+  flex: 0 0 auto;
+  padding: 0.15rem 0.35rem;
+  text-align: center;
+}
+.pe-mm-warn {
+  font-size: 0.75rem;
+  color: #e0b060;
+}
+.pe-mm-shot-head .pe-mm-remove {
+  margin-left: auto;
+}
+.pe-mm-add-cut {
+  align-self: flex-start;
+  font-size: 0.78rem;
+  padding: 0.35rem 0.8rem;
+  border-radius: 6px;
+}
+.pe-mm-preview > summary {
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: var(--accent);
+}
+.pe-mm-compiled {
+  margin: 0.5rem 0 0;
+  padding: 0.6rem 0.7rem;
+  max-height: 22rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 0.78rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+}
+
+@media (max-width: 600px) {
+  .pe-mm-subject {
+    grid-template-columns: 1fr auto;
+  }
+  .pe-mm-subject > textarea {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+  .pe-mm-subject .pe-mm-retfield {
+    grid-column: 1 / -1;
   }
 }

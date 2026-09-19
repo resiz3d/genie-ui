@@ -163,7 +163,7 @@ keep your key, media, and history:
 
 - `.env`
 - `history.json`, `images.json`, `projects.json` (whichever exist)
-- the `output` and `input` folders
+- the `output`, `input` and `projects` folders
 
 Then run `npm install` once in the new folder and `npm start` as usual.
 

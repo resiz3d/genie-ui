@@ -49,6 +49,9 @@ const EXPORTS_DIR = path.resolve(__dirname, process.env.EXPORTS_DIR || "exports"
 const HISTORY_FILE = path.join(__dirname, "history.json");
 const IMAGES_FILE = path.join(__dirname, "images.json");
 const PROJECTS_FILE = path.join(__dirname, "projects.json");
+// Per-project data that isn't media: <PROJECT_DATA_DIR>/<slug>/prompts.json holds the
+// project's saved prompts. Keyed by slug like the media folders (slugs survive renames).
+const PROJECT_DATA_DIR = path.resolve(__dirname, process.env.PROJECT_DATA_DIR || "projects");
 
 // --- ComfyUI (optional local backend) -------------------------------------
 // Point at a running ComfyUI instance to run local workflows from the UI.
@@ -2585,9 +2588,23 @@ app.delete("/api/projects/:id", (req, res) => {
   }
   writeJson(HISTORY_FILE, history);
 
+  // Saved prompts follow the media to Default (appended, so Default's own stay first).
+  const prompts = readPrompts(proj);
+  if (prompts.length) {
+    const def = resolveProject("default");
+    writePrompts(def, [...readPrompts(def), ...prompts]);
+  }
+  try {
+    fs.rmSync(promptsFile(proj), { force: true });
+  } catch {}
+
   writeJson(PROJECTS_FILE, projects.filter((p) => p.id !== proj.id));
   // remove the now-empty project folders (best-effort)
-  for (const dir of [path.join(INPUT_DIR, proj.slug), path.join(OUTPUT_DIR, proj.slug)]) {
+  for (const dir of [
+    path.join(INPUT_DIR, proj.slug),
+    path.join(OUTPUT_DIR, proj.slug),
+    path.join(PROJECT_DATA_DIR, proj.slug),
+  ]) {
     try {
       fs.rmdirSync(dir);
     } catch {}
@@ -2668,28 +2685,53 @@ app.get("/api/images", (req, res) => {
   res.json({ code: 200, msg: "success", data: readJson(IMAGES_FILE) });
 });
 
-// --- move a gallery item to another project (file physically moves) -------
-app.put("/api/images/:id", (req, res) => {
-  const { projectId } = req.body || {};
-  const projects = ensureDefaultProject();
-  const proj = projects.find((p) => p.id === projectId);
-  if (!proj) return res.status(400).json({ code: 400, msg: "unknown projectId" });
+// A subject key ("stub") for a gallery item: how a prompt (and later the LLM) refers
+// to what the image shows, e.g. "sibella" for @sibella. One lowercase word — letters,
+// digits, _ and - — with any leading @ or <> dropped, so "Sibella" and "sibella" match.
+function normalizeMediaKey(key) {
+  return String(key ?? "")
+    .trim()
+    .replace(/^@+/, "")
+    .replace(/^<|>$/g, "")
+    .replace(/\s+/g, "_")
+    .replace(/[^\p{L}\p{N}_-]/gu, "")
+    .toLowerCase()
+    .slice(0, 40);
+}
 
+// --- update a gallery item: move it to another project (file physically moves)
+// and/or set its subject key + definition. Each field is optional.
+app.put("/api/images/:id", (req, res) => {
+  const { projectId, key, definition } = req.body || {};
   const images = readJson(IMAGES_FILE);
   const entry = images.find((i) => i.id === req.params.id);
   if (!entry) return res.status(404).json({ code: 404, msg: "file not found" });
 
-  if ((entry.projectId || "default") !== proj.id) {
-    try {
-      moveGalleryEntry(entry, proj.slug);
-    } catch (err) {
-      console.error("Failed to move file:", err);
-      return res.status(409).json({ code: 409, msg: "Failed to move the file (is it open elsewhere?)" });
-    }
-    entry.projectId = proj.id;
-    writeJson(IMAGES_FILE, images);
+  let changed = false;
+  if (key !== undefined) {
+    entry.key = normalizeMediaKey(key);
+    changed = true;
   }
-  res.json({ code: 200, msg: "moved", data: entry });
+  if (definition !== undefined) {
+    entry.definition = String(definition ?? "").trim().slice(0, 4000);
+    changed = true;
+  }
+  if (projectId !== undefined) {
+    const proj = ensureDefaultProject().find((p) => p.id === projectId);
+    if (!proj) return res.status(400).json({ code: 400, msg: "unknown projectId" });
+    if ((entry.projectId || "default") !== proj.id) {
+      try {
+        moveGalleryEntry(entry, proj.slug);
+      } catch (err) {
+        console.error("Failed to move file:", err);
+        return res.status(409).json({ code: 409, msg: "Failed to move the file (is it open elsewhere?)" });
+      }
+      entry.projectId = proj.id;
+      changed = true;
+    }
+  }
+  if (changed) writeJson(IMAGES_FILE, images);
+  res.json({ code: 200, msg: "updated", data: entry });
 });
 
 app.delete("/api/images/:id", (req, res) => {
@@ -2703,6 +2745,303 @@ app.delete("/api/images/:id", (req, res) => {
   }
   writeJson(IMAGES_FILE, images.filter((i) => i.id !== req.params.id));
   res.json({ code: 200, msg: "deleted" });
+});
+
+// --- saved prompts (per project) -------------------------------------------
+// <PROJECT_DATA_DIR>/<slug>/prompts.json:
+//   { id, title, type, prompt, minimax?, duration|null, weight, refs: [{ id, kind, name, tail? }],
+//     historyId|null, createdAt, updatedAt }
+// `type` picks the prompt's format: "default" keeps its text in `prompt`; "minimax"
+// keeps structured fields in `minimax` (see sanitizeMinimax) and the UI compiles them
+// into MiniMax H3's sectioned prompt when it's used — the text isn't stored.
+// `historyId` links the prompt to one History entry — the take that represents it —
+// whose output becomes the card's thumbnail (POST /api/prompts/link sets it).
+// Ordered Drupal-style by `weight`, an integer (default 0): lighter floats to the top,
+// heavier sinks. Equal weights keep their stored order (a new prompt goes first among
+// its weight). Dragging in the UI rewrites the weights (POST /api/prompts/reorder).
+// A ref's `id` is a gallery (images.json) id, so the file itself stays where the
+// gallery keeps it; its url, subject key and definition are looked up on read.
+const PROMPT_REF_KINDS = new Set(["image", "video", "audio"]);
+const PROMPT_TYPES = new Set(["default", "minimax"]);
+
+// The fields of a "minimax" prompt, validated and capped. Shot 1 never has a time.
+function sanitizeMinimax(mm) {
+  const o = mm && typeof mm === "object" ? mm : {};
+  const str = (v, n = 20000) => String(v ?? "").slice(0, n);
+  const time = (v) => {
+    const n = Number(v);
+    return v === null || v === "" || v === undefined || !Number.isFinite(n) ? null : Math.max(0, n);
+  };
+  const shots = Array.isArray(o.shots) && o.shots.length ? o.shots.slice(0, 100) : [{}];
+  const retention = o.retention && typeof o.retention === "object" ? o.retention : {};
+  // Earlier prompts kept the summary's task types as a list — fold them into the text.
+  const types = (Array.isArray(o.summaryTypes) ? o.summaryTypes : []).map((t) => str(t, 40)).filter(Boolean).slice(0, 6);
+  let summary = str(o.summary, 4000);
+  if (types.length && !summary.trimStart().startsWith("[")) summary = `[${types.join(" + ")}] ${summary}`.trim();
+  return {
+    summary,
+    style: str(o.style, 4000),
+    shots: shots.map((s, i) => ({ at: i === 0 ? null : time(s?.at), text: str(s?.text) })),
+    subjects: (Array.isArray(o.subjects) ? o.subjects : [])
+      .slice(0, 50)
+      .map((s) => ({ key: normalizeMediaKey(s?.key), definition: str(s?.definition, 4000) })),
+    retention: Object.fromEntries(
+      Object.entries(retention)
+        .slice(0, 100)
+        // Written by the author ("fully_preserved - …"); earlier prompts stored { marker, note }.
+        .map(([k, v]) => [
+          str(k, 60),
+          typeof v === "string" ? str(v, 4000) : `${str(v?.marker, 40)}${v?.note ? ` - ${str(v.note, 2000)}` : ""}`.trim(),
+        ])
+    ),
+    soundscape: str(o.soundscape, 4000),
+    music: str(o.music, 4000),
+  };
+}
+const PROMPT_MAX_REFS = 50;
+
+function promptsFile(proj) {
+  return path.join(PROJECT_DATA_DIR, proj.slug, "prompts.json");
+}
+const promptWeight = (p) => (Number.isFinite(p.weight) ? p.weight : 0);
+// Stable, so ties keep their stored order.
+const byPromptWeight = (list) => [...list].sort((a, b) => promptWeight(a) - promptWeight(b));
+
+function readPrompts(proj) {
+  const list = readJson(promptsFile(proj));
+  return Array.isArray(list) ? byPromptWeight(list) : [];
+}
+function writePrompts(proj, list) {
+  fs.mkdirSync(path.dirname(promptsFile(proj)), { recursive: true });
+  writeJson(promptsFile(proj), byPromptWeight(list));
+}
+
+// Strict lookup (no fallback to Default): a typo'd id must not write into Default.
+function findProject(projectId) {
+  return ensureDefaultProject().find((p) => p.id === (projectId || "default")) || null;
+}
+
+// Validate/trim a client-sent prompt body. Fields left undefined stay unchanged on update.
+function sanitizePromptFields(body = {}) {
+  const out = {};
+  if (body.title !== undefined) out.title = String(body.title ?? "").trim().slice(0, 200);
+  if (body.type !== undefined) out.type = PROMPT_TYPES.has(body.type) ? body.type : "default";
+  if (body.minimax !== undefined) out.minimax = body.minimax === null ? null : sanitizeMinimax(body.minimax);
+  if (body.prompt !== undefined) out.prompt = String(body.prompt ?? "").slice(0, 50000);
+  if (body.duration !== undefined) {
+    const d = Number(body.duration);
+    out.duration = body.duration === null || body.duration === "" || !Number.isFinite(d) || d <= 0 ? null : d;
+  }
+  if (body.historyId !== undefined) {
+    out.historyId = typeof body.historyId === "string" && body.historyId ? body.historyId.slice(0, 100) : null;
+  }
+  if (body.weight !== undefined) {
+    const w = Number(body.weight);
+    out.weight = body.weight === null || body.weight === "" || !Number.isFinite(w) ? 0 : Math.round(w);
+  }
+  if (body.refs !== undefined) {
+    out.refs = (Array.isArray(body.refs) ? body.refs : [])
+      .filter((r) => r && typeof r.id === "string" && r.id)
+      .slice(0, PROMPT_MAX_REFS)
+      .map((r) => {
+        const ref = {
+          id: r.id,
+          kind: PROMPT_REF_KINDS.has(r.kind) ? r.kind : "image",
+          name: String(r.name ?? "").slice(0, 300),
+        };
+        if (Number(r.tail) > 0) ref.tail = Number(r.tail);
+        return ref;
+      });
+  }
+  return out;
+}
+
+// Attach each ref's live gallery data. A ref whose file was deleted from the gallery
+// comes back `missing` (its saved name is kept so the card can still say what it was).
+// Also resolves a linked History entry to its first output: `output` is
+// { kind, url, historyId } — { pending: true } while it's still generating, or
+// { missing: true } once that entry is deleted or has no file.
+function withRefDetails(prompts) {
+  const byId = new Map(readJson(IMAGES_FILE).map((i) => [i.id, i]));
+  const history = prompts.some((p) => p.historyId) ? new Map(readJson(HISTORY_FILE).map((e) => [e.id, e])) : null;
+  const outputOf = (historyId) => {
+    const e = history.get(historyId);
+    const o = e && ((e.outputs || [])[0] || e);
+    const url = o && (o.localVideo || o.resultUrl);
+    if (!url) return e?.status === "pending" ? { historyId, pending: true } : { historyId, missing: true };
+    const isImg = /\.(png|jpe?g|webp|gif|bmp)$/i.test(url.split("?")[0]) || entryIsImage(e);
+    return { historyId, kind: isImg ? "image" : "video", url };
+  };
+  return prompts.map((p) => ({
+    ...p,
+    weight: promptWeight(p), // saved before weights existed → 0
+    type: p.type || "default", // saved before formats existed
+    output: p.historyId ? outputOf(p.historyId) : null,
+    refs: (p.refs || []).map((r) => {
+      const g = byId.get(r.id);
+      if (!g) return { ...r, missing: true };
+      return {
+        ...r,
+        kind: g.kind || r.kind || "image",
+        name: g.name || r.name,
+        url: g.localUrl,
+        projectId: g.projectId || "default",
+        key: g.key || "",
+        definition: g.definition || "",
+      };
+    }),
+  }));
+}
+
+// A copy starts unlinked: the History entry stays with the original.
+function copyOfPrompt(p) {
+  const now = new Date().toISOString();
+  return {
+    ...p,
+    id: randomUUID(),
+    refs: (p.refs || []).map((r) => ({ ...r })),
+    historyId: null,
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+app.get("/api/prompts", (req, res) => {
+  const proj = findProject(req.query.projectId);
+  if (!proj) return res.status(400).json({ code: 400, msg: "unknown projectId" });
+  res.json({ code: 200, msg: "success", data: withRefDetails(readPrompts(proj)) });
+});
+
+app.post("/api/prompts", (req, res) => {
+  const proj = findProject(req.body?.projectId);
+  if (!proj) return res.status(400).json({ code: 400, msg: "unknown projectId" });
+  const fields = sanitizePromptFields({ type: "default", duration: null, weight: 0, refs: [], ...req.body });
+  if (!fields.title) return res.status(400).json({ code: 400, msg: "title is required" });
+  if (fields.type === "minimax") fields.minimax ||= sanitizeMinimax(null); // a new one may start blank
+  else if (!fields.prompt?.trim() && !fields.refs.length) {
+    return res.status(400).json({ code: 400, msg: "nothing to save — the prompt is empty" });
+  }
+  const now = new Date().toISOString();
+  const entry = { id: randomUUID(), ...fields, createdAt: now, updatedAt: now };
+  writePrompts(proj, [entry, ...readPrompts(proj)]);
+  res.json({ code: 200, msg: "saved", data: withRefDetails([entry])[0] });
+});
+
+// A drag in the UI: renumber the listed prompts' weights 0, 1, 2… in `ids` order (as
+// Drupal's tabledrag does). A prompt not listed (e.g. saved from another tab meanwhile)
+// keeps its weight.
+app.post("/api/prompts/reorder", (req, res) => {
+  const proj = findProject(req.body?.projectId);
+  if (!proj) return res.status(400).json({ code: 400, msg: "unknown projectId" });
+  const ids = Array.isArray(req.body?.ids) ? req.body.ids.map(String) : [];
+  const rank = new Map(ids.map((id, i) => [id, i]));
+  const list = readPrompts(proj);
+  for (const p of list) if (rank.has(p.id)) p.weight = rank.get(p.id);
+  writePrompts(proj, list);
+  res.json({ code: 200, msg: "reordered", data: withRefDetails(readPrompts(proj)) });
+});
+
+// Point `promptId` (null = none) at `historyId`, clearing that entry from any other
+// prompt in the project. Returns false if the prompt doesn't exist.
+function linkPromptToHistory(proj, promptId, historyId) {
+  const list = readPrompts(proj);
+  if (promptId && !list.some((p) => p.id === promptId)) return false;
+  const now = new Date().toISOString();
+  for (const p of list) {
+    if (p.id === promptId) {
+      p.historyId = historyId;
+      p.updatedAt = now;
+    } else if (p.historyId === historyId) {
+      p.historyId = null;
+      p.updatedAt = now;
+    }
+  }
+  writePrompts(proj, list);
+  return true;
+}
+
+// Link a History entry to a saved prompt (its output becomes the card's thumbnail), or
+// unlink it with promptId null. One entry represents at most one prompt per project, so
+// linking clears the entry from whichever prompt had it; a prompt's previous entry is
+// simply replaced.
+app.post("/api/prompts/link", (req, res) => {
+  const { projectId, historyId, promptId } = req.body || {};
+  const proj = findProject(projectId);
+  if (!proj) return res.status(400).json({ code: 400, msg: "unknown projectId" });
+  if (typeof historyId !== "string" || !historyId) {
+    return res.status(400).json({ code: 400, msg: "historyId is required" });
+  }
+  if (!readJson(HISTORY_FILE).some((e) => e.id === historyId)) {
+    return res.status(404).json({ code: 404, msg: "history entry not found" });
+  }
+  if (promptId && !readPrompts(proj).some((p) => p.id === promptId)) {
+    return res.status(404).json({ code: 404, msg: "prompt not found" });
+  }
+  linkPromptToHistory(proj, promptId || null, historyId);
+  res.json({ code: 200, msg: promptId ? "linked" : "unlinked", data: withRefDetails(readPrompts(proj)) });
+});
+
+app.put("/api/prompts/:id", (req, res) => {
+  const proj = findProject(req.body?.projectId);
+  if (!proj) return res.status(400).json({ code: 400, msg: "unknown projectId" });
+  const list = readPrompts(proj);
+  const entry = list.find((p) => p.id === req.params.id);
+  if (!entry) return res.status(404).json({ code: 404, msg: "prompt not found" });
+  const fields = sanitizePromptFields(req.body);
+  if (fields.title !== undefined && !fields.title) {
+    return res.status(400).json({ code: 400, msg: "title can't be empty" });
+  }
+  if (fields.type === "minimax") fields.prompt = ""; // its text is compiled from the fields
+  if (fields.type === "default") fields.minimax = null; // converted back to plain text
+  Object.assign(entry, fields, { updatedAt: new Date().toISOString() });
+  writePrompts(proj, list);
+  res.json({ code: 200, msg: "updated", data: withRefDetails([entry])[0] });
+});
+
+app.delete("/api/prompts/:id", (req, res) => {
+  const proj = findProject(req.query.projectId);
+  if (!proj) return res.status(400).json({ code: 400, msg: "unknown projectId" });
+  const list = readPrompts(proj);
+  if (!list.some((p) => p.id === req.params.id)) {
+    return res.status(404).json({ code: 404, msg: "prompt not found" });
+  }
+  writePrompts(proj, list.filter((p) => p.id !== req.params.id));
+  res.json({ code: 200, msg: "deleted" });
+});
+
+// Duplicate within the same project; the copy lands right below the original.
+app.post("/api/prompts/:id/duplicate", (req, res) => {
+  const proj = findProject(req.body?.projectId);
+  if (!proj) return res.status(400).json({ code: 400, msg: "unknown projectId" });
+  const list = readPrompts(proj);
+  const idx = list.findIndex((p) => p.id === req.params.id);
+  if (idx < 0) return res.status(404).json({ code: 404, msg: "prompt not found" });
+  const copy = copyOfPrompt(list[idx]);
+  copy.title = `${list[idx].title} (copy)`.slice(0, 200);
+  list.splice(idx + 1, 0, copy);
+  writePrompts(proj, list);
+  res.json({ code: 200, msg: "duplicated", data: withRefDetails([copy])[0] });
+});
+
+// Copy or move a prompt to another project. Its refs keep pointing at the same
+// gallery files (they aren't duplicated or moved), so the prompt imports the same
+// media from either project.
+app.post("/api/prompts/:id/transfer", (req, res) => {
+  const { projectId, toProjectId, mode } = req.body || {};
+  const from = findProject(projectId);
+  const to = findProject(toProjectId);
+  if (!from || !to) return res.status(400).json({ code: 400, msg: "unknown projectId" });
+  if (mode !== "copy" && mode !== "move") {
+    return res.status(400).json({ code: 400, msg: 'mode must be "copy" or "move"' });
+  }
+  if (from.id === to.id) return res.status(400).json({ code: 400, msg: "pick a different project" });
+  const src = readPrompts(from);
+  const entry = src.find((p) => p.id === req.params.id);
+  if (!entry) return res.status(404).json({ code: 404, msg: "prompt not found" });
+  const moved = mode === "move" ? { ...entry, updatedAt: new Date().toISOString() } : copyOfPrompt(entry);
+  writePrompts(to, [moved, ...readPrompts(to).filter((p) => p.id !== moved.id)]);
+  if (mode === "move") writePrompts(from, src.filter((p) => p.id !== entry.id));
+  res.json({ code: 200, msg: mode === "move" ? "moved" : "copied", data: withRefDetails([moved])[0] });
 });
 
 // Download a finished result into a project's video folder; returns the served
@@ -2761,6 +3100,24 @@ async function attachOutputs(entry, urls) {
   if (!entry.draft && computeAutoDraft(entry.input)) entry.draft = true;
   // Place the saved file(s) under draft/ or the project root to match the flag.
   moveHistoryVideo(entry, proj.slug);
+  autoLinkSavedPrompt(entry);
+}
+
+// A run generated from a saved prompt (input.savedPrompt, set by the UI when that
+// prompt was the active one) becomes the prompt's linked take once it has an output
+// — so a failed or cancelled run never replaces a good thumbnail. Once per entry:
+// a later re-download or a manual re-link elsewhere isn't undone.
+function autoLinkSavedPrompt(entry) {
+  const sp = entry.input?.savedPrompt;
+  if (!sp?.id || entry.savedPromptLinked || !entry.localVideo) return;
+  entry.savedPromptLinked = true;
+  const proj = findProject(sp.projectId);
+  if (!proj) return;
+  try {
+    linkPromptToHistory(proj, sp.id, entry.id);
+  } catch (err) {
+    console.error(`Couldn't link entry ${entry.id} to saved prompt ${sp.id}:`, err.message);
+  }
 }
 
 // Build a history entry object (output fields may be null for a pending entry).
