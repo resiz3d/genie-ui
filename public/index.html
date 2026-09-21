@@ -158,6 +158,13 @@
 
         <details id="galleryWrap" class="gallery-wrap">
           <summary>Gallery <span class="hint" id="galleryCount"></span></summary>
+          <div id="dz-gallery" class="dropzone gallery-drop">
+            <p class="dz-hint">
+              Drop images, videos or audio here to add them to this project, or
+              <span class="browse">browse</span>
+            </p>
+            <input id="file-gallery" type="file" accept="image/*,video/*,audio/*" multiple hidden />
+          </div>
           <p class="dz-hint" id="galleryEmpty">No saved media yet.</p>
           <div id="gallery" class="thumbs gallery"></div>
         </details>
@@ -316,12 +323,46 @@
           <select id="savePromptFormat">
             <option value="default">Default — the text as written</option>
             <option value="minimax">MiniMax H3 — split into sections, shots and subjects</option>
+            <option value="minimax_t2v">MiniMax H3 text-to-video — shots, soundscape and music (no references)</option>
           </select>
         </label>
         <p class="sp-save-warn hidden" id="savePromptWarn"></p>
         <div class="modal-actions">
           <button type="button" id="savePromptCancel" class="btn-secondary">Cancel</button>
           <button type="button" id="savePromptConfirm">💾 Save</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Opened from the Wildcards tab; filled by openWildcardEditor(). -->
+    <div id="wildcardModal" class="modal hidden">
+      <div class="modal-box wc-box" role="dialog" aria-labelledby="wcHeading">
+        <h3 id="wcHeading">Wildcard</h3>
+        <p class="muted wc-token-preview" id="wcTokenPreview"></p>
+        <div class="pe-row">
+          <label>
+            Category
+            <input type="text" id="wcCategory" list="wcCategoryList" maxlength="60" autocomplete="off" placeholder="e.g. modern" />
+          </label>
+          <label>
+            Key
+            <input type="text" id="wcKey" maxlength="60" autocomplete="off" placeholder="e.g. shirts" />
+          </label>
+        </div>
+        <datalist id="wcCategoryList"></datalist>
+        <label>
+          Values <span class="hint">— one per line</span>
+          <textarea id="wcValues" rows="12" placeholder="crop top&#10;blouse&#10;long-sleeved shirt&#10;tank top"></textarea>
+        </label>
+        <p class="wc-try">
+          <button type="button" class="link-btn" id="wcTry">🎲 Try a pick</button>
+          <span id="wcTryOut"></span>
+        </p>
+        <p class="sp-save-warn hidden" id="wcError"></p>
+        <div class="modal-actions">
+          <button type="button" id="wcDelete" class="btn-secondary wc-delete">🗑 Delete</button>
+          <button type="button" id="wcCancel" class="btn-secondary">Cancel</button>
+          <button type="button" id="wcSave">💾 Save</button>
         </div>
       </div>
     </div>

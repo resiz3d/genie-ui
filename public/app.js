@@ -953,6 +953,73 @@ deleteProjectBtn.addEventListener("click", async () => {
 });
 
 // --- gallery ---------------------------------------------------------------
+// Save files to a project's gallery (what a dropped reference does behind the scenes).
+// Returns the created gallery entries; anything that fails is reported and skipped.
+async function uploadToGallery(files, projectId = activeProjectId) {
+  const saved = [];
+  for (const file of [...files].filter((f) => /^(image|video|audio)\//.test(f.type))) {
+    try {
+      const base64Data = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = () => reject(reader.error);
+        reader.readAsDataURL(file);
+      });
+      const res = await fetch("/api/upload", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ base64Data, fileName: file.name, projectId }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.image?.id) throw new Error(data.msg || "Save failed");
+      saved.push(data.image);
+    } catch (err) {
+      alert(`Couldn't save ${file.name}: ${err.message || err}`);
+    }
+  }
+  await loadGallery();
+  return saved;
+}
+
+// The Gallery panel's own drop zone: add media without going through a reference field.
+const galleryDrop = document.getElementById("dz-gallery");
+const galleryFileInput = document.getElementById("file-gallery");
+const galleryDropHint = galleryDrop.querySelector(".dz-hint");
+const GALLERY_DROP_HINT = galleryDropHint.innerHTML;
+
+async function addFilesToGallery(files) {
+  const list = [...files].filter((f) => /^(image|video|audio)\//.test(f.type));
+  if (!list.length) return;
+  galleryDropHint.textContent = `Saving ${plural(list.length, "file")}…`;
+  const saved = await uploadToGallery(list);
+  galleryDropHint.textContent = saved.length ? `Added ${plural(saved.length, "file")} to ${projectName(activeProjectId)}.` : "";
+  setTimeout(() => { galleryDropHint.innerHTML = GALLERY_DROP_HINT; }, 2000);
+}
+
+galleryDrop.addEventListener("click", () => galleryFileInput.click());
+galleryFileInput.addEventListener("change", () => {
+  addFilesToGallery(galleryFileInput.files);
+  galleryFileInput.value = "";
+});
+["dragenter", "dragover"].forEach((evt) =>
+  galleryDrop.addEventListener(evt, (e) => {
+    if (!e.dataTransfer?.types?.includes("Files")) return;
+    e.preventDefault();
+    galleryDrop.classList.add("dragover");
+  })
+);
+["dragleave", "drop"].forEach((evt) =>
+  galleryDrop.addEventListener(evt, (e) => {
+    if (evt === "dragleave" && galleryDrop.contains(e.relatedTarget)) return;
+    galleryDrop.classList.remove("dragover");
+  })
+);
+galleryDrop.addEventListener("drop", (e) => {
+  if (!e.dataTransfer?.files?.length) return;
+  e.preventDefault();
+  addFilesToGallery(e.dataTransfer.files);
+});
+
 async function loadGallery() {
   try {
     const res = await fetch("/api/images");
@@ -1274,7 +1341,7 @@ function setFormatOptions(values, def) {
 
 // kie.ai form fields hidden entirely when a local ComfyUI workflow is selected.
 const KIE_FIELDS = [
-  "promptField", "imageSourceField", "imageField", "galleryWrap", "firstFrameField",
+  "promptField", "imageSourceField", "imageField", "firstFrameField",
   "lastFrameField", "videoField", "audioField", "optionsRow", "checksRow",
 ];
 
@@ -1325,7 +1392,6 @@ function applyModelUI() {
   const refsHidden = !usesRefImages();
   document.getElementById("imageSourceField").classList.toggle("hidden", !seedanceVideo);
   document.getElementById("imageField").classList.toggle("hidden", refsHidden);
-  document.getElementById("galleryWrap").classList.toggle("hidden", refsHidden);
   document.getElementById("qualityField").classList.toggle("hidden", !seedream);
   for (const id of ["firstFrameField", "lastFrameField"]) {
     document.getElementById(id).classList.toggle("hidden", !framesMode);
@@ -2900,7 +2966,17 @@ async function collectComfyValues(promptOverride = null) {
     }
     values[f.name] = f.isPrompt && promptOverride != null ? promptOverride : await f.getValue();
   }
-  return { values, prune, tails, references };
+  // Wildcards: fresh picks per call (each queued run), one memo across the fields so a
+  // :1 pick in the prompt carries into, say, the negative prompt. `templates` keeps the
+  // unresolved text of each field that had tokens (for Re-import).
+  const templates = {};
+  const memo = new Map();
+  for (const [name, v] of Object.entries(values)) {
+    if (typeof v !== "string" || !hasWildcards(v)) continue;
+    templates[name] = v;
+    values[name] = resolveWildcards(v, memo);
+  }
+  return { values, prune, tails, references, templates };
 }
 
 // How many generations to queue (the ×N counter beside Generate). Capped at 20, which
@@ -2932,7 +3008,7 @@ async function submitComfy() {
   if (mediaNotes.length) setError(mediaNotes.join("\n"));
   try {
     for (let i = 0; i < count; i++) {
-      const { values, prune, tails, references } = await collectComfyValues(promptOverride);
+      const { values, prune, tails, references, templates } = await collectComfyValues(promptOverride);
       const mediaIds = { image: [], video: [], audio: [] };
       for (const f of comfyFields) {
         if (f.isMultiMedia || f.isReferenceCollection) mediaIds[f.mediaKind]?.push(...f.localIds());
@@ -2944,9 +3020,10 @@ async function submitComfy() {
       const input = { model: `comfy:${wf.file}`, workflow: wf.name, values };
       if (allLoras.length) input.loras = allLoras; // store the full loadout (incl. disabled) for re-import
       if (bypass.length) input.bypass = bypass;
+      if (Object.keys(templates).length) input.valueTemplates = templates; // Re-import restores the %tokens%
       if (typeof values.prompt === "string" && values.prompt.trim()) input.prompt = values.prompt.trim();
       if (fromSaved) {
-        if (!input.prompt && promptOverride.trim()) input.prompt = promptOverride.trim();
+        if (!input.prompt && promptOverride.trim()) input.prompt = resolveWildcards(promptOverride).trim();
         input.savedPrompt = savedPromptStamp(fromSaved); // History only, not sent to ComfyUI
       }
       await queueComfyRun(wf, values, prune, mediaIds, input, enabledLoras, bypass, tails, cont, references);
@@ -2955,6 +3032,8 @@ async function submitComfy() {
     }
     saveComfySettings(wf.file); // remember the final values + LoRAs (server-side)
     disarmContinuation(); // one arm, one submit
+  } catch (err) {
+    setError(err.message || String(err)); // e.g. an unknown %wildcard%
   } finally {
     submitBtn.disabled = false;
   }
@@ -3107,11 +3186,17 @@ updatePromptCount();
 // prompt means the same thing to a kie.ai model and a ComfyUI workflow.
 let savedPrompts = []; // the active project's, newest first
 let savedPromptsSeq = 0; // the latest load; a slower earlier one doesn't overwrite it
-// "prompt" | "saved", shared by every prompt field; remembered per browser across reloads.
+// "prompt" | "saved" | "wildcards", shared by every prompt field; remembered per browser
+// across reloads. `promptSource` is the last of "prompt"/"saved" that was open: what
+// Generate uses — the Wildcards tab is a reference view and doesn't change it.
 const PROMPT_TAB_KEY = "genie_prompt_tab";
+const PROMPT_SOURCE_KEY = "genie_prompt_source";
 let promptTab = "prompt";
+let promptSource = "prompt";
 try {
-  if (localStorage.getItem(PROMPT_TAB_KEY) === "saved") promptTab = "saved";
+  const t = localStorage.getItem(PROMPT_TAB_KEY);
+  if (t === "saved" || t === "wildcards") promptTab = t;
+  promptSource = t === "saved" || (t === "wildcards" && localStorage.getItem(PROMPT_SOURCE_KEY) === "saved") ? "saved" : "prompt";
 } catch {
   /* storage blocked — start on the Prompt tab */
 }
@@ -3154,8 +3239,14 @@ function activeSavedPrompt() {
 // import and preview gets a saved prompt's text from.
 function exportSavedPromptText(p) {
   if (p.type === "minimax") return compileMinimax(p.minimax, p.refs || []);
+  if (p.type === "minimax_t2v") return compileMinimaxT2V(p.minimax);
   return p.prompt || "";
 }
+
+// The structured formats: both keep their fields in p.minimax (the same shape), and
+// differ only in what's compiled from them and which parts the form shows.
+const isMmType = (t) => t === "minimax" || t === "minimax_t2v";
+const MM_TYPE_LABEL = { minimax: "MiniMax H3", minimax_t2v: "MiniMax T2V" };
 
 // --- MiniMax H3 prompt format ---------------------------------------------------
 // A saved prompt of type "minimax" stores fields, not text, and is compiled into the
@@ -3176,7 +3267,7 @@ function exportSavedPromptText(p) {
 //     soundscape, music }
 const MM_SECTIONS = [
   "subject_definitions", "summary", "retention_analysis",
-  "detailed_description", "overall_soundscape", "non_diegetic_music",
+  "detailed_description", "integrated_multimodal_description", "overall_soundscape", "non_diegetic_music",
 ];
 const MM_REF_LABEL = { image: "Picture", video: "Video", audio: "Audio" };
 
@@ -3413,6 +3504,28 @@ function compileMinimax(mmIn, refs) {
   ].join("\n\n");
 }
 
+// A saved prompt of type "minimax_t2v" uses the same fields for MiniMax's text-to-video
+// format (VIDEO_PROMPT_WRITING_GUIDE_base_en) — no references, so no subjects, summary
+// or retention; just three fields, each "name: text", one paragraph apiece:
+//   integrated_multimodal_description — "[Shot 1] <style> <opening>" then each cut as
+//                                       "[Shot N] At MM:SS.mmm, …", all in one run
+//   overall_soundscape, non_diegetic_music ("N/A" when empty)
+function compileMinimaxT2V(mmIn) {
+  const mm = normalizeMinimax(mmIn);
+  const t = (x) => String(x || "").trim();
+  const shots = sortedShots(mm.shots).map((s, i) =>
+    i === 0
+      ? ["[Shot 1]", t(mm.style), t(s.text)].filter(Boolean).join(" ")
+      : `[Shot ${i + 1}] At ${fmtShotTime(s.at)}, ${t(s.text)}`
+  );
+  const field = (name, body) => `${name}: ${t(body) || "N/A"}`;
+  return [
+    field("integrated_multimodal_description", shots.join(" ")),
+    field("overall_soundscape", mm.soundscape),
+    field("non_diegetic_music", mm.music),
+  ].join("\n\n");
+}
+
 // Best-effort: plain prompt text → MiniMax fields (for "Convert to MiniMax" and saving
 // in that format). Understands the section headers, [Shot N] At MM:SS.mmm markers,
 // "[task + type] summary" and retention lines. A subject line whose key already has a
@@ -3447,7 +3560,7 @@ function parseMinimax(text, refs = []) {
     if (rm) mm.retention[rm[1]] = rm[2].trim();
   }
 
-  const desc = na(parts.detailed_description);
+  const desc = na(parts.detailed_description || parts.integrated_multimodal_description);
   const shotRe = /\[Shot (\d+)\]/g;
   const hits = [];
   while ((m = shotRe.exec(desc))) hits.push({ start: m.index, body: shotRe.lastIndex });
@@ -3485,7 +3598,7 @@ function parseMinimax(text, refs = []) {
 // The saved prompt Generate will use right now: only while the Saved Prompts tab is
 // the one showing on the prompt field on screen. Null means "use the textarea".
 function runSavedPrompt() {
-  if (promptTab !== "saved" || !activePromptHost()) return null;
+  if (promptSource !== "saved" || !activePromptHost()) return null;
   return activeSavedPrompt();
 }
 
@@ -3499,7 +3612,8 @@ const savedPanel = document.createElement("div");
 savedPanel.className = "saved-prompts hidden";
 savedPanel.innerHTML =
   `<input type="search" class="sp-filter" placeholder="Filter saved prompts…" aria-label="Filter saved prompts" />` +
-  `<div class="sp-toolbar"><button type="button" class="link-btn sp-new-mm">＋ New MiniMax prompt</button></div>` +
+  `<div class="sp-toolbar"><button type="button" class="link-btn sp-new-mm">＋ New MiniMax prompt</button>` +
+  `<button type="button" class="link-btn sp-new-t2v">＋ New MiniMax T2V prompt</button></div>` +
   `<p class="sp-run-note"></p>` +
   `<p class="dz-hint sp-empty"></p>` +
   `<div class="sp-list"></div>`;
@@ -3526,13 +3640,678 @@ savedPanel.querySelector(".sp-new-mm").addEventListener("click", async () => {
     alert(err.message || String(err));
   }
 });
+// A blank MiniMax text-to-video prompt (no references), with the form's duration.
+savedPanel.querySelector(".sp-new-t2v").addEventListener("click", async () => {
+  try {
+    const created = await promptsApi("/api/prompts", "POST", {
+      projectId: activeProjectId,
+      title: "New MiniMax T2V prompt",
+      type: "minimax_t2v",
+      prompt: "",
+      minimax: blankMinimax(),
+      refs: [],
+      duration: currentPromptDraft().duration,
+    });
+    await loadSavedPrompts();
+    openPromptEditor(savedPrompts.find((p) => p.id === created.id) || created);
+    peTitle.select();
+  } catch (err) {
+    alert(err.message || String(err));
+  }
+});
 const savedListEl = savedPanel.querySelector(".sp-list");
 savedFilterEl.addEventListener("input", () => {
   savedPromptsFilter = savedFilterEl.value.trim().toLowerCase();
   renderSavedPrompts();
 });
 
-// Turn a prompt field's head into Prompt / Saved Prompts tabs and add the Save button.
+// --- wildcards ----------------------------------------------------------------------
+// Named lists shared by every project (wildcards.json on the server), grouped by
+// category: { id, category, key, values: [...] }. A prompt writes %category:key% and
+// each run gets one of the values at random — resolveWildcards, applied at Generate, so
+// the prompt keeps its tokens and History records both the picks and the template.
+// %category:key:1% also remembers its pick for the rest of that run: a later
+// %category:key% reuses it (":0", the default, picks afresh every time).
+// Managed on the prompt field's third tab.
+let wildcards = [];
+let wildcardsFilter = "";
+const WILDCARD_RE = /%([\p{L}\p{N}_-]+):([\p{L}\p{N}_-]+)(?::(1|0|true|false))?%/gu;
+const wildcardToken = (w) => `%${w.category}:${w.key}%`;
+
+// As the server stores a category or key (normalizeWildcardName).
+function wildcardName(v) {
+  return String(v ?? "")
+    .trim()
+    .replace(/%/g, "")
+    .replace(/\s+/g, "_")
+    .replace(/[^\p{L}\p{N}_-]/gu, "")
+    .toLowerCase()
+    .slice(0, 60);
+}
+
+function findWildcard(category, key) {
+  const c = String(category).toLowerCase();
+  const k = String(key).toLowerCase();
+  return wildcards.find((w) => w.category === c && w.key === k) || null;
+}
+
+const hasWildcards = (text) => [...String(text ?? "").matchAll(WILDCARD_RE)].length > 0;
+
+// Swap every %category:key% for a random value from that list. `memo` holds the picks
+// a :1 token asked to keep — share one Map across everything in a single run (every
+// text field of a workflow). Values may hold tokens of their own (resolved in turn, a
+// few levels deep). Throws on a token with no list, or an empty one, so a run never
+// sends a literal %…% to the model.
+function resolveWildcards(text, memo = new Map(), depth = 0) {
+  const s = String(text ?? "");
+  if (!s.includes("%")) return s;
+  const missing = new Set();
+  const out = s.replace(WILDCARD_RE, (m, c, k, flag) => {
+    const w = findWildcard(c, k);
+    if (!w || !w.values?.length) {
+      missing.add(m);
+      return m;
+    }
+    const id = `${w.category}:${w.key}`;
+    if (memo.has(id)) return memo.get(id);
+    const raw = w.values[Math.floor(Math.random() * w.values.length)];
+    const v = depth < 5 ? resolveWildcards(raw, memo, depth + 1) : raw;
+    if (flag === "1" || flag === "true") memo.set(id, v);
+    return v;
+  });
+  if (missing.size) {
+    const list = [...missing].join(", ");
+    throw new Error(
+      `Unknown or empty wildcard${missing.size > 1 ? "s" : ""}: ${list} — add ${missing.size > 1 ? "them" : "it"} on the Wildcards tab.`
+    );
+  }
+  return out;
+}
+
+async function loadWildcards() {
+  try {
+    const res = await fetch("/api/wildcards");
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.msg || "Failed to load wildcards");
+    wildcards = data.data || [];
+  } catch (err) {
+    console.error("Failed to load wildcards:", err);
+  }
+  renderWildcards();
+  wcHlSyncAll(true);
+}
+
+const wildcardsPanel = document.createElement("div");
+wildcardsPanel.className = "saved-prompts wildcards hidden";
+wildcardsPanel.innerHTML =
+  `<input type="search" class="sp-filter" placeholder="Filter wildcards…" aria-label="Filter wildcards" />` +
+  `<div class="sp-toolbar"><button type="button" class="link-btn wc-new">＋ New wildcard</button></div>` +
+  `<p class="sp-run-note wc-note">Write <code>%category:key%</code> in a prompt and each run picks one of its values at random. ` +
+  `<code>%category:key:1%</code> keeps its pick: a later <code>%category:key%</code> in the same prompt reuses it. ` +
+  `Click a token to copy it; ＋ Insert puts it in the Prompt tab's text.</p>` +
+  `<p class="sp-run-note wc-source"></p>` +
+  `<p class="dz-hint sp-empty wc-empty"></p>` +
+  `<div class="wc-list"></div>`;
+const wcFilterEl = wildcardsPanel.querySelector(".sp-filter");
+const wcListEl = wildcardsPanel.querySelector(".wc-list");
+const wcEmptyEl = wildcardsPanel.querySelector(".wc-empty");
+wcFilterEl.addEventListener("input", () => {
+  wildcardsFilter = wcFilterEl.value.trim().toLowerCase();
+  renderWildcards();
+});
+wildcardsPanel.querySelector(".wc-new").addEventListener("click", () => openWildcardEditor(null));
+
+// Briefly swap a button's text (Copied / Inserted).
+function flashText(el, text) {
+  const was = el.dataset.label || el.textContent;
+  el.dataset.label = was;
+  el.textContent = text;
+  clearTimeout(el._flash);
+  el._flash = setTimeout(() => { el.textContent = was; }, 1200);
+}
+
+// Put text into the Prompt tab's textarea at its caret (the textarea keeps its caret
+// while the tab is hidden), with a space before it when it would touch a word.
+function insertIntoPrompt(text) {
+  const ta = activePromptHost()?.textarea;
+  if (!ta) return false;
+  const a = ta.selectionStart ?? ta.value.length;
+  const b = ta.selectionEnd ?? a;
+  const before = ta.value.slice(0, a);
+  const pad = before && !/\s$/.test(before) ? " " : "";
+  ta.value = before + pad + text + ta.value.slice(b);
+  const pos = (before + pad + text).length;
+  ta.setSelectionRange(pos, pos);
+  ta.dispatchEvent(new Event("input", { bubbles: true }));
+  return true;
+}
+
+// Grouped by category (A–Z), keys A–Z within each.
+function renderWildcards() {
+  syncPromptTabs(); // the tab's count
+  const q = wildcardsFilter;
+  const shown = wildcards
+    .filter((w) => !q || `${w.category}:${w.key}\n${(w.values || []).join("\n")}`.toLowerCase().includes(q))
+    .sort((a, b) => a.category.localeCompare(b.category) || a.key.localeCompare(b.key));
+  wcFilterEl.classList.toggle("hidden", wildcards.length < 2 && !q);
+  wcEmptyEl.textContent = wildcards.length ? "No wildcards match." : "No wildcards yet — ＋ New wildcard to make a list.";
+  wcEmptyEl.classList.toggle("hidden", shown.length > 0);
+  wcListEl.innerHTML = "";
+  const groups = new Map();
+  for (const w of shown) (groups.get(w.category) || groups.set(w.category, []).get(w.category)).push(w);
+  for (const [category, list] of groups) {
+    const sec = document.createElement("section");
+    sec.className = "wc-cat";
+    const head = document.createElement("div");
+    head.className = "wc-cat-head";
+    const name = document.createElement("span");
+    name.className = "wc-cat-name";
+    name.textContent = category;
+    const count = document.createElement("span");
+    count.className = "hint";
+    count.textContent = plural(list.length, "list");
+    const add = document.createElement("button");
+    add.type = "button";
+    add.className = "link-btn wc-cat-add";
+    add.textContent = "＋ Add to " + category;
+    add.addEventListener("click", () => openWildcardEditor(null, category));
+    head.append(name, count, add);
+    sec.appendChild(head);
+    for (const w of list) sec.appendChild(makeWildcardRow(w));
+    wcListEl.appendChild(sec);
+  }
+  syncWildcardSource();
+}
+
+// A list: its token (click to copy), value count, ＋ Insert, and a peek at the values.
+// Clicking anywhere else opens the editor.
+function makeWildcardRow(w) {
+  const row = document.createElement("div");
+  row.className = "sp-card wc-row";
+  row.tabIndex = 0;
+  row.title = "Edit this wildcard";
+  row.addEventListener("click", () => openWildcardEditor(w));
+  row.addEventListener("keydown", (e) => {
+    if (e.target === row && (e.key === "Enter" || e.key === " ")) {
+      e.preventDefault();
+      openWildcardEditor(w);
+    }
+  });
+  const head = document.createElement("div");
+  head.className = "wc-row-head";
+  const token = document.createElement("button");
+  token.type = "button";
+  token.className = "wc-token";
+  token.textContent = wildcardToken(w);
+  token.title = "Copy the token";
+  token.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    try {
+      await navigator.clipboard.writeText(wildcardToken(w));
+      flashText(token, "✓ Copied");
+    } catch {
+      flashText(token, "Copy failed");
+    }
+  });
+  const count = document.createElement("span");
+  count.className = "hint wc-count";
+  count.textContent = plural((w.values || []).length, "value");
+  const ins = document.createElement("button");
+  ins.type = "button";
+  ins.className = "link-btn wc-insert";
+  ins.textContent = "＋ Insert";
+  ins.title = "Put the token in the Prompt tab's text, at the cursor";
+  ins.addEventListener("click", (e) => {
+    e.stopPropagation();
+    flashText(ins, insertIntoPrompt(wildcardToken(w)) ? "✓ Inserted" : "No prompt field");
+  });
+  head.append(token, count, ins);
+  const vals = document.createElement("div");
+  vals.className = "sp-snippet wc-values";
+  vals.textContent = (w.values || []).slice(0, 30).join(" · ") || "(empty — add values)";
+  row.append(head, vals);
+  return row;
+}
+
+// Which text Generate uses, since the Wildcards tab hides both the Prompt and the
+// Saved Prompts view.
+function syncWildcardSource() {
+  const el = wildcardsPanel.querySelector(".wc-source");
+  const p = activeSavedPrompt();
+  el.textContent =
+    promptSource === "saved" && p
+      ? `▶ Generate uses the saved prompt “${p.title}”.`
+      : "▶ Generate uses the Prompt tab's text.";
+}
+
+// --- wildcard editor ---
+const wildcardModal = document.getElementById("wildcardModal");
+const wcCategory = document.getElementById("wcCategory");
+const wcKey = document.getElementById("wcKey");
+const wcValues = document.getElementById("wcValues");
+const wcTokenPreview = document.getElementById("wcTokenPreview");
+const wcError = document.getElementById("wcError");
+const wcTryOut = document.getElementById("wcTryOut");
+let wcEditing = null; // { w: wildcard|null (new), start: "category|key|values" }
+
+const wcFormState = () => `${wcCategory.value}\n${wcKey.value}\n${wcValues.value}`;
+const wcLines = () => wcValues.value.split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
+
+function openWildcardEditor(w, category = "") {
+  wcCategory.value = w?.category || category;
+  wcKey.value = w?.key || "";
+  wcValues.value = (w?.values || []).join("\n");
+  document.getElementById("wcHeading").textContent = w ? "Edit wildcard" : "New wildcard";
+  document.getElementById("wcDelete").classList.toggle("hidden", !w);
+  document.getElementById("wcCategoryList").innerHTML = [...new Set(wildcards.map((x) => x.category))]
+    .sort()
+    .map((c) => `<option value="${escapeHtmlJs(c)}"></option>`)
+    .join("");
+  wcEditing = { w, start: wcFormState() };
+  hide(wcError);
+  wcTryOut.textContent = "";
+  syncWildcardPreview();
+  show(wildcardModal);
+  (w ? wcValues : category ? wcKey : wcCategory).focus();
+}
+
+function syncWildcardPreview() {
+  const c = wildcardName(wcCategory.value) || "category";
+  const k = wildcardName(wcKey.value) || "key";
+  wcTokenPreview.innerHTML = `<code>%${escapeHtmlJs(c)}:${escapeHtmlJs(k)}%</code> · ${plural(wcLines().length, "value")}`;
+}
+[wcCategory, wcKey, wcValues].forEach((el) => el.addEventListener("input", syncWildcardPreview));
+
+function closeWildcardEditor({ force = false } = {}) {
+  if (!wcEditing) return;
+  if (!force && wcFormState() !== wcEditing.start && !confirm("Discard your changes to this wildcard?")) return;
+  wcEditing = null;
+  hide(wildcardModal);
+}
+
+async function saveWildcard() {
+  if (!wcEditing) return;
+  const body = { category: wcCategory.value, key: wcKey.value, values: wcLines() };
+  const btn = document.getElementById("wcSave");
+  btn.disabled = true;
+  try {
+    const w = wcEditing.w;
+    await promptsApi(w ? `/api/wildcards/${encodeURIComponent(w.id)}` : "/api/wildcards", w ? "PUT" : "POST", body);
+    closeWildcardEditor({ force: true });
+    await loadWildcards();
+  } catch (err) {
+    wcError.textContent = err.message || String(err);
+    show(wcError);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+document.getElementById("wcSave").addEventListener("click", saveWildcard);
+document.getElementById("wcCancel").addEventListener("click", () => closeWildcardEditor());
+document.getElementById("wcDelete").addEventListener("click", async () => {
+  const w = wcEditing?.w;
+  if (!w || !confirm(`Delete ${wildcardToken(w)}?\n\nPrompts that use it will stop at Generate until it's back.`)) return;
+  try {
+    await promptsApi(`/api/wildcards/${encodeURIComponent(w.id)}`, "DELETE");
+    closeWildcardEditor({ force: true });
+    await loadWildcards();
+  } catch (err) {
+    wcError.textContent = err.message || String(err);
+    show(wcError);
+  }
+});
+// A sample pick from the values as typed (their own tokens resolved against the saved lists).
+document.getElementById("wcTry").addEventListener("click", () => {
+  const lines = wcLines();
+  if (!lines.length) {
+    wcTryOut.textContent = "No values yet.";
+    return;
+  }
+  try {
+    wcTryOut.textContent = `→ ${resolveWildcards(lines[Math.floor(Math.random() * lines.length)])}`;
+  } catch (err) {
+    wcTryOut.textContent = err.message;
+  }
+});
+wildcardModal.addEventListener("click", (e) => { if (e.target === wildcardModal) closeWildcardEditor(); });
+wildcardModal.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closeWildcardEditor();
+  if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); saveWildcard(); }
+  if (e.key === "Enter" && e.target.tagName === "INPUT") { e.preventDefault(); saveWildcard(); }
+});
+
+// --- wildcard autocomplete ---
+// In any textarea, typing % (not straight after a letter or digit, so "50%" and a
+// token's closing % don't count) opens a list of wildcards: categories first while
+// there's no colon ("modern:" → keep typing), then category:key matches, prefix
+// matches first. ↑/↓ move, Enter or Tab takes one, Esc closes. Taking a list writes
+// the whole %category:key%, replacing what was typed of it.
+const wcAc = { el: null, ta: null, start: 0, items: [], index: 0 };
+const WC_AC_FRAGMENT = /(^|[^\p{L}\p{N}_%])%([\p{L}\p{N}_-]*)(?::([\p{L}\p{N}_-]*))?$/u;
+
+function wcAcEl() {
+  if (!wcAc.el) {
+    wcAc.el = document.createElement("div");
+    wcAc.el.className = "wc-ac hidden";
+    wcAc.el.setAttribute("role", "listbox");
+    // mousedown, not click: the textarea keeps focus (and its caret).
+    wcAc.el.addEventListener("mousedown", (e) => {
+      const opt = e.target.closest(".wc-ac-item");
+      if (!opt) return;
+      e.preventDefault();
+      wcAcAccept(Number(opt.dataset.i));
+    });
+    document.body.appendChild(wcAc.el);
+  }
+  return wcAc.el;
+}
+
+function wcAcClose() {
+  wcAc.ta = null;
+  wcAc.items = [];
+  wcAc.el?.classList.add("hidden");
+}
+
+// What to offer for the fragment before the caret, or [] for nothing.
+function wcAcItems(cat, key) {
+  const rank = (name, q) => (!q ? 0 : name.startsWith(q) ? 0 : name.includes(q) ? 1 : -1);
+  const byRank = (a, b) => a.r - b.r || a.label.localeCompare(b.label);
+  const lists = (w) => ({
+    label: wildcardToken(w),
+    insert: wildcardToken(w),
+    hint: (w.values || []).slice(0, 4).join(" · "),
+  });
+  if (key == null) {
+    // No colon yet: matching categories, then lists whose key (or category) matches.
+    const q = cat.toLowerCase();
+    const cats = [...new Set(wildcards.map((w) => w.category))]
+      .map((c) => ({ c, r: rank(c, q) }))
+      .filter((x) => x.r >= 0)
+      .map((x) => ({
+        r: x.r,
+        label: `%${x.c}:`,
+        insert: `%${x.c}:`,
+        hint: plural(wildcards.filter((w) => w.category === x.c).length, "list"),
+        more: true,
+      }))
+      .sort(byRank);
+    const keys = q
+      ? wildcards
+          .map((w) => ({ w, r: Math.min(...[rank(w.key, q), rank(w.category, q)].map((r) => (r < 0 ? 9 : r))) }))
+          .filter((x) => x.r < 9)
+          .map((x) => ({ r: x.r, ...lists(x.w) }))
+          .sort(byRank)
+      : [];
+    return [...cats, ...keys].slice(0, 12);
+  }
+  const c = cat.toLowerCase();
+  const q = key.toLowerCase();
+  return wildcards
+    .filter((w) => w.category === c)
+    .map((w) => ({ w, r: rank(w.key, q) }))
+    .filter((x) => x.r >= 0)
+    .map((x) => ({ r: x.r, ...lists(x.w) }))
+    .sort(byRank)
+    .slice(0, 12);
+}
+
+function wcAcUpdate(ta) {
+  if (ta.selectionStart !== ta.selectionEnd || !wildcards.length) return wcAcClose();
+  const before = ta.value.slice(0, ta.selectionStart);
+  const m = WC_AC_FRAGMENT.exec(before);
+  if (!m) return wcAcClose();
+  const items = wcAcItems(m[2], m[3]);
+  if (!items.length) return wcAcClose();
+  const same = wcAc.ta === ta && wcAc.items.map((x) => x.label).join() === items.map((x) => x.label).join();
+  wcAc.ta = ta;
+  wcAc.start = before.length - m[0].length + m[1].length; // the % itself
+  wcAc.items = items;
+  if (!same) wcAc.index = 0;
+  wcAcRender();
+}
+
+function wcAcRender() {
+  const el = wcAcEl();
+  el.innerHTML = "";
+  wcAc.items.forEach((it, i) => {
+    const opt = document.createElement("div");
+    opt.className = "wc-ac-item" + (i === wcAc.index ? " on" : "");
+    opt.dataset.i = String(i);
+    opt.setAttribute("role", "option");
+    const label = document.createElement("code");
+    label.textContent = it.label;
+    const hint = document.createElement("span");
+    hint.className = "wc-ac-hint";
+    hint.textContent = it.hint;
+    opt.append(label, hint);
+    el.appendChild(opt);
+  });
+  el.classList.remove("hidden");
+  // Just under the caret, kept on screen.
+  const { left, top, height } = caretRect(wcAc.ta, wcAc.ta.selectionStart);
+  const w = el.offsetWidth;
+  const h = el.offsetHeight;
+  const x = Math.max(8, Math.min(left, innerWidth - w - 8));
+  const y = top + height + 4 + h > innerHeight ? top - h - 4 : top + height + 4;
+  el.style.left = `${x}px`;
+  el.style.top = `${Math.max(8, y)}px`;
+  el.querySelector(".on")?.scrollIntoView({ block: "nearest" });
+}
+
+// Replace the typed fragment (and any rest of the same token after the caret) with
+// the choice. execCommand keeps the textarea's undo history and fires "input".
+function wcAcAccept(i) {
+  const it = wcAc.items[i];
+  const ta = wcAc.ta;
+  if (!it || !ta) return;
+  const rest = /^[\p{L}\p{N}_:-]*%?/u.exec(ta.value.slice(ta.selectionStart))[0];
+  ta.focus();
+  ta.setSelectionRange(wcAc.start, ta.selectionStart + (it.more ? 0 : rest.length));
+  if (!document.execCommand("insertText", false, it.insert)) {
+    ta.setRangeText(it.insert, ta.selectionStart, ta.selectionEnd, "end");
+    ta.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+  if (it.more) wcAcUpdate(ta); // a category: go on to its lists
+  else wcAcClose();
+}
+
+// The caret's box in viewport coordinates, measured on a hidden copy of the textarea.
+function caretRect(ta, pos) {
+  const cs = getComputedStyle(ta);
+  const div = document.createElement("div");
+  for (const p of [
+    "boxSizing", "width", "paddingTop", "paddingRight", "paddingBottom", "paddingLeft",
+    "borderTopWidth", "borderRightWidth", "borderBottomWidth", "borderLeftWidth",
+    "fontFamily", "fontSize", "fontWeight", "fontStyle", "letterSpacing", "lineHeight",
+    "textTransform", "wordSpacing", "tabSize",
+  ]) div.style[p] = cs[p];
+  Object.assign(div.style, {
+    position: "absolute", visibility: "hidden", top: "0", left: "-9999px",
+    whiteSpace: "pre-wrap", overflowWrap: "break-word", borderStyle: "solid",
+  });
+  // As wide as the text area really is — fractional, and without a scrollbar's width —
+  // or long text wraps differently from the textarea.
+  div.style.boxSizing = "border-box";
+  const borders = parseFloat(cs.borderLeftWidth) + parseFloat(cs.borderRightWidth);
+  div.style.width = `${ta.getBoundingClientRect().width - (ta.offsetWidth - ta.clientWidth) + borders}px`;
+  div.textContent = ta.value.slice(0, pos);
+  const mark = document.createElement("span");
+  mark.textContent = "\u200b";
+  div.appendChild(mark);
+  document.body.appendChild(div);
+  const r = ta.getBoundingClientRect();
+  const out = {
+    left: r.left + mark.offsetLeft - ta.scrollLeft,
+    top: r.top + mark.offsetTop - ta.scrollTop,
+    height: mark.offsetHeight || parseFloat(cs.lineHeight) || 16,
+  };
+  div.remove();
+  return out;
+}
+
+document.addEventListener("input", (e) => {
+  if (e.target instanceof HTMLTextAreaElement) wcAcUpdate(e.target);
+});
+document.addEventListener(
+  "keydown",
+  (e) => {
+    if (!wcAc.ta || e.target !== wcAc.ta) return;
+    const n = wcAc.items.length;
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      wcAc.index = (wcAc.index + (e.key === "ArrowDown" ? 1 : n - 1)) % n;
+      wcAcRender();
+    } else if ((e.key === "Enter" && !e.ctrlKey && !e.metaKey && !e.shiftKey) || e.key === "Tab") {
+      wcAcAccept(wcAc.index);
+    } else if (e.key === "Escape") {
+      wcAcClose();
+    } else {
+      return;
+    }
+    // Handled here: not a newline, focus move, or a modal's Esc.
+    e.preventDefault();
+    e.stopPropagation();
+  },
+  true
+);
+document.addEventListener("focusout", (e) => { if (e.target === wcAc.ta) wcAcClose(); });
+document.addEventListener("click", (e) => {
+  if (wcAc.ta && e.target !== wcAc.ta && !wcAc.el?.contains(e.target)) wcAcClose();
+});
+window.addEventListener("scroll", (e) => { if (!wcAc.el?.contains(e.target)) wcAcClose(); }, true);
+window.addEventListener("resize", () => wcAcClose());
+
+// --- wildcard highlighting ---
+// A textarea can't colour words, so each one gets a backdrop: an absolutely placed
+// sibling, lined up on the textarea's text box, that repeats the text invisibly with
+// every %category:key% wrapped in a <mark> (tinted if the list exists, red if not).
+// The textarea turns see-through (the backdrop carries its background) only while its
+// text has a token, so an ordinary textarea is untouched. Sibling, not a wrapper:
+// several rules style `… > textarea`. Kept in step on input, scroll, resize, and a
+// light poll that catches code setting .value and fields being shown or hidden.
+const wcHl = new Map(); // textarea → { back, inner, text, geo }
+
+function wcHlAttach(ta) {
+  if (wcHl.has(ta) || ta.closest(".wc-ac")) return;
+  const back = document.createElement("div");
+  back.className = "wc-hl hidden";
+  back.setAttribute("aria-hidden", "true");
+  const inner = document.createElement("div");
+  inner.className = "wc-hl-text";
+  back.appendChild(inner);
+  wcHl.set(ta, { back, inner, text: null, geo: "" });
+  ta.addEventListener("input", () => wcHlSync(ta));
+  ta.addEventListener("scroll", () => wcHlScroll(ta));
+  wcHlSync(ta);
+}
+
+function wcHlHtml(text) {
+  let html = "";
+  let last = 0;
+  for (const m of text.matchAll(WILDCARD_RE)) {
+    const w = findWildcard(m[1], m[2]);
+    const ok = !!w?.values?.length;
+    html += escapeHtmlJs(text.slice(last, m.index));
+    html += `<mark class="${ok ? "ok" : "bad"}">${escapeHtmlJs(m[0])}</mark>`;
+    last = m.index + m[0].length;
+  }
+  // A trailing newline needs something after it to take up its line.
+  return html + escapeHtmlJs(text.slice(last)) + "\u200b";
+}
+
+function wcHlSync(ta, force = false) {
+  const st = wcHl.get(ta);
+  if (!st) return;
+  if (!ta.isConnected) {
+    st.back.remove();
+    wcHl.delete(ta);
+    return;
+  }
+  const on = hasWildcards(ta.value) && ta.offsetParent !== null;
+  ta.classList.toggle("wc-hl-on", on);
+  st.back.classList.toggle("hidden", !on);
+  if (!on) return;
+  if (st.back.nextSibling !== ta) ta.before(st.back);
+  if (force || st.text !== ta.value) {
+    st.text = ta.value;
+    st.inner.innerHTML = wcHlHtml(ta.value);
+  }
+  // Lined up on the textarea: the backdrop covers its border box (with its background
+  // and corners); the text box sits inside the border, as wide as the text area
+  // (clientWidth leaves out a scrollbar), with the same padding and font.
+  // Exact (fractional) width: a rounded one can wrap a long line differently.
+  const exactW = ta.getBoundingClientRect().width;
+  const geo = [exactW, ta.offsetHeight, ta.clientWidth].join();
+  if (force || st.geo !== geo) {
+    st.geo = geo;
+    const cs = getComputedStyle(ta);
+    Object.assign(st.back.style, {
+      width: `${exactW}px`,
+      height: `${ta.offsetHeight}px`,
+      borderRadius: cs.borderRadius,
+      background: ta.dataset.wcBg || cs.backgroundColor,
+    });
+    const s = st.inner.style;
+    s.left = `${ta.clientLeft}px`;
+    s.top = `${ta.clientTop}px`;
+    s.width = `${exactW - (ta.offsetWidth - ta.clientWidth)}px`; // less borders and scrollbar
+    for (const p of [
+      "paddingTop", "paddingRight", "paddingBottom", "paddingLeft",
+      "fontFamily", "fontSize", "fontWeight", "fontStyle", "letterSpacing", "lineHeight",
+      "textTransform", "textIndent", "wordSpacing", "tabSize", "wordBreak",
+    ]) s[p] = cs[p];
+  }
+  // Placed by where both are on screen, not by offsetLeft/Top: in a scrolling box (the
+  // editor modal) the backdrop's containing block isn't the textarea's offsetParent.
+  const tr = ta.getBoundingClientRect();
+  const br = st.back.getBoundingClientRect();
+  const dx = tr.left - br.left;
+  const dy = tr.top - br.top;
+  if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) {
+    st.back.style.left = `${(parseFloat(st.back.style.left) || 0) + dx}px`;
+    st.back.style.top = `${(parseFloat(st.back.style.top) || 0) + dy}px`;
+  }
+  wcHlScroll(ta);
+}
+
+function wcHlScroll(ta) {
+  const st = wcHl.get(ta);
+  if (st) st.inner.style.transform = `translate(${-ta.scrollLeft}px, ${-ta.scrollTop}px)`;
+}
+
+// Remember each textarea's own background before it's made see-through.
+function wcHlRemember(ta) {
+  if (!ta.dataset.wcBg) ta.dataset.wcBg = getComputedStyle(ta).backgroundColor;
+}
+
+function wcHlSyncAll(force = false) {
+  for (const ta of [...wcHl.keys()]) wcHlSync(ta, force);
+}
+
+function wcHlScan(root) {
+  if (root instanceof HTMLTextAreaElement) {
+    wcHlRemember(root);
+    wcHlAttach(root);
+  } else root.querySelectorAll?.("textarea").forEach((ta) => { wcHlRemember(ta); wcHlAttach(ta); });
+}
+wcHlScan(document.body);
+new MutationObserver((muts) => {
+  for (const m of muts) for (const n of m.addedNodes) if (n.nodeType === 1) wcHlScan(n);
+}).observe(document.body, { childList: true, subtree: true });
+new ResizeObserver(() => wcHlSyncAll()).observe(document.body);
+window.addEventListener("resize", () => wcHlSyncAll());
+// Any scroll (the page, a modal) can move a textarea against its backdrop's frame.
+let wcHlFrame = 0;
+window.addEventListener(
+  "scroll",
+  () => {
+    if (!wcHlFrame) wcHlFrame = requestAnimationFrame(() => { wcHlFrame = 0; wcHlSyncAll(); });
+  },
+  true
+);
+setInterval(() => wcHlSyncAll(), 400);
+
+// Turn a prompt field's head into Prompt / Saved Prompts / Wildcards tabs and add the Save button.
 // `labelEl` (the field's label, if it has one) becomes the first tab; `keep` are nodes
 // from the old label that stay beside the tabs (the kie.ai character-cap hint).
 function installPromptTools({ field, head, textarea, labelEl = null, labelText = "Prompt", keep = [] }) {
@@ -3550,7 +4329,11 @@ function installPromptTools({ field, head, textarea, labelEl = null, labelText =
     tabsEl.appendChild(b);
     return b;
   };
-  const tabs = { prompt: mkTab("prompt", labelText), saved: mkTab("saved", "Saved Prompts") };
+  const tabs = {
+    prompt: mkTab("prompt", labelText),
+    saved: mkTab("saved", "Saved Prompts"),
+    wildcards: mkTab("wildcards", "Wildcards"),
+  };
   for (const n of keep) tabsEl.appendChild(n);
   if (labelEl) labelEl.replaceWith(tabsEl);
   else head.prepend(tabsEl);
@@ -3584,13 +4367,16 @@ function activePromptHost() {
 
 function setPromptTab(tab) {
   promptTab = tab;
+  if (tab !== "wildcards") promptSource = tab;
   try {
     localStorage.setItem(PROMPT_TAB_KEY, tab);
+    localStorage.setItem(PROMPT_SOURCE_KEY, promptSource);
   } catch {
     /* non-fatal */
   }
   syncPromptTabs();
   if (tab === "saved") loadSavedPrompts(); // pick up gallery moves/renames since the last load
+  if (tab === "wildcards") loadWildcards();
 }
 
 // Paint every prompt field's tabs and put the cards panel in the one on screen.
@@ -3602,11 +4388,14 @@ function syncPromptTabs() {
       btn.setAttribute("aria-selected", String(tab === promptTab));
     }
     h.tabs.saved.textContent = label;
-    h.textarea.classList.toggle("hidden", promptTab === "saved");
+    h.tabs.wildcards.textContent = `Wildcards${wildcards.length ? ` (${wildcards.length})` : ""}`;
+    h.textarea.classList.toggle("hidden", promptTab !== "prompt");
   }
   const host = activePromptHost();
   if (host && savedPanel.parentElement !== host.field) host.field.appendChild(savedPanel);
+  if (host && wildcardsPanel.parentElement !== host.field) host.field.appendChild(wildcardsPanel);
   savedPanel.classList.toggle("hidden", promptTab !== "saved" || !host);
+  wildcardsPanel.classList.toggle("hidden", promptTab !== "wildcards" || !host);
   syncGenerateLabel();
 }
 
@@ -3617,6 +4406,8 @@ installPromptTools({
   labelEl: document.getElementById("promptLabel"),
   keep: [promptCapHint],
 });
+
+loadWildcards();
 
 async function loadSavedPrompts() {
   const seq = ++savedPromptsSeq;
@@ -3779,7 +4570,9 @@ function openSavePrompt() {
   }
   pendingSave = draft;
   // Text already laid out in MiniMax's sections is offered as a MiniMax prompt.
-  savePromptFormat.value = /^(subject_definitions|detailed_description):/m.test(draft.prompt) ? "minimax" : "default";
+  savePromptFormat.value = /^(subject_definitions|detailed_description):/m.test(draft.prompt)
+    ? "minimax"
+    : /^integrated_multimodal_description:/m.test(draft.prompt) ? "minimax_t2v" : "default";
   const firstLine = draft.prompt.trim().split(/\n/)[0].replace(/\s+/g, " ");
   savePromptTitle.value = firstLine.length > 60 ? `${firstLine.slice(0, 57).trimEnd()}…` : firstLine;
   const bits = [
@@ -3819,6 +4612,8 @@ async function confirmSavePrompt() {
       const byId = new Map(galleryItems.map((g) => [g.id, g]));
       const withSubjects = refs.map((r) => ({ ...r, key: byId.get(r.id)?.key || "", definition: byId.get(r.id)?.definition || "" }));
       Object.assign(body, { type: "minimax", prompt: "", minimax: parseMinimax(prompt, withSubjects) });
+    } else if (savePromptFormat.value === "minimax_t2v") {
+      Object.assign(body, { type: "minimax_t2v", prompt: "", refs: [], minimax: parseMinimax(prompt) });
     }
     await promptsApi("/api/prompts", "POST", body);
     closeSavePrompt();
@@ -3924,6 +4719,7 @@ function renderSavedPrompts() {
       ? `▶ Generate uses “${active.title}” (${active.type === "minimax" ? "its prompt and its references, in order" : "its prompt text only"}) while this tab is open, and links the new History card to it.`
       : "Press ▶ on a card to generate from it while this tab is open. Otherwise Generate uses the Prompt tab's text.";
   savedRunNoteEl.classList.toggle("hidden", !savedPrompts.length);
+  syncWildcardSource();
   syncGenerateLabel();
 }
 
@@ -4069,11 +4865,13 @@ function makeSavedPromptCard(p) {
     setActiveSavedPrompt(isActive ? null : p.id);
   });
   head.prepend(use);
-  if (p.type === "minimax") {
+  if (isMmType(p.type)) {
     const badge = document.createElement("span");
     badge.className = "sp-type";
-    badge.textContent = "MiniMax";
-    badge.title = "MiniMax H3 format — compiled into its six sections when used";
+    badge.textContent = p.type === "minimax_t2v" ? "MiniMax T2V" : "MiniMax";
+    badge.title = p.type === "minimax_t2v"
+      ? "MiniMax H3 text-to-video format — compiled into its three fields when used"
+      : "MiniMax H3 format — compiled into its six sections when used";
     title.prepend(badge);
   }
   head.append(title, meta);
@@ -4150,7 +4948,7 @@ function makeOutputPreview(out, className) {
 
 // A card's one- or two-line teaser: the text, or a MiniMax prompt's opening and first shot.
 function savedPromptSnippet(p) {
-  if (p.type !== "minimax") return p.prompt || "";
+  if (!isMmType(p.type)) return p.prompt || "";
   const mm = p.minimax || {};
   const shots = mm.shots || [];
   return [mm.style, shots[0]?.text, shots.length > 1 ? `(+${shots.length - 1} cut${shots.length > 2 ? "s" : ""})` : ""]
@@ -4236,17 +5034,19 @@ function openPromptEditor(p, projectId = activeProjectId) {
 
 // Show the edit form for the prompt's format (plain textarea, or the MiniMax sections).
 function renderEditorBody() {
-  const mm = editing.type === "minimax";
+  const mm = isMmType(editing.type);
   document.getElementById("peDefault").classList.toggle("hidden", mm);
   peMinimax.classList.toggle("hidden", !mm);
+  // Text-to-video takes no references, so the reference list and picker are hidden.
+  document.getElementById("peRefsHome").classList.toggle("hidden", editing.type === "minimax_t2v");
   const badge = document.getElementById("peType");
-  badge.textContent = mm ? "MiniMax H3" : "Default";
+  badge.textContent = MM_TYPE_LABEL[editing.type] || "Default";
   badge.classList.toggle("mm", mm);
+  // The reference list lives in its home spot unless the MiniMax ref form takes it —
+  // moved back before that form is rebuilt, so clearing the form never drops it.
+  if (editing.type !== "minimax") document.getElementById("peRefsHome").appendChild(peRefsBlock);
   if (mm) renderMinimaxForm();
-  else {
-    document.getElementById("peRefsHome").appendChild(peRefsBlock); // back from the MiniMax form
-    peMinimax.innerHTML = "";
-  }
+  else peMinimax.innerHTML = "";
   renderEditorRefs(); // reference labels follow the format (<Picture 1> vs Image 1)
   renderEditorActions();
 }
@@ -4260,8 +5060,8 @@ function editorValues() {
     type: editing.type,
     // Left out for MiniMax: the server clears the old text when it stores the type, so a
     // server that doesn't know the format yet keeps the text rather than blanking it.
-    prompt: editing.type === "minimax" ? undefined : pePrompt.value,
-    minimax: editing.type === "minimax" ? editing.mm : null,
+    prompt: isMmType(editing.type) ? undefined : pePrompt.value,
+    minimax: isMmType(editing.type) ? editing.mm : null,
     duration: Number.isFinite(d) && d > 0 ? d : null,
     weight: peWeight.value.trim() !== "" && Number.isFinite(w) ? Math.round(w) : 0,
     historyId: editing.historyId,
@@ -4276,7 +5076,7 @@ function editorDirty() {
   return (
     v.title !== p.title ||
     v.type !== (p.type || "default") ||
-    (v.type === "minimax"
+    (isMmType(v.type)
       ? JSON.stringify(v.minimax) !== JSON.stringify(p.minimax ? normalizeMinimax(p.minimax) : null)
       : v.prompt !== (p.prompt || "")) ||
     v.duration !== (p.duration || null) ||
@@ -4495,29 +5295,10 @@ function renderEditorPicker() {
 
 // Save dropped/browsed files to this project's gallery, then add them to the prompt.
 async function uploadEditorMedia(files) {
-  const ok = [...files].filter((f) => /^(image|video|audio)\//.test(f.type));
-  for (const file of ok) {
-    try {
-      const base64Data = await new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result);
-        reader.onerror = () => reject(reader.error);
-        reader.readAsDataURL(file);
-      });
-      const res = await fetch("/api/upload", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ base64Data, fileName: file.name, projectId: editing?.projectId || activeProjectId }),
-      });
-      const data = await res.json();
-      if (!res.ok || !data.image?.id) throw new Error(data.msg || "Save failed");
-      if (editing) addEditorRef(data.image);
-    } catch (err) {
-      alert(`Couldn't save ${file.name}: ${err.message || err}`);
-    }
-  }
-  await loadGallery();
-  if (editing) renderEditorRefs();
+  const saved = await uploadToGallery(files, editing?.projectId || activeProjectId);
+  if (!editing) return;
+  for (const image of saved) addEditorRef(image);
+  renderEditorRefs();
 }
 
 pePicker.addEventListener("toggle", () => { if (pePicker.open) renderEditorPicker(); });
@@ -4621,8 +5402,45 @@ function mmRetentionField(getLabel) {
 
 function renderMinimaxForm() {
   const mm = editing.mm;
+  const t2v = editing.type === "minimax_t2v";
   peMinimax.innerHTML = "";
 
+  if (!t2v) renderMinimaxRefParts(mm);
+
+  // detailed_description (integrated_multimodal_description for text-to-video)
+  const desc = t2v
+    ? mmSection("integrated_multimodal_description", "— [Shot 1] opens with the style, then each cut in playback order")
+    : mmSection("detailed_description", "— a style opening, then each shot in playback order");
+  desc.appendChild(mmText(mm, "style", {
+    rows: 2,
+    placeholder: t2v
+      ? "Live-action, cinematic, … (the style — written right after [Shot 1])"
+      : "The target video uses a … style. (the opening, before [Shot 1])",
+  }));
+  renderMinimaxShots(mm, desc, t2v);
+  peMinimax.appendChild(desc);
+
+  const snd = mmSection("overall_soundscape", "— ambience and physical sounds across the whole video");
+  snd.appendChild(mmText(mm, "soundscape", { rows: 2, placeholder: "e.g. Quiet library room tone; pages rustle." }));
+  peMinimax.appendChild(snd);
+  const mus = mmSection("non_diegetic_music", "— music only the audience hears (empty = N/A)");
+  mus.appendChild(mmText(mm, "music", { rows: 2, placeholder: "e.g. Heavy metal rock and roll, fast tempo." }));
+  peMinimax.appendChild(mus);
+
+  // compiled preview
+  const prev = mmEl("details", "pe-mm-preview");
+  prev.appendChild(mmEl("summary", null, "Compiled prompt"));
+  const pre = mmEl("pre", "pe-mm-compiled");
+  pre.id = "mmCompiled";
+  prev.appendChild(pre);
+  peMinimax.appendChild(prev);
+
+  refreshMinimaxDerived();
+}
+
+// The reference format's own sections: subjects (with retention), the reference media
+// and the summary — everything above detailed_description.
+function renderMinimaxRefParts(mm) {
   // subject_definitions — each subject with its retention_analysis line under it
   const subj = mmSection("subject_definitions", "— each subject, with its retention_analysis below it");
   const fromRefs = mmEl("div", "pe-mm-derived");
@@ -4684,10 +5502,10 @@ function renderMinimaxForm() {
     placeholder: "[reference generation] The target video shows <sibella> … — the task type in brackets, then one short paragraph on the video and what each reference is for.",
   }));
   peMinimax.appendChild(sum);
+}
 
-  // detailed_description
-  const desc = mmSection("detailed_description", "— a style opening, then each shot in playback order");
-  desc.appendChild(mmText(mm, "style", { rows: 2, placeholder: "The target video uses a … style. (the opening, before [Shot 1])" }));
+// The shot cards and ＋ Add cut, into `desc`.
+function renderMinimaxShots(mm, desc, t2v) {
   const shots = mmEl("div", "pe-mm-shots");
   mm.shots.forEach((s, i) => {
     const card = mmEl("div", "pe-mm-shot");
@@ -4730,9 +5548,13 @@ function renderMinimaxForm() {
     }
     card.append(head, mmText(s, "text", {
       rows: i === 0 ? 5 : 3,
-      placeholder: i === 0
-        ? "What the opening shot shows: composition, who's where (by <key>), action, camera, sound."
-        : "e.g. the shot cuts to a low angle shot of <new> laughing.",
+      placeholder: t2v
+        ? i === 0
+          ? "a medium-wide shot frames … The camera pushes in slowly as the baker (S1) says: <d>[English] First batch of the morning.</d>"
+          : "the camera cuts to a close-up of … (a speaker keeps their (S1) id; lines go in <d>[Language] …</d>)"
+        : i === 0
+          ? "What the opening shot shows: composition, who's where (by <key>), action, camera, sound."
+          : "e.g. the shot cuts to a low angle shot of <new> laughing.",
     }));
     shots.appendChild(card);
   });
@@ -4747,30 +5569,12 @@ function renderMinimaxForm() {
     tas[tas.length - 1]?.focus();
   });
   desc.appendChild(addCut);
-  peMinimax.appendChild(desc);
-
-  const snd = mmSection("overall_soundscape", "— ambience and physical sounds across the whole video");
-  snd.appendChild(mmText(mm, "soundscape", { rows: 2, placeholder: "e.g. Quiet library room tone; pages rustle." }));
-  peMinimax.appendChild(snd);
-  const mus = mmSection("non_diegetic_music", "— music only the audience hears (empty = N/A)");
-  mus.appendChild(mmText(mm, "music", { rows: 2, placeholder: "e.g. Heavy metal rock and roll, fast tempo." }));
-  peMinimax.appendChild(mus);
-
-  // compiled preview
-  const prev = mmEl("details", "pe-mm-preview");
-  prev.appendChild(mmEl("summary", null, "Compiled prompt"));
-  const pre = mmEl("pre", "pe-mm-compiled");
-  pre.id = "mmCompiled";
-  prev.appendChild(pre);
-  peMinimax.appendChild(prev);
-
-  refreshMinimaxDerived();
 }
 
 // Everything computed from the fields: the reference subject lines, retention rows,
 // cut-time warnings and the compiled text.
 function refreshMinimaxDerived() {
-  if (!editing || editing.type !== "minimax") return;
+  if (!editing || !isMmType(editing.type)) return;
   const mm = editing.mm;
   const refs = editorLiveRefs();
   const subjects = minimaxSubjects(mm, refs);
@@ -4823,7 +5627,7 @@ function refreshMinimaxDerived() {
 
   const out = document.getElementById("mmCompiled");
   if (out) {
-    const text = compileMinimax(mm, refs);
+    const text = editing.type === "minimax_t2v" ? compileMinimaxT2V(mm) : compileMinimax(mm, refs);
     out.textContent = text;
     const sum = out.parentElement.querySelector("summary");
     if (sum) sum.textContent = `Compiled prompt (${text.length.toLocaleString()} characters)`;
@@ -4865,18 +5669,41 @@ function renderEditorActions() {
     closePromptEditor({ force: true });
     await importSavedPrompt(p);
   }, "sp-import");
-  if (editing.type === "minimax") {
+  // Converting between the two MiniMax formats keeps the shared fields (style, cuts,
+  // soundscape, music); the reference format's subjects/summary/retention stay stored
+  // but unused by text-to-video, so switching back restores them.
+  const toT2V = () => {
+    if (editing.refs.length && !confirm(`Convert to MiniMax text-to-video?\n\nIt takes no references — the ${plural(editing.refs.length, "reference")} on this prompt will be removed when you save (the files stay in the gallery).`)) return false;
+    editing.refs = [];
+    editing.type = "minimax_t2v";
+    renderEditorBody();
+    return true;
+  };
+  if (isMmType(editing.type)) {
     btn("⇄ To plain text", "Turn this into a default prompt holding the compiled text (on Save)", async () => {
-      if (!confirm("Convert to a plain-text prompt?\n\nThe compiled MiniMax text becomes the prompt; the sections, cuts and retention settings are dropped when you save.")) return;
-      pePrompt.value = compileMinimax(editing.mm, editorLiveRefs());
+      if (!confirm("Convert to a plain-text prompt?\n\nThe compiled MiniMax text becomes the prompt; the sections and cuts are dropped when you save.")) return;
+      pePrompt.value = editing.type === "minimax_t2v" ? compileMinimaxT2V(editing.mm) : compileMinimax(editing.mm, editorLiveRefs());
       editing.type = "default";
       renderEditorBody();
     });
+    if (editing.type === "minimax") {
+      btn("⇄ To T2V", "Switch to MiniMax's text-to-video format — same cuts, soundscape and music, no references (on Save)", async () => { toT2V(); });
+    } else {
+      btn("⇄ To MiniMax ref", "Switch to MiniMax's reference format — adds subjects, summary, retention and reference media (on Save)", async () => {
+        editing.type = "minimax";
+        renderEditorBody();
+      });
+    }
   } else {
     btn("⇄ To MiniMax", "Split this prompt into MiniMax H3's sections, shots and subjects (on Save)", async () => {
       editing.mm = parseMinimax(pePrompt.value, editorLiveRefs());
       editing.type = "minimax";
       renderEditorBody();
+    });
+    btn("⇄ To T2V", "Split this prompt into MiniMax's text-to-video fields — cuts, soundscape and music, no references (on Save)", async () => {
+      const before = editing.mm;
+      editing.mm = parseMinimax(pePrompt.value);
+      if (!toT2V()) editing.mm = before;
     });
   }
   btn("⧉ Duplicate", "Make a copy of the saved prompt in this project and open it", async () => {
@@ -5317,13 +6144,24 @@ form.addEventListener("submit", async (e) => {
   // Pinned now, so switching tabs (or the active prompt) mid-upload can't change the run.
   const fromSaved = runSavedPrompt();
   const promptText = fromSaved ? exportSavedPromptText(fromSaved) : promptEl.value;
-  if (promptText.length > promptCap()) {
+  // Wildcards: each run of a ×N batch gets its own picks.
+  let runPrompts;
+  try {
+    runPrompts = Array.from({ length: queueCount() }, () => resolveWildcards(promptText));
+  } catch (err) {
+    setError(err.message || String(err));
+    return;
+  }
+  const longest = Math.max(...runPrompts.map((t) => t.length));
+  if (longest > promptCap()) {
     setError(
-      `${fromSaved ? `Saved prompt “${fromSaved.title}”` : "Prompt"} is ${promptText.length.toLocaleString()} characters — ` +
+      `${fromSaved ? `Saved prompt “${fromSaved.title}”` : "Prompt"} is ${longest.toLocaleString()} characters` +
+        `${longest !== promptText.length ? " with its wildcards filled in" : ""} — ` +
         `this model's limit is ${promptCap().toLocaleString()}.`
     );
     return;
   }
+  const templated = hasWildcards(promptText);
 
   hide(errorEl);
   if (mediaNotes.length) setError(mediaNotes.join("\n"));
@@ -5344,9 +6182,13 @@ form.addEventListener("submit", async (e) => {
 
   // ×N: one batch of identical requests. Each run gets its own job, History card and
   // kie.ai task, but the reference media is uploaded once and shared by all of them.
-  const count = queueCount();
-  const storedInput = collectInput({ image: [], video: [], audio: [], firstFrame: [], lastFrame: [] }, promptText);
-  if (fromSaved) storedInput.savedPrompt = savedPromptStamp(fromSaved); // History only, not sent to kie.ai
+  const count = runPrompts.length;
+  const storedInputFor = (i) => {
+    const s = collectInput({ image: [], video: [], audio: [], firstFrame: [], lastFrame: [] }, runPrompts[i]);
+    if (fromSaved) s.savedPrompt = savedPromptStamp(fromSaved); // History only, not sent to kie.ai
+    if (templated) s.promptTemplate = promptText; // History only: Re-import restores the %tokens%
+    return s;
+  };
   const projectId = activeProjectId; // pin now so a mid-run project switch can't misfile it
   const refSecs = refMedia ? refVideoSeconds() : 0;
   const jobs = [];
@@ -5358,7 +6200,7 @@ form.addEventListener("submit", async (e) => {
     const job = {
       jobId: nextJobId++,
       taskId: null,
-      input: storedInput,
+      input: storedInputFor(i),
       mediaLocalIds,
       balanceBefore: null,
       projectId,
@@ -5396,7 +6238,6 @@ form.addEventListener("submit", async (e) => {
     return;
   }
 
-  const genInput = collectInput(resolved, promptText); // real input (hosted URLs) for the API call
 
   // Snapshot the balance so we can measure actual cost on completion. (With
   // overlapping runs this delta is unreliable; the per-task creditsConsumed
@@ -5412,7 +6253,8 @@ form.addEventListener("submit", async (e) => {
       job.balanceBefore = balanceBefore;
       job.live.setStatus("Submitting…");
       try {
-        job.taskId = await createTask(genInput, job.live);
+        // The real input (hosted URLs, this run's wildcard picks) for the API call.
+        job.taskId = await createTask(collectInput(resolved, runPrompts[i]), job.live);
         job.live.setStatus("Generating… this can take a few minutes.");
         await persistEntryTask(job); // let the server-side sweep finish it if this tab goes away
         pollJob(job);
@@ -6366,7 +7208,7 @@ async function applyEntry(entry) {
     modelSelect.value = input.model;
     applyModelUI(); // kicks off the async control render (ComfyUI options + settings)
     await comfyRenderPromise; // wait for the controls to exist before filling them
-    prefillComfyControls(input.values || {});
+    prefillComfyControls({ ...(input.values || {}), ...(input.valueTemplates || {}) });
     if (comfyLoraControl && Array.isArray(input.loras)) comfyLoraControl.setLoras(input.loras);
     if (comfyBypassControl && Array.isArray(input.bypass)) comfyBypassControl.setDisabled(input.bypass);
     await restoreComfyMedia(entry); // re-populate the image/video/audio fields
@@ -6381,7 +7223,7 @@ async function applyEntry(entry) {
   const modeRadio = document.querySelector(`input[name="imageSource"][value="${savedMode}"]`);
   if (modeRadio) modeRadio.checked = true;
   applyModelUI(); // shape the form (and aspect options) before filling values
-  document.getElementById("prompt").value = input.prompt || "";
+  document.getElementById("prompt").value = input.promptTemplate || input.prompt || "";
   // applyModelUI already populated this model family's options and picked a
   // default; only override when the saved entry recorded one.
   if (input.resolution) resolutionSelect.value = input.resolution;

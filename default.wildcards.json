@@ -1,0 +1,306 @@
+[
+  {
+    "id": "5ffddef1-045c-43bf-ab89-6fbd8be37b0a",
+    "category": "modern",
+    "key": "clothing_color",
+    "values": [
+      "black",
+      "white",
+      "navy blue",
+      "burgundy",
+      "olive green",
+      "pastel pink",
+      "mustard yellow",
+      "charcoal grey",
+      "cream",
+      "emerald green"
+    ],
+    "createdAt": "2026-09-21T20:38:19.620655Z",
+    "updatedAt": "2026-09-21T20:38:19.620655Z"
+  },
+  {
+    "id": "10f7868b-c573-4920-bff0-cd965de1b415",
+    "category": "modern",
+    "key": "fem_casual_tops",
+    "values": [
+      "crop top",
+      "oversized hoodie",
+      "striped long-sleeved shirt",
+      "tank top",
+      "graphic t-shirt",
+      "denim jacket over a white tee",
+      "cable-knit sweater",
+      "flannel shirt",
+      "off-the-shoulder top",
+      "ribbed turtleneck"
+    ],
+    "createdAt": "2026-09-21T20:38:19.620655Z",
+    "updatedAt": "2026-09-21T20:38:19.620655Z"
+  },
+  {
+    "id": "41b00757-b466-41e3-ac2e-c90c9b447e8e",
+    "category": "modern",
+    "key": "fem_casual_bottoms",
+    "values": [
+      "high-waisted jeans",
+      "denim shorts",
+      "black leggings",
+      "cargo pants",
+      "pleated tennis skirt",
+      "wide-leg linen pants",
+      "joggers",
+      "denim mini skirt",
+      "bike shorts",
+      "overalls"
+    ],
+    "createdAt": "2026-09-21T20:38:19.620655Z",
+    "updatedAt": "2026-09-21T20:38:19.620655Z"
+  },
+  {
+    "id": "796740ee-a1d7-4424-93e0-2ec031303173",
+    "category": "modern",
+    "key": "fem_casual_footwear",
+    "values": [
+      "white sneakers",
+      "canvas high-tops",
+      "ankle boots",
+      "sandals",
+      "flip-flops",
+      "slip-on loafers",
+      "running shoes",
+      "chunky platform sneakers",
+      "combat boots",
+      "ballet flats"
+    ],
+    "createdAt": "2026-09-21T20:38:19.620655Z",
+    "updatedAt": "2026-09-21T20:38:19.620655Z"
+  },
+  {
+    "id": "e273bb0a-c225-4c5b-95ac-b117c2908df4",
+    "category": "modern",
+    "key": "fem_fancy_tops",
+    "values": [
+      "silk camisole",
+      "sequined blouse",
+      "lace bodysuit",
+      "satin wrap top",
+      "fitted corset top",
+      "velvet halter top",
+      "sheer ruffled blouse",
+      "tailored blazer",
+      "one-shoulder top",
+      "beaded bustier"
+    ],
+    "createdAt": "2026-09-21T20:38:19.620655Z",
+    "updatedAt": "2026-09-21T20:38:19.620655Z"
+  },
+  {
+    "id": "b60d6d3a-2fb7-4224-8fb7-f39e49c13940",
+    "category": "modern",
+    "key": "fem_fancy_bottoms",
+    "values": [
+      "satin midi skirt",
+      "sequined mini skirt",
+      "high-waisted tailored trousers",
+      "pleated maxi skirt",
+      "leather pencil skirt",
+      "tulle ballgown skirt",
+      "velvet palazzo pants",
+      "silk slip skirt",
+      "thigh-slit maxi skirt",
+      "tuxedo trousers"
+    ],
+    "createdAt": "2026-09-21T20:38:19.620655Z",
+    "updatedAt": "2026-09-21T20:38:19.620655Z"
+  },
+  {
+    "id": "14a745fe-4dd2-4f95-9f99-4fe1906b29c8",
+    "category": "modern",
+    "key": "fem_fancy_footwear",
+    "values": [
+      "stiletto heels",
+      "strappy sandal heels",
+      "pointed-toe pumps",
+      "patent leather Mary Janes",
+      "knee-high heeled boots",
+      "kitten heels",
+      "platform heels",
+      "satin mules",
+      "glittering slingbacks",
+      "ankle-strap block heels"
+    ],
+    "createdAt": "2026-09-21T20:38:19.620655Z",
+    "updatedAt": "2026-09-21T20:38:19.620655Z"
+  },
+  {
+    "id": "b3d13f71-5d5a-47c0-89fa-5c2c42269f7f",
+    "category": "modern",
+    "key": "casual_rooms",
+    "values": [
+      "a cozy bedroom with fairy lights",
+      "a sunlit living room",
+      "a cluttered teenage bedroom",
+      "a small apartment kitchen",
+      "a laundry room",
+      "a finished basement den",
+      "a bathroom with white tile",
+      "a home office nook",
+      "a loft studio apartment",
+      "a backyard patio"
+    ],
+    "createdAt": "2026-09-21T20:38:19.620655Z",
+    "updatedAt": "2026-09-21T20:38:19.620655Z"
+  },
+  {
+    "id": "074be37a-2c91-41db-a425-ba343e254802",
+    "category": "modern",
+    "key": "business_rooms",
+    "values": [
+      "an open-plan office",
+      "a corner executive office",
+      "a grocery store aisle",
+      "a public library reading room",
+      "a busy coffee shop",
+      "a hospital waiting room",
+      "a hotel lobby",
+      "a conference room with a glass wall",
+      "a hair salon",
+      "a bank lobby"
+    ],
+    "createdAt": "2026-09-21T20:38:19.620655Z",
+    "updatedAt": "2026-09-21T20:38:19.620655Z"
+  },
+  {
+    "id": "0fe022aa-7ba5-426c-a2b9-832b2bb2d9d6",
+    "category": "modern",
+    "key": "scifi_rooms",
+    "values": [
+      "a mad scientist's workshop",
+      "a nuclear reactor control room",
+      "a bio-engineering facility",
+      "a spaceship bridge",
+      "a cryogenic storage bay",
+      "a cloning lab lined with glass tubes",
+      "a holographic command center",
+      "a robotics assembly line",
+      "a quarantine containment ward",
+      "a particle accelerator tunnel"
+    ],
+    "createdAt": "2026-09-21T20:38:19.620655Z",
+    "updatedAt": "2026-09-21T20:38:19.620655Z"
+  },
+  {
+    "id": "18086765-99b9-4efd-9ca5-f322891ad488",
+    "category": "basic",
+    "key": "normal_hair_color",
+    "values": [
+      "jet-black",
+      "dark brown",
+      "chestnut brown",
+      "light brown",
+      "dirty blonde",
+      "platinum blonde",
+      "honey blonde",
+      "auburn",
+      "copper red",
+      "silver-grey"
+    ],
+    "createdAt": "2026-09-21T20:38:19.620655Z",
+    "updatedAt": "2026-09-21T20:38:19.620655Z"
+  },
+  {
+    "id": "c5afb45d-86c9-4c01-849b-877673222acc",
+    "category": "basic",
+    "key": "fanciful_hair_color",
+    "values": [
+      "pastel pink",
+      "electric blue",
+      "lavender",
+      "mint green",
+      "neon purple",
+      "fire-engine red",
+      "teal",
+      "rainbow ombre",
+      "silver-white with blue tips",
+      "sunset orange-to-pink ombre"
+    ],
+    "createdAt": "2026-09-21T20:38:19.620655Z",
+    "updatedAt": "2026-09-21T20:38:19.620655Z"
+  },
+  {
+    "id": "aac8802c-4ce1-4ff4-9254-b4cd5829acd4",
+    "category": "basic",
+    "key": "hair_style",
+    "values": [
+      "long straight hair",
+      "a messy bun",
+      "a high ponytail",
+      "twin braids",
+      "a pixie cut",
+      "a shoulder-length bob",
+      "loose beach waves",
+      "tight curls",
+      "twin tails",
+      "a side-swept fringe"
+    ],
+    "createdAt": "2026-09-21T20:38:19.620655Z",
+    "updatedAt": "2026-09-21T20:38:19.620655Z"
+  },
+  {
+    "id": "513b5d55-3cba-43fe-be40-8fd8477292e9",
+    "category": "dialogue",
+    "key": "surprised",
+    "values": [
+      "Wait, what?!",
+      "No way!",
+      "Are you serious right now?",
+      "I did not see that coming.",
+      "Oh my gosh!",
+      "You're kidding me!",
+      "How is that even possible?",
+      "Whoa, hold on a second!",
+      "Since when?!",
+      "I can't believe it!"
+    ],
+    "createdAt": "2026-09-21T20:38:19.620655Z",
+    "updatedAt": "2026-09-21T20:38:19.620655Z"
+  },
+  {
+    "id": "ba9034f8-d120-4ef6-921c-9aa966bd642e",
+    "category": "dialogue",
+    "key": "scared",
+    "values": [
+      "Did you hear that?",
+      "Please, stay away from me!",
+      "We need to get out of here, now!",
+      "Something's in the dark...",
+      "I don't want to die here.",
+      "Who's there?",
+      "Don't leave me alone!",
+      "It's right behind us!",
+      "Run! Just run!",
+      "This was a terrible idea."
+    ],
+    "createdAt": "2026-09-21T20:38:19.620655Z",
+    "updatedAt": "2026-09-21T20:38:19.620655Z"
+  },
+  {
+    "id": "fc173e76-f40e-4bf5-ba77-010d7eae6bdb",
+    "category": "dialogue",
+    "key": "happy",
+    "values": [
+      "This is the best day ever!",
+      "I love it!",
+      "We actually did it!",
+      "You made my day!",
+      "I'm so happy right now!",
+      "This is perfect!",
+      "Yes! Finally!",
+      "I couldn't ask for anything more.",
+      "Thank you so much!",
+      "Let's celebrate!"
+    ],
+    "createdAt": "2026-09-21T20:38:19.620655Z",
+    "updatedAt": "2026-09-21T20:38:19.620655Z"
+  }
+]

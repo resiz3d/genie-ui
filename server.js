@@ -49,6 +49,8 @@ const EXPORTS_DIR = path.resolve(__dirname, process.env.EXPORTS_DIR || "exports"
 const HISTORY_FILE = path.join(__dirname, "history.json");
 const IMAGES_FILE = path.join(__dirname, "images.json");
 const PROJECTS_FILE = path.join(__dirname, "projects.json");
+// Wildcards (shared by every project): named lists a prompt picks from at random.
+const WILDCARDS_FILE = path.join(__dirname, "wildcards.json");
 // Per-project data that isn't media: <PROJECT_DATA_DIR>/<slug>/prompts.json holds the
 // project's saved prompts. Keyed by slug like the media folders (slugs survive renames).
 const PROJECT_DATA_DIR = path.resolve(__dirname, process.env.PROJECT_DATA_DIR || "projects");
@@ -2754,6 +2756,8 @@ app.delete("/api/images/:id", (req, res) => {
 // `type` picks the prompt's format: "default" keeps its text in `prompt`; "minimax"
 // keeps structured fields in `minimax` (see sanitizeMinimax) and the UI compiles them
 // into MiniMax H3's sectioned prompt when it's used — the text isn't stored.
+// "minimax_t2v" keeps the same fields but compiles to the text-to-video format
+// (VIDEO_PROMPT_WRITING_GUIDE_base_en: shots, soundscape and music; no references).
 // `historyId` links the prompt to one History entry — the take that represents it —
 // whose output becomes the card's thumbnail (POST /api/prompts/link sets it).
 // Ordered Drupal-style by `weight`, an integer (default 0): lighter floats to the top,
@@ -2762,7 +2766,9 @@ app.delete("/api/images/:id", (req, res) => {
 // A ref's `id` is a gallery (images.json) id, so the file itself stays where the
 // gallery keeps it; its url, subject key and definition are looked up on read.
 const PROMPT_REF_KINDS = new Set(["image", "video", "audio"]);
-const PROMPT_TYPES = new Set(["default", "minimax"]);
+const PROMPT_TYPES = new Set(["default", "minimax", "minimax_t2v"]);
+// The types whose text is compiled from `minimax` fields.
+const STRUCTURED_PROMPT_TYPES = new Set(["minimax", "minimax_t2v"]);
 
 // The fields of a "minimax" prompt, validated and capped. Shot 1 never has a time.
 function sanitizeMinimax(mm) {
@@ -2906,6 +2912,101 @@ function copyOfPrompt(p) {
   };
 }
 
+// --- wildcards (global) ----------------------------------------------------
+// wildcards.json: [{ id, category, key, values: ["crop top", …], createdAt, updatedAt }]
+// A prompt writes %category:key% and the UI swaps in one of the values, picked at
+// random for each run. Category and key are one lowercase word each (so the token's
+// case never matters); a category + key pair is unique.
+const WILDCARD_MAX_VALUES = 2000;
+
+// First run: start from the example lists shipped in the repo (default.wildcards.json).
+// wildcards.json itself is git-ignored, so your own lists never end up in a commit.
+const DEFAULT_WILDCARDS_FILE = path.join(__dirname, "default.wildcards.json");
+if (!fs.existsSync(WILDCARDS_FILE) && fs.existsSync(DEFAULT_WILDCARDS_FILE)) {
+  try {
+    fs.copyFileSync(DEFAULT_WILDCARDS_FILE, WILDCARDS_FILE);
+    console.log("Created wildcards.json from default.wildcards.json");
+  } catch (err) {
+    console.error("Couldn't create wildcards.json from the defaults:", err.message);
+  }
+}
+
+function normalizeWildcardName(v) {
+  return String(v ?? "")
+    .trim()
+    .replace(/%/g, "")
+    .replace(/\s+/g, "_")
+    .replace(/[^\p{L}\p{N}_-]/gu, "")
+    .toLowerCase()
+    .slice(0, 60);
+}
+
+// Values from an array or one-per-line text: trimmed, blanks dropped.
+function sanitizeWildcardValues(v) {
+  const list = Array.isArray(v) ? v : String(v ?? "").split(/\r?\n/);
+  return list
+    .map((x) => String(x ?? "").trim().slice(0, 2000))
+    .filter(Boolean)
+    .slice(0, WILDCARD_MAX_VALUES);
+}
+
+function readWildcards() {
+  const list = readJson(WILDCARDS_FILE);
+  return Array.isArray(list) ? list : [];
+}
+
+// A name problem for `fields` (null if fine): both parts set, and not already taken.
+function wildcardConflict(list, fields, selfId = null) {
+  if (!fields.category || !fields.key) return "category and key are required (letters, numbers, _ or -)";
+  const dup = list.find((w) => w.id !== selfId && w.category === fields.category && w.key === fields.key);
+  return dup ? `%${fields.category}:${fields.key}% already exists` : null;
+}
+
+app.get("/api/wildcards", (req, res) => {
+  res.json({ code: 200, msg: "success", data: readWildcards() });
+});
+
+app.post("/api/wildcards", (req, res) => {
+  const list = readWildcards();
+  const fields = {
+    category: normalizeWildcardName(req.body?.category),
+    key: normalizeWildcardName(req.body?.key),
+    values: sanitizeWildcardValues(req.body?.values),
+  };
+  const problem = wildcardConflict(list, fields);
+  if (problem) return res.status(400).json({ code: 400, msg: problem });
+  const now = new Date().toISOString();
+  const entry = { id: randomUUID(), ...fields, createdAt: now, updatedAt: now };
+  writeJson(WILDCARDS_FILE, [...list, entry]);
+  res.json({ code: 200, msg: "saved", data: entry });
+});
+
+app.put("/api/wildcards/:id", (req, res) => {
+  const list = readWildcards();
+  const entry = list.find((w) => w.id === req.params.id);
+  if (!entry) return res.status(404).json({ code: 404, msg: "wildcard not found" });
+  const b = req.body || {};
+  const fields = {
+    category: b.category !== undefined ? normalizeWildcardName(b.category) : entry.category,
+    key: b.key !== undefined ? normalizeWildcardName(b.key) : entry.key,
+    values: b.values !== undefined ? sanitizeWildcardValues(b.values) : entry.values,
+  };
+  const problem = wildcardConflict(list, fields, entry.id);
+  if (problem) return res.status(400).json({ code: 400, msg: problem });
+  Object.assign(entry, fields, { updatedAt: new Date().toISOString() });
+  writeJson(WILDCARDS_FILE, list);
+  res.json({ code: 200, msg: "updated", data: entry });
+});
+
+app.delete("/api/wildcards/:id", (req, res) => {
+  const list = readWildcards();
+  if (!list.some((w) => w.id === req.params.id)) {
+    return res.status(404).json({ code: 404, msg: "wildcard not found" });
+  }
+  writeJson(WILDCARDS_FILE, list.filter((w) => w.id !== req.params.id));
+  res.json({ code: 200, msg: "deleted" });
+});
+
 app.get("/api/prompts", (req, res) => {
   const proj = findProject(req.query.projectId);
   if (!proj) return res.status(400).json({ code: 400, msg: "unknown projectId" });
@@ -2917,7 +3018,7 @@ app.post("/api/prompts", (req, res) => {
   if (!proj) return res.status(400).json({ code: 400, msg: "unknown projectId" });
   const fields = sanitizePromptFields({ type: "default", duration: null, weight: 0, refs: [], ...req.body });
   if (!fields.title) return res.status(400).json({ code: 400, msg: "title is required" });
-  if (fields.type === "minimax") fields.minimax ||= sanitizeMinimax(null); // a new one may start blank
+  if (STRUCTURED_PROMPT_TYPES.has(fields.type)) fields.minimax ||= sanitizeMinimax(null); // a new one may start blank
   else if (!fields.prompt?.trim() && !fields.refs.length) {
     return res.status(400).json({ code: 400, msg: "nothing to save — the prompt is empty" });
   }
@@ -2991,7 +3092,7 @@ app.put("/api/prompts/:id", (req, res) => {
   if (fields.title !== undefined && !fields.title) {
     return res.status(400).json({ code: 400, msg: "title can't be empty" });
   }
-  if (fields.type === "minimax") fields.prompt = ""; // its text is compiled from the fields
+  if (STRUCTURED_PROMPT_TYPES.has(fields.type)) fields.prompt = ""; // its text is compiled from the fields
   if (fields.type === "default") fields.minimax = null; // converted back to plain text
   Object.assign(entry, fields, { updatedAt: new Date().toISOString() });
   writePrompts(proj, list);

@@ -10,6 +10,40 @@ heading for that version with the date, commit, then tag the commit `vX.Y.Z`.
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-09-21
+
+### Added
+
+- **Add media straight to the gallery.** The Gallery panel has its own drop zone:
+  drop images, videos or audio on it (or click to browse) and they're saved to
+  the active project — no need to route them through a reference field or a
+  History card. The panel is also available for every model now (including
+  ComfyUI workflows and text-to-image models), since it's the project's media
+  library rather than part of the reference fields.
+- **MiniMax T2V saved prompts.** A second MiniMax format for text-to-video, per
+  MiniMax's base prompt guide: the same style, cuts, soundscape and music fields
+  as the MiniMax form, without references, subjects, summary or retention. It
+  compiles to `integrated_multimodal_description`, `overall_soundscape` and
+  `non_diegetic_music`. Create one with **＋ New MiniMax T2V prompt**, choose it
+  as the format when saving, or switch an existing prompt with **⇄ To T2V** /
+  **⇄ To MiniMax ref** in the editor.
+- **Wildcards.** A third tab beside Saved Prompts holds named lists of values,
+  grouped by category and shared by every project (`wildcards.json`). Write
+  `%category:key%` in any prompt — kie.ai, ComfyUI (every text field) or a
+  saved prompt — and each run picks one value at random; a ×N batch or queue
+  gets fresh picks per run. `%category:key:1%` keeps its pick, so a later
+  `%category:key%` in the same run reuses it. Values can contain tokens of their
+  own. An unknown or empty wildcard stops the run before anything is sent.
+  History shows the prompt as sent, and Re-import brings back the `%…%`
+  template. Tokens copy with a click or go into the prompt with ＋ Insert.
+  Typing `%` in any prompt box (including the saved-prompt editor) suggests
+  categories and lists as you type; ↑/↓ and Enter or Tab to pick one. Tokens
+  are highlighted in the text — tinted when the list exists, red when it doesn't
+  (a typo, or a list that was deleted).
+  On first start, `wildcards.json` is created from `default.wildcards.json`, a
+  starter set of example lists (clothing, rooms, hair, dialogue) kept in the
+  repo; your own `wildcards.json` stays out of git.
+
 ## [1.1.0] - 2026-09-19
 
 ### Added

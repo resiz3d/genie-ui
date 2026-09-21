@@ -8,6 +8,7 @@ exports/
 history.json
 images.json
 projects.json
+wildcards.json
 projects/
 settings/
 
