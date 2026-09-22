@@ -1062,6 +1062,13 @@ img.zoomable {
   font-size: 0.75rem;
   color: var(--muted);
 }
+/* Chain position (⛓ 6→9) — lifted out of the muted timestamp line, since telling
+   two runs of one chain apart is the whole point of showing it. */
+.hist-chain {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  cursor: help;
+}
 
 /* Collapsible settings + full-prompt panel on each history card. */
 .hist-details {

@@ -788,16 +788,21 @@ function listWorkflowFiles() {
   return [...custom, ...shipped].sort((a, b) => a.label.localeCompare(b.label));
 }
 
-// List workflows + their tokens (so the UI can render controls).
+// List workflows + their tokens (so the UI can render controls) and their
+// continuation roles (so it knows which runs can be continued).
 app.get("/api/workflows", (req, res) => {
   const list = listWorkflowFiles().map(({ file, label }) => {
     const name = label.replace(/\.json$/i, "");
     try {
       const text = fs.readFileSync(workflowPath(file), "utf8");
       const workflow = JSON.parse(text); // also validates it's JSON
-      return { file, name, tokens: controlModel(workflow, text).tokens };
+      // `roles` is what tells the UI a workflow can be continued. It has to be read
+      // from the workflow itself rather than picked out of the token list: since
+      // {{token}} authoring was retired that list holds only *recognized* controls,
+      // which never carry a role, and the Continue/Re-roll buttons silently vanished.
+      return { file, name, tokens: controlModel(workflow, text).tokens, roles: continuationRoles(workflow) };
     } catch (err) {
-      return { file, name, tokens: [], error: err.message };
+      return { file, name, tokens: [], roles: {}, error: err.message };
     }
   });
   res.json({ code: 200, msg: "success", data: list });
