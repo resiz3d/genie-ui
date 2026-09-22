@@ -31,7 +31,7 @@
   },
   "15": {
     "inputs": {
-      "vae_name": "qwen_image_vae.safetensors"
+      "vae_name": ""
     },
     "class_type": "VAELoader",
     "_meta": {
@@ -69,7 +69,7 @@
   },
   "44": {
     "inputs": {
-      "unet_name": "anima-base-v1.0.safetensors",
+      "unet_name": "",
       "weight_dtype": "default"
     },
     "class_type": "UNETLoader",
@@ -79,7 +79,7 @@
   },
   "45": {
     "inputs": {
-      "clip_name": "qwen_3_06b_base.safetensors",
+      "clip_name": "",
       "type": "stable_diffusion",
       "device": "default"
     },

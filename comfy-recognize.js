@@ -441,17 +441,43 @@ function isReferencedBy(workflow, id) {
 // Inject the user's reference media into a (clone of a) workflow, in place. For each
 // collection with provided files, we clear the target node's existing wiring for it,
 // create one media-loader node per file, and wire them into the dotted inputs
-// (mirroring the tokenized MiniMax workflow). A collection with no provided files is
-// left exactly as the export had it. Orphaned original loaders are pruned.
+// (mirroring the tokenized MiniMax workflow). A collection with no provided files
+// keeps the export's baked wiring, except for slots the export ships empty (see
+// dropEmptyReferenceSlots). Orphaned original loaders are pruned.
 //
 // `provided` is { collectionName: [comfyFilename, …] }. `references` comes from
 // recognizeWorkflow(workflow).references.
+// A reference slot whose loader carries no filename — a workflow shared without its
+// author's local file — would make ComfyUI open its input *folder* ("LoadImage:
+// [Errno 13] Permission denied: …/input"), so it's unwired and pruned and the run
+// simply goes without that reference. Slots with a real filename are left alone.
+function dropEmptyReferenceSlots(workflow, ref) {
+  const target = workflow[ref.targetNodeId];
+  if (!target?.inputs) return;
+  const loaders = new Set();
+  for (const w of ref.wires || []) {
+    for (const k of Object.keys(target.inputs)) {
+      if (!k.startsWith(w.prefix)) continue;
+      const link = asLink(target.inputs[k]);
+      const file = link && workflow[link[0]]?.inputs?.[ref.loader.input];
+      if (typeof file === "string" && !file.trim()) {
+        loaders.add(String(link[0]));
+        delete target.inputs[k];
+      }
+    }
+  }
+  for (const id of loaders) if (!isReferencedBy(workflow, id)) delete workflow[id];
+}
+
 export function applyReferenceCollections(workflow, references, provided) {
   if (!references?.length || !provided) return workflow;
   let nextId = maxNumericId(workflow) + 1;
   for (const ref of references) {
     const files = Array.isArray(provided[ref.name]) ? provided[ref.name].filter(Boolean) : null;
-    if (!files || !files.length) continue; // untouched — keep the export's baked wiring
+    if (!files || !files.length) {
+      dropEmptyReferenceSlots(workflow, ref); // keep baked files, drop blank slots
+      continue;
+    }
     const target = workflow[ref.targetNodeId];
     if (!target?.inputs) continue;
     // Clear the collection's current wiring, remembering the loaders it pointed to.

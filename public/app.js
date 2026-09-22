@@ -1812,6 +1812,7 @@ function comfyRefTags() {
 // Write the real tags onto the thumbnails. Called from every media field's render, so
 // it must not itself trigger a re-render.
 function refreshComfyRefTags() {
+  syncComfyDefaultNotes(); // what the run falls back to depends on what's filled
   if (comfyRefLabelScheme !== "minimax_h3") return;
   for (const [f, tags] of comfyRefTags()) {
     const labels = f.el.querySelectorAll(".dropzone .thumb.ready .img-label");
@@ -2067,7 +2068,9 @@ async function renderComfyControls() {
   const seq = ++comfyRenderSeq;
   comfyControlsEl.innerHTML = "";
   comfyFields = [];
+  comfyDefaultNotes.clear();
   comfyLoraControl = null;
+  comfyMediaControl = null;
   comfyBypassControl = null;
   comfyRefLabelScheme = null;
   const wf = comfyWorkflows.find((w) => w.file === comfyFile());
@@ -2211,7 +2214,16 @@ async function renderComfyControls() {
   const settingsScalars = [];
   for (const it of items) {
     if (it.kind === "reference") {
-      const ctrl = makeComfyReference(it.ref);
+      const ctrl = makeComfyReference(
+        it.ref,
+        // Only files that are really in ComfyUI's input folder: one that isn't can't be
+        // what the run falls back to, and the media panel already shows it as missing.
+        (meta.workflowMedia || []).filter(
+          (m) =>
+            m.reference === (it.ref.label || it.ref.name) &&
+            (meta.mediaOptions?.[m.kind] || []).includes(m.file)
+        )
+      );
       ctrl.el.style.gridColumn = "span 12";
       comfyControlsEl.appendChild(ctrl.el);
       comfyFields.push(ctrl);
@@ -2273,7 +2285,12 @@ async function renderComfyControls() {
   // LoRAs are always offered, so they live in the main form (not tucked inside the
   // "ComfyUI Settings" drawer). The drawer holds only installed-file pickers and
   // patch-node toggles now, and isn't rendered at all when it has neither.
-  comfyLoraControl = makeComfyLoraControl(meta.loraOptions || [], !!meta.offline);
+  if ((meta.workflowMedia || []).length) {
+    comfyMediaControl = makeComfyMediaControl(meta.workflowMedia, meta.mediaOptions, !!meta.offline);
+    comfyControlsEl.appendChild(comfyMediaControl.el);
+  }
+  comfyLoraControl = makeComfyLoraControl(meta.loraOptions || [], !!meta.offline, meta.workflowLoras || []);
+  comfyLoraControl.setLoras([]); // the workflow's own LoRAs, before any saved loadout
   comfyControlsEl.appendChild(comfyLoraControl.el);
   if (body.childElementCount) comfyControlsEl.appendChild(details);
 
@@ -2312,6 +2329,7 @@ async function renderComfyControls() {
     prefillComfyControls(settings);
     refreshComfyRefTags();
     if (comfyLoraControl && Array.isArray(settings.loras)) comfyLoraControl.setLoras(settings.loras);
+    if (comfyMediaControl && Array.isArray(settings.workflowMedia)) comfyMediaControl.setMedia(settings.workflowMedia);
     if (comfyBypassControl && Array.isArray(settings.bypass)) comfyBypassControl.setDisabled(settings.bypass);
   } catch {
     /* no saved settings — token defaults stand */
@@ -2379,13 +2397,101 @@ function makeComfyBypassControl(bypassable) {
 
 // The dynamic-LoRA section: rows of {file dropdown, strength (keyboard, −5..5)}
 // plus an "Add LoRA" button. LoRAs are spliced into the graph server-side.
-function makeComfyLoraControl(loraOptions, offline) {
+// `workflowLoras` are the LoRA nodes the workflow itself carries (see workflowLoras()
+// server-side). They're listed first, marked, and are the workflow's own: unchecking one
+// takes it out of the graph for the run, and editing its file or strength rewrites that
+// node — so nothing loads that you can't see here.
+// The media the workflow loads by itself (see workflowMedia() server-side): a LoadImage
+// and friends with a filename baked in. They'd otherwise feed every run invisibly, so
+// each is listed with its file — pointable at another file in ComfyUI's input folder,
+// or unchecked to leave it out of the run. A loader a reference field already covers
+// says so, since dropping your own files there replaces it anyway.
+let comfyMediaControl = null;
+
+function makeComfyMediaControl(workflowMedia, mediaOptions, offline) {
+  const field = document.createElement("div");
+  field.className = "field comfy-wfmedia";
+  field.style.gridColumn = "span 12";
+  field.innerHTML =
+    `<div class="field-head"><span>Media in this workflow ` +
+    `<span class="hint">(loaded by the workflow itself — uncheck to leave one out of the run)</span></span></div>` +
+    `<div class="wfmedia-rows"></div>`;
+  const rowsEl = field.querySelector(".wfmedia-rows");
+  const rows = [];
+
+  for (const m of workflowMedia) {
+    const row = document.createElement("div");
+    row.className = "lora-row wfmedia-row";
+    row.dataset.nodeId = m.nodeId;
+    const chk = document.createElement("input");
+    chk.type = "checkbox";
+    chk.className = "lora-enabled";
+    chk.checked = true;
+    chk.title = `From the workflow (${m.title}) — unchecked takes it out of the graph for the run`;
+    const options = (mediaOptions?.[m.kind] || []).map((o) => ({ label: o, value: o }));
+    let sel;
+    if (options.length) {
+      if (!options.some((o) => o.value === m.file)) options.unshift({ label: `${m.file} (not in ComfyUI's input folder)`, value: m.file });
+      sel = makeSearchableSelect(options, m.file, "Type to filter files…");
+      sel.classList.add("lora-name");
+    } else {
+      // Offline: no file list to choose from, so just show what the workflow carries.
+      sel = document.createElement("div");
+      sel.className = "lora-name wfmedia-file";
+      sel.textContent = m.file;
+      sel.value = m.file;
+    }
+    const where = document.createElement("span");
+    where.className = "lora-from";
+    const syncWhere = () => {
+      const differs = String(sel.value) !== String(m.file);
+      where.textContent = differs ? "overriding" : m.reference ? `${m.reference} reference` : m.kind;
+      where.classList.toggle("lora-overridden", differs);
+      where.title = differs
+        ? `The workflow loads “${m.file}” here (${m.title}, node ${m.nodeId})`
+        : m.reference
+          ? `Wired into the ${m.reference} reference — your own files there replace it`
+          : `${m.title}, node ${m.nodeId}`;
+    };
+    syncWhere();
+    sel.addEventListener?.("change", syncWhere);
+    const syncDim = () => {
+      row.classList.toggle("lora-off", !chk.checked);
+      syncComfyDefaultNotes(); // an unchecked loader is no longer the fallback
+    };
+    chk.addEventListener("change", syncDim);
+    row.append(chk, sel, where);
+    rowsEl.appendChild(row);
+    rows.push({ m, chk, sel });
+  }
+
+  return {
+    el: field,
+    // [{ nodeId, file, enabled }] — the server writes these onto the workflow's loaders.
+    getMedia: () => rows.map(({ m, chk, sel }) => ({ nodeId: m.nodeId, file: sel.value || m.file, enabled: chk.checked })),
+    setMedia: (arr) => {
+      for (const saved of Array.isArray(arr) ? arr : []) {
+        const row = rows.find((r) => String(r.m.nodeId) === String(saved.nodeId));
+        if (!row) continue;
+        if (saved.file) row.sel.value = saved.file;
+        row.chk.checked = saved.enabled !== false;
+        row.chk.dispatchEvent(new Event("change"));
+        row.sel.dispatchEvent?.(new Event("change", { bubbles: false })); // "overriding" tag
+      }
+    },
+  };
+}
+
+function makeComfyLoraControl(loraOptions, offline, workflowLoras = []) {
   const field = document.createElement("div");
   field.className = "field comfy-loras";
   field.style.gridColumn = "span 12";
   field.innerHTML =
-    `<div class="field-head"><span>LoRAs ` +
-    `<span class="hint">(added on top of the workflow · strength −5 to 5)</span></span></div>` +
+    `<div class="field-head"><span>LoRAs <span class="hint">` +
+    (workflowLoras.length
+      ? `(${workflowLoras.length} already in this workflow, listed first — uncheck to leave one out · strength −5 to 5)`
+      : `(added on top of the workflow · strength −5 to 5)`) +
+    `</span></span></div>` +
     `<div class="lora-rows"></div>`;
   const rowsEl = field.querySelector(".lora-rows");
   const addBtn = document.createElement("button");
@@ -2402,16 +2508,24 @@ function makeComfyLoraControl(loraOptions, offline) {
     addBtn.disabled = true;
   }
 
-  const addRow = (name = "", strength = 1, enabled = true) => {
+  // `from` set = one of the workflow's own LoRA nodes: tagged, and kept in the list
+  // (unchecking is what switches it off, so it can always be put back).
+  const addRow = (name = "", strength = 1, enabled = true, from = null) => {
     const row = document.createElement("div");
     row.className = "lora-row";
+    if (from) {
+      row.dataset.nodeId = from.nodeId;
+      row.classList.add("lora-baked");
+    }
     // A disabled LoRA stays in the loadout (and is saved) but isn't injected — which
     // is different from a strength of 0.
     const chk = document.createElement("input");
     chk.type = "checkbox";
     chk.className = "lora-enabled";
     chk.checked = enabled !== false;
-    chk.title = "Enable this LoRA — unchecked keeps it in the loadout but doesn't apply it";
+    chk.title = from
+      ? `From the workflow (${from.title}) — unchecked takes it out of the graph for the run`
+      : "Enable this LoRA — unchecked keeps it in the loadout but doesn't apply it";
     const loraOpts = loraOptions.map((o) => ({ label: o, value: o }));
     if (name && !loraOptions.includes(name)) loraOpts.push({ label: `${name} (not installed)`, value: name });
     const sel = makeSearchableSelect(loraOpts, name || "", "Type to filter LoRAs…");
@@ -2428,12 +2542,35 @@ function makeComfyLoraControl(loraOptions, offline) {
     rm.type = "button";
     rm.className = "x";
     rm.textContent = "×";
-    rm.title = "Remove LoRA";
-    rm.addEventListener("click", () => row.remove());
+    if (from) {
+      // The workflow owns this one — it goes back if you re-check it, so it isn't dropped
+      // from the list; the checkbox is what leaves it out of a run.
+      rm.disabled = true;
+      rm.title = "From the workflow — uncheck it to leave it out";
+    } else {
+      rm.title = "Remove LoRA";
+      rm.addEventListener("click", () => row.remove());
+    }
     const syncDim = () => row.classList.toggle("lora-off", !chk.checked);
     chk.addEventListener("change", syncDim);
     syncDim();
-    row.append(chk, sel, str, rm);
+    row.append(chk, sel, str);
+    if (from) {
+      const tag = document.createElement("span");
+      tag.className = "lora-from";
+      const syncTag = () => {
+        const differs = String(sel.value) !== String(from.name);
+        tag.textContent = differs ? "overriding" : "in workflow";
+        tag.classList.toggle("lora-overridden", differs);
+        tag.title = differs
+          ? `The workflow loads “${from.name}” here (${from.title}, node ${from.nodeId})`
+          : `This LoRA is part of the workflow file (${from.title}, node ${from.nodeId})`;
+      };
+      syncTag();
+      sel.addEventListener("change", syncTag);
+      row.appendChild(tag);
+    }
+    row.appendChild(rm);
     rowsEl.appendChild(row);
   };
   addBtn.addEventListener("click", () => addRow(loraOptions[0] || "", 1, true));
@@ -2447,11 +2584,19 @@ function makeComfyLoraControl(loraOptions, offline) {
           name: r.querySelector(".lora-name").value,
           strength: Number(r.querySelector(".lora-strength").value),
           enabled: r.querySelector(".lora-enabled").checked,
+          ...(r.dataset.nodeId ? { nodeId: r.dataset.nodeId } : {}),
         }))
         .filter((l) => l.name),
+    // The workflow's own LoRAs always head the list; `arr` (saved settings, or a
+    // re-imported run) supplies their state by nodeId, then the added ones follow.
     setLoras: (arr) => {
+      const saved = Array.isArray(arr) ? arr : [];
       rowsEl.innerHTML = "";
-      for (const l of arr || [])
+      for (const w of workflowLoras) {
+        const s = saved.find((x) => String(x.nodeId) === String(w.nodeId));
+        addRow(s?.name || w.name, typeof s?.strength === "number" ? s.strength : w.strength, s?.enabled !== false, w);
+      }
+      for (const l of saved.filter((x) => !x.nodeId && x.name))
         addRow(l.name, typeof l.strength === "number" ? l.strength : 1, l.enabled !== false);
     },
   };
@@ -2576,6 +2721,17 @@ function comfyResetValue(token, type, choices) {
   return undefined;
 }
 
+// A workflow's nodes are the workflow; the files named in them are only a starting
+// point, and a name you don't have is quietly replaced by your own selection — no
+// warning, nothing to answer. The one thing worth saying is where the UI looks empty
+// but the workflow's own file would still be loaded: an untouched reference field (see
+// comfyDefaultNotes), which the run silently inherits from the export.
+const comfyDefaultNotes = new Set(); // sync() per reference field that can fall back
+
+function syncComfyDefaultNotes() {
+  for (const sync of comfyDefaultNotes) sync();
+}
+
 // Build one scalar control (select / number / text / textarea) and register it,
 // appending it to `container` (the main grid, or the ComfyUI Settings drawer).
 function renderScalarControl(token, type, container = comfyControlsEl) {
@@ -2642,8 +2798,20 @@ function renderScalarControl(token, type, container = comfyControlsEl) {
     comfyFields.push(toggleCtrl);
     return;
   }
+  // ComfyUI lists a model by its path inside the folder ("Minimax\h3.safetensors"), so a
+  // workflow that names the bare file (or was exported with it in another subfolder)
+  // matches nothing. The same filename elsewhere in the tree is the file it meant —
+  // taken when it's unambiguous, rather than silently falling back to the first entry.
+  const baseName = (v) => String(v ?? "").split(/[\\/]/).pop().toLowerCase();
+  const sameFileElsewhere = (v) => {
+    if (!token.combo || !v) return null;
+    const hits = parsedOptions.filter((o) => baseName(o.value) === baseName(v));
+    return hits.length === 1 ? hits[0].value : null;
+  };
   if (type === "select") {
-    const initial = parsedOptions.some((o) => o.value === token.default) ? token.default : parsedOptions[0]?.value ?? "";
+    const initial = parsedOptions.some((o) => o.value === token.default)
+      ? token.default
+      : sameFileElsewhere(token.default) ?? parsedOptions[0]?.value ?? "";
     if (parsedOptions.length > 10) {
       // Long lists (models, samplers, …) get a type-to-filter dropdown.
       input = makeSearchableSelect(parsedOptions, initial);
@@ -2851,13 +3019,35 @@ function makeComfyMediaMulti(base, mediaKind, tokenNames, tail = null, soundtrac
 // series is submit-side: filled files are uploaded, gathered in order, and the
 // server injects one loader node per file wired into the target node (no pre-wired
 // slots to prune). `ref` is a descriptor from workflow-meta's `references`.
-function makeComfyReference(ref) {
+function makeComfyReference(ref, baked = []) {
   const max = ref.max || 9;
   const slotNames = Array.from({ length: max }, (_, i) => `${ref.name}_${i + 1}`);
   const ctrl = makeComfyMediaMulti(ref.name, ref.kind, slotNames, null, [], ref.label);
   ctrl.isMultiMedia = false; // not a token series — don't route through values/prune
   ctrl.isReferenceCollection = true;
   ctrl.collectionName = ref.name;
+  // The workflow's own files wired into this reference. While you add none of your
+  // own, they're what the run uses — which the field looks empty for, so it says so.
+  // (Unchecking one in "Media in this workflow" takes it out, and the note with it.)
+  if (baked.length) {
+    const note = document.createElement("p");
+    note.className = "comfy-missing hidden";
+    ctrl.el.appendChild(note);
+    const sync = () => {
+      const live = comfyMediaControl
+        ? comfyMediaControl.getMedia().filter((m) => baked.some((b) => String(b.nodeId) === String(m.nodeId)) && m.enabled !== false)
+        : baked.map((b) => ({ file: b.file }));
+      const show = live.length > 0 && ctrl.filledMedia().length === 0;
+      note.classList.toggle("hidden", !show);
+      if (show) {
+        note.textContent =
+          `⚠ Nothing loaded here — the run uses what the workflow already has: ` +
+          `${live.map((m) => `“${m.file}”`).join(", ")}.`;
+      }
+    };
+    comfyDefaultNotes.add(sync);
+  }
+
   // Uploaded ComfyUI filenames for the filled slots, in order — what the server
   // injects loaders for.
   ctrl.resolveOrdered = async () => {
@@ -2928,6 +3118,7 @@ async function saveComfySettings(file) {
     if (typeof f.peekAfter === "function") data.__after[f.name] = f.peekAfter();
   }
   if (comfyLoraControl) data.loras = comfyLoraControl.getLoras();
+  if (comfyMediaControl) data.workflowMedia = comfyMediaControl.getMedia();
   if (comfyBypassControl) data.bypass = comfyBypassControl.getDisabled();
   try {
     await fetch(`/api/comfy/settings?file=${encodeURIComponent(file)}`, {
@@ -2999,8 +3190,10 @@ async function submitComfy() {
   // Redoing a run in place writes one fixed slot; queueing several would stamp the
   // same one N times.
   const count = cont?.into ? 1 : queueCount();
+  // Every row goes to the server: an added LoRA that's off is skipped there, and one of
+  // the workflow's own that's off is removed from the graph.
   const allLoras = comfyLoraControl ? comfyLoraControl.getLoras() : [];
-  const enabledLoras = allLoras.filter((l) => l.enabled !== false); // only these get injected
+  const wfMedia = comfyMediaControl ? comfyMediaControl.getMedia() : [];
   const bypass = comfyBypassControl ? comfyBypassControl.getDisabled() : [];
   const fromSaved = comfyFields.some((f) => f.isPrompt) ? runSavedPrompt() : null;
   const promptOverride = fromSaved ? exportSavedPromptText(fromSaved) : null;
@@ -3019,6 +3212,7 @@ async function submitComfy() {
       }
       const input = { model: `comfy:${wf.file}`, workflow: wf.name, values };
       if (allLoras.length) input.loras = allLoras; // store the full loadout (incl. disabled) for re-import
+      if (wfMedia.length) input.workflowMedia = wfMedia; // the workflow's own media, as this run had it
       if (bypass.length) input.bypass = bypass;
       if (Object.keys(templates).length) input.valueTemplates = templates; // Re-import restores the %tokens%
       if (typeof values.prompt === "string" && values.prompt.trim()) input.prompt = values.prompt.trim();
@@ -3026,7 +3220,7 @@ async function submitComfy() {
         if (!input.prompt && promptOverride.trim()) input.prompt = resolveWildcards(promptOverride).trim();
         input.savedPrompt = savedPromptStamp(fromSaved); // History only, not sent to ComfyUI
       }
-      await queueComfyRun(wf, values, prune, mediaIds, input, enabledLoras, bypass, tails, cont, references);
+      await queueComfyRun(wf, values, prune, mediaIds, input, allLoras, bypass, tails, cont, references, wfMedia);
       // Advance seeds for the next queued run (no-op when the mode is "fixed").
       for (const f of comfyFields) if (typeof f.advance === "function") f.advance();
     }
@@ -3042,7 +3236,7 @@ async function submitComfy() {
 // Queue one ComfyUI run: one request queues it AND creates the pending History
 // entry server-side (so a dropped connection can't orphan it — the sweep finishes
 // it). Then attach a live status to that pending card, wire Cancel, and poll.
-async function queueComfyRun(wf, values, prune, mediaIds, input, loras, bypass, tails, cont, references) {
+async function queueComfyRun(wf, values, prune, mediaIds, input, loras, bypass, tails, cont, references, workflowMedia = []) {
   const job = {
     jobId: nextJobId++,
     taskId: null,
@@ -3060,6 +3254,7 @@ async function queueComfyRun(wf, values, prune, mediaIds, input, loras, bypass, 
         values,
         prune,
         references: references || {},
+        workflowMedia: workflowMedia || [],
         loras: loras || [],
         bypass: bypass || [],
         tails: tails || {},
@@ -7210,6 +7405,7 @@ async function applyEntry(entry) {
     await comfyRenderPromise; // wait for the controls to exist before filling them
     prefillComfyControls({ ...(input.values || {}), ...(input.valueTemplates || {}) });
     if (comfyLoraControl && Array.isArray(input.loras)) comfyLoraControl.setLoras(input.loras);
+    if (comfyMediaControl && Array.isArray(input.workflowMedia)) comfyMediaControl.setMedia(input.workflowMedia);
     if (comfyBypassControl && Array.isArray(input.bypass)) comfyBypassControl.setDisabled(input.bypass);
     await restoreComfyMedia(entry); // re-populate the image/video/audio fields
     // "Generate preview" is a persisted global preference — re-import leaves it as-is.

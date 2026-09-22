@@ -10,6 +10,58 @@ heading for that version with the date, commit, then tag the commit `vX.Y.Z`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Empty reference slots no longer break a run.** A workflow shared without its
+  author's local reference file (`LoadImage` with an empty filename) made ComfyUI
+  open its input *folder* — "LoadImage: [Errno 13] Permission denied:
+  …\ComfyUI\input" — on every run that didn't supply that reference. Blank
+  slots are now unwired and dropped before the workflow is sent; slots with a real
+  filename still run as exported.
+- **A workflow's own media is now shown in the UI instead of loading invisibly.**
+  A `LoadImage` (or audio/video loader) with a filename baked in fed every run
+  with nothing on screen to say so, and failed outright when that file wasn't in
+  your ComfyUI input folder. A **Media in this workflow** panel now lists each
+  one: point it at another file in your input folder, or uncheck it to take it
+  out of the run. A loader a reference field already covers is marked as such,
+  since adding your own files there replaces it. Remembered per workflow and
+  recorded on the History entry, so Re-import brings the same state back.
+- **A workflow's own LoRAs are now shown in the UI instead of applying invisibly.**
+  A workflow exported straight from ComfyUI carries its LoRAs in the graph, and
+  GENie's LoRA panel only ever listed the ones you added — so the baked ones
+  stacked underneath every run with nothing on screen to say so (and, if the file
+  wasn't installed, failed validation with "Value not in list — lora_name"). They
+  now head the LoRA list, tagged **in workflow**: change the file or strength and
+  that node is rewritten, or uncheck it and the node is taken out of the graph
+  for the run (its MODEL and CLIP wiring is reconnected around it). LoRAs you add
+  are still spliced in on top, and the state is remembered per workflow.
+- **A model the workflow names is found even when it sits in a subfolder.**
+  ComfyUI lists a model by its path inside the models folder
+  (`Minimax\h3.safetensors`), so a workflow naming the bare filename matched
+  nothing and the dropdown quietly fell back to the *first installed model* —
+  which could be a completely different architecture, failing deep in the sampler
+  ("SamplerCustomAdvanced: tuple index out of range") rather than up front. The
+  same filename elsewhere in the tree is now used, when it's unambiguous.
+- **A reference field says when the run would fall back to the workflow's own
+  file.** An untouched reference field looks empty while the workflow's baked
+  `LoadImage` still feeds the node, so it now reads "Nothing loaded here — the
+  run uses what the workflow already has: 'she-hulk.webp'". It appears only when
+  that file is really in your ComfyUI input folder, and goes as soon as you add a
+  file of your own or uncheck the loader. A file the workflow names but you don't
+  have is never warned about — your own selection simply replaces it.
+- **The bundled workflows ship without file names.** Every model, CLIP, VAE and
+  reference-image field in `workflows/default/` is now empty: the nodes are the
+  workflow, the files are yours. GENie fills each dropdown from what ComfyUI has
+  installed and drops empty reference slots from the graph, so a default runs
+  without chasing someone else's files. What each was built against is recorded
+  in `workflows/default/README.md`.
+- **The bundled MiniMax H3 Ref2Video workflows no longer ask for files you don't
+  have.** The Advanced workflow had a LoRA loader wired to one specific local
+  `.safetensors`, which failed validation ("Value not in list — lora_name") for
+  anyone else. It's gone: add LoRAs from the UI instead and GENie splices them in
+  at generate time, as it does for every other workflow. Their baked reference
+  images were cleared too.
+
 ## [1.2.0] - 2026-09-21
 
 ### Added

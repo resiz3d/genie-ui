@@ -2361,6 +2361,44 @@ img.zoomable {
   margin: 0 0 0.75rem;
   font-size: 0.85rem;
 }
+/* The workflow's own media loaders, listed like the LoRA rows. */
+.wfmedia-row .wfmedia-file {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+}
+
+/* A LoRA the workflow file itself carries, listed in the panel like the added ones. */
+.lora-from {
+  padding: 0 0.35rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 600;
+  line-height: 1.6;
+  white-space: nowrap;
+}
+.lora-row .x:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+/* A row whose file no longer matches what the workflow loads. */
+.lora-from.lora-overridden {
+  border-color: var(--warn, #ffcf7a);
+  color: var(--warn, #ffcf7a);
+}
+
+/* "you're using a different file from the one this workflow loads" note under a combo. */
+.comfy-missing {
+  margin: 0.35rem 0 0;
+  color: var(--warn, #ffcf7a);
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
 .sp-save-warn {
   margin: 0.5rem 0 0;
   font-size: 0.8rem;

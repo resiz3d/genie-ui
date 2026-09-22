@@ -848,7 +848,18 @@ app.get("/api/comfy/workflow-meta", async (req, res) => {
     return res.json({
       code: 200,
       msg: "success",
-      data: { offline: true, tokens: withTail(withKeys), loraOptions: [], bypassable, refLabelScheme: scheme, unknownTypes: unknownTypes || [], references: references || [] },
+      data: {
+        offline: true,
+        tokens: withTail(withKeys),
+        loraOptions: [],
+        workflowLoras: workflowLoras(workflow),
+        workflowMedia: workflowMedia(workflow, references),
+        mediaOptions: { image: [], audio: [], video: [] },
+        bypassable,
+        refLabelScheme: scheme,
+        unknownTypes: unknownTypes || [],
+        references: references || [],
+      },
     });
   }
   const enriched = withKeys.map((t) => enrichToken(t, nodeMap, objectInfo, workflow));
@@ -859,6 +870,9 @@ app.get("/api/comfy/workflow-meta", async (req, res) => {
       offline: false,
       tokens: withTail(enriched),
       loraOptions: loraOptionsFrom(objectInfo),
+      workflowLoras: workflowLoras(workflow),
+      workflowMedia: workflowMedia(workflow, references),
+      mediaOptions: mediaOptionsFrom(objectInfo),
       bypassable,
       refLabelScheme: scheme,
       unknownTypes: unknownTypes || [],
@@ -1159,6 +1173,141 @@ function loraModelSource(workflow) {
     source = chain[i];
   }
   return source;
+}
+
+// The media a workflow loads by itself: LoadImage/LoadAudio/LoadVideo nodes carrying a
+// filename from the author's ComfyUI input folder. Like a baked LoRA, these would feed
+// every run with nothing on screen to say so — and a file you don't have fails the run —
+// so they're listed in the UI, where each can be pointed at another of your input files
+// or left out of the run entirely.
+const MEDIA_LOADER_INPUTS = [["image", "image"], ["audio", "audio"], ["video", "video"]];
+
+// The loader's filename input, e.g. ["image", "she-hulk.webp"] — null for anything else.
+function mediaLoaderInput(node) {
+  if (!/load/i.test(node?.class_type || "")) return null;
+  for (const [input, kind] of MEDIA_LOADER_INPUTS) {
+    const v = node.inputs?.[input];
+    if (typeof v === "string" && v.trim()) return { input, kind, file: v };
+  }
+  return null;
+}
+
+function workflowMedia(workflow, references = []) {
+  // Loaders a reference collection already wires: they're shown on that reference field,
+  // and adding your own files there replaces them (applyReferenceCollections).
+  const inReference = new Map();
+  for (const ref of references || []) {
+    const target = workflow[ref.targetNodeId];
+    for (const w of ref.wires || []) {
+      for (const [k, v] of Object.entries(target?.inputs || {})) {
+        if (k.startsWith(w.prefix) && Array.isArray(v) && v.length === 2) inReference.set(String(v[0]), ref.label || ref.name);
+      }
+    }
+  }
+  return Object.entries(workflow || {})
+    .map(([id, n]) => ({ id, n, m: mediaLoaderInput(n) }))
+    .filter((x) => x.m)
+    .map(({ id, n, m }) => ({
+      nodeId: String(id),
+      input: m.input,
+      kind: m.kind,
+      file: m.file,
+      title: n._meta?.title || n.class_type,
+      reference: inReference.get(String(id)) || null,
+    }))
+    .sort((a, b) => Number(a.nodeId) - Number(b.nodeId));
+}
+
+// Take a loader out of the graph, dropping the inputs that pointed at it (a reference
+// slot, or an optional input). What's left is a run without that media.
+function removeMediaNode(workflow, id) {
+  for (const n of Object.values(workflow)) {
+    for (const [k, v] of Object.entries(n.inputs || {})) {
+      if (Array.isArray(v) && v.length === 2 && String(v[0]) === String(id)) delete n.inputs[k];
+    }
+  }
+  delete workflow[String(id)];
+}
+
+// The UI's state for those loaders: a different file is written into the node, and one
+// switched off is removed.
+function applyWorkflowMedia(workflow, media) {
+  for (const m of Array.isArray(media) ? media : []) {
+    const node = workflow[String(m?.nodeId)];
+    if (!node) continue;
+    if (m.enabled === false) {
+      removeMediaNode(workflow, m.nodeId);
+      continue;
+    }
+    const cur = mediaLoaderInput(node);
+    if (cur && m.file) node.inputs[cur.input] = String(m.file);
+  }
+  return workflow;
+}
+
+// The files in ComfyUI's input folder, per kind — what those loaders can be pointed at.
+function mediaOptionsFrom(objectInfo) {
+  const opts = (cls, input) => objectInfo?.[cls]?.input?.required?.[input]?.[0];
+  const list = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === "string") : []);
+  return {
+    image: list(opts("LoadImage", "image")),
+    audio: list(opts("LoadAudio", "audio")),
+    video: list(opts("LoadVideo", "video")),
+  };
+}
+
+// The LoRA loaders a workflow already carries. A workflow exported straight from
+// ComfyUI keeps its LoRAs baked into the graph, where they'd apply to every run without
+// showing up anywhere in the UI — so they're listed in the LoRA panel alongside the ones
+// you add, and can be re-pointed, re-weighted or switched off.
+function workflowLoras(workflow) {
+  return Object.entries(workflow || {})
+    .filter(([, n]) => /lora/i.test(n?.class_type || "") && typeof n?.inputs?.lora_name === "string")
+    .map(([id, n]) => ({
+      nodeId: String(id),
+      name: n.inputs.lora_name,
+      strength: clampStrength(n.inputs.strength_model ?? n.inputs.strength ?? 1),
+      title: n._meta?.title || n.class_type,
+      modelOnly: !Array.isArray(n.inputs.clip),
+    }))
+    .sort((a, b) => Number(a.nodeId) - Number(b.nodeId));
+}
+
+// Take one of those nodes out of the graph, closing the chain: each output is
+// reconnected to the input it patched (MODEL→model, CLIP→clip), so what came before the
+// LoRA now feeds whatever came after it.
+function removeLoraNode(workflow, id) {
+  const node = workflow[String(id)];
+  if (!node) return;
+  const asLink = (v) => (Array.isArray(v) && v.length === 2 ? v : null);
+  const bySlot = [asLink(node.inputs?.model), asLink(node.inputs?.clip)];
+  for (const n of Object.values(workflow)) {
+    for (const [k, v] of Object.entries(n.inputs || {})) {
+      if (!asLink(v) || String(v[0]) !== String(id)) continue;
+      const src = bySlot[v[1]] || bySlot[0];
+      if (src) n.inputs[k] = src;
+      else delete n.inputs[k];
+    }
+  }
+  delete workflow[String(id)];
+}
+
+// Write the LoRA panel's state back onto the workflow's own LoRA nodes: an edited file
+// or strength goes into the node, and one switched off is removed. Rows without a
+// nodeId are the LoRAs added in the UI — injectLoras splices those in.
+function applyWorkflowLoras(workflow, loras) {
+  for (const l of Array.isArray(loras) ? loras : []) {
+    if (!l?.nodeId || !workflow[String(l.nodeId)]) continue;
+    if (l.enabled === false || !l.name) {
+      removeLoraNode(workflow, l.nodeId);
+      continue;
+    }
+    const inputs = workflow[String(l.nodeId)].inputs;
+    inputs.lora_name = String(l.name);
+    const s = clampStrength(l.strength);
+    for (const k of ["strength_model", "strength_clip", "strength"]) if (k in inputs) inputs[k] = s;
+  }
+  return workflow;
 }
 
 // Splice a chain of LoraLoader nodes between the workflow's MODEL/CLIP source and
@@ -1620,7 +1769,7 @@ async function comfyVram() {
 // orphan the run).
 app.post("/api/comfy/generate", async (req, res) => {
   ensureComfyWs(); // start listening for progress before the run begins
-  const { file, values, prune, loras, bypass, tails, input, mediaLocalIds, projectId, refVideoSeconds, previewMethod, continueFrom, references: providedRefs } =
+  const { file, values, prune, loras, bypass, tails, input, mediaLocalIds, projectId, refVideoSeconds, previewMethod, continueFrom, references: providedRefs, workflowMedia: mediaState } =
     req.body || {};
   const wfPath = workflowPath(file);
   if (!wfPath || !fs.existsSync(wfPath)) {
@@ -1673,7 +1822,9 @@ app.post("/api/comfy/generate", async (req, res) => {
     applyReferenceCollections(workflow, recognizedRefs, providedRefs); // inject dynamic ref media loaders
     tailResult = await applyTails(workflow, tokenNodes, tails); // trim references to their last N seconds
     for (const id of Array.isArray(bypass) ? bypass : []) bypassNode(workflow, String(id)); // disabled patch nodes
-    workflow = injectLoras(workflow, loras); // splice in any dynamically-added LoRAs
+    applyWorkflowMedia(workflow, mediaState); // the workflow's own media loaders: re-pointed, or removed when off
+    applyWorkflowLoras(workflow, loras); // the workflow's own LoRA nodes: edited, or removed when off
+    workflow = injectLoras(workflow, (Array.isArray(loras) ? loras : []).filter((l) => !l?.nodeId && l?.enabled !== false));
     passes = progressPasses(workflow, loadNodeTypes(NODE_TYPES_DIR)); // after values + bypass
   } catch (err) {
     return res.status(400).json({ code: 400, msg: err.message || "Workflow could not be prepared" });

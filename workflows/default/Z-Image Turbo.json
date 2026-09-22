@@ -80,7 +80,7 @@
   },
   "12": {
     "inputs": {
-      "vae_name": "ae.safetensors"
+      "vae_name": ""
     },
     "class_type": "VAELoader",
     "_meta": {
@@ -89,7 +89,7 @@
   },
   "13": {
     "inputs": {
-      "clip_name": "qwen3_4b_fp8_scaled.safetensors",
+      "clip_name": "",
       "type": "lumina2",
       "device": "default"
     },
@@ -100,7 +100,7 @@
   },
   "14": {
     "inputs": {
-      "unet_name": "cyberrealisticZImage_v10.safetensors",
+      "unet_name": "",
       "weight_dtype": "default"
     },
     "class_type": "UNETLoader",
