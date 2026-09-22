@@ -1694,6 +1694,12 @@ async function loadWorkflows() {
   }
   restoreLastModel(); // now that comfy options exist, reselect the last-used model
   syncKieAvailability(); // no kie.ai key: fall back to a ComfyUI workflow if needed
+  // History cards read `comfyWorkflows` to decide whether a run can be continued, and
+  // this fetch races the history one at startup. Lose that race and every card renders
+  // against an empty list, so the Continue / Re-roll buttons are missing until
+  // something else happens to re-render — the chain tag still shows, which makes it
+  // look like the run is chained but uncontinuable. Re-render once the list is in.
+  if (historyEntries.length) renderHistory(historyEntries);
 }
 
 // Reselect the last-used model (base or comfy:) if it's still a valid option.
