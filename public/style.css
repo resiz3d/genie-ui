@@ -11,6 +11,13 @@
   --error: #ff6b6b;
 }
 
+/* No mobile text inflation (iOS enlarges text in landscape, but not a textarea's —
+   which also throws the wildcard highlight off its words). */
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
 * {
   box-sizing: border-box;
 }

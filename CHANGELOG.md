@@ -12,6 +12,9 @@ heading for that version with the date, commit, then tag the commit `vX.Y.Z`.
 
 ### Fixed
 
+- **Wildcard highlighting and zoom on iPhone/iPad.** Highlights no longer drift
+  off their words (iOS insets textarea text 3px, and enlarged other text in
+  landscape), and tapping a field no longer leaves the page zoomed in.
 - **Empty reference slots no longer break a run.** A workflow shared without its
   author's local reference file (`LoadImage` with an empty filename) made ComfyUI
   open its input *folder* — "LoadImage: [Errno 13] Permission denied:
@@ -83,9 +86,12 @@ heading for that version with the date, commit, then tag the commit `vX.Y.Z`.
   grouped by category and shared by every project (`wildcards.json`). Write
   `%category:key%` in any prompt — kie.ai, ComfyUI (every text field) or a
   saved prompt — and each run picks one value at random; a ×N batch or queue
-  gets fresh picks per run. `%category:key:1%` keeps its pick, so a later
+  gets fresh picks per run. A token used more than once in a run never repeats a
+  value until the list is used up. `%category:key:1%` keeps its pick, so a later
   `%category:key%` in the same run reuses it. Values can contain tokens of their
-  own. An unknown or empty wildcard stops the run before anything is sent.
+  own, one level deep: a list used inside another can't hold tokens itself (so
+  there are no loops), and the editor won't save one that would. An unknown or
+  empty wildcard, or one nested too deep, stops the run before anything is sent.
   History shows the prompt as sent, and Re-import brings back the `%…%`
   template. Tokens copy with a click or go into the prompt with ＋ Insert.
   Typing `%` in any prompt box (including the saved-prompt editor) suggests

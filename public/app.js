@@ -3872,7 +3872,8 @@ savedFilterEl.addEventListener("input", () => {
 // each run gets one of the values at random — resolveWildcards, applied at Generate, so
 // the prompt keeps its tokens and History records both the picks and the template.
 // %category:key:1% also remembers its pick for the rest of that run: a later
-// %category:key% reuses it (":0", the default, picks afresh every time).
+// %category:key% reuses it (":0", the default, picks afresh every time — never a value
+// that list already gave in the run, until they've all been used).
 // Managed on the prompt field's third tab.
 let wildcards = [];
 let wildcardsFilter = "";
@@ -3897,13 +3898,35 @@ function findWildcard(category, key) {
 }
 
 const hasWildcards = (text) => [...String(text ?? "").matchAll(WILDCARD_RE)].length > 0;
+// Whether any of a list's values holds a token of its own.
+const wildcardNests = (w) => (w.values || []).some(hasWildcards);
+
+// A random value from the list, avoiding ones already drawn from it in this run (the
+// same `memo`), so a token used twice gives two different values; once every value has
+// been drawn, the whole list is back in play.
+const wcDrawn = new WeakMap(); // memo → Map(id → Set of values drawn)
+function wildcardPick(w, id, memo) {
+  if (!wcDrawn.has(memo)) wcDrawn.set(memo, new Map());
+  const drawn = wcDrawn.get(memo);
+  if (!drawn.has(id)) drawn.set(id, new Set());
+  const used = drawn.get(id);
+  let pool = w.values.filter((v) => !used.has(v));
+  if (!pool.length) {
+    used.clear();
+    pool = w.values;
+  }
+  const v = pool[Math.floor(Math.random() * pool.length)];
+  used.add(v);
+  return v;
+}
 
 // Swap every %category:key% for a random value from that list. `memo` holds the picks
 // a :1 token asked to keep — share one Map across everything in a single run (every
-// text field of a workflow). Values may hold tokens of their own (resolved in turn, a
-// few levels deep). Throws on a token with no list, or an empty one, so a run never
-// sends a literal %…% to the model.
-function resolveWildcards(text, memo = new Map(), depth = 0) {
+// text field of a workflow). Values may hold tokens of their own, one level deep: a
+// wildcard used inside another can't hold tokens itself (`parent` is the outer token),
+// which also rules out loops. Throws on a token with no list, an empty one, or one
+// nested too deep, so a run never sends a literal %…% to the model.
+function resolveWildcards(text, memo = new Map(), parent = null) {
   const s = String(text ?? "");
   if (!s.includes("%")) return s;
   const missing = new Set();
@@ -3913,10 +3936,16 @@ function resolveWildcards(text, memo = new Map(), depth = 0) {
       missing.add(m);
       return m;
     }
+    // Every value checked, not just the pick, so the error doesn't come and go at random.
+    if (parent && wildcardNests(w)) {
+      throw new Error(
+        `${parent} uses ${m}, which holds wildcards of its own — wildcards can only be nested one level deep.`
+      );
+    }
     const id = `${w.category}:${w.key}`;
     if (memo.has(id)) return memo.get(id);
-    const raw = w.values[Math.floor(Math.random() * w.values.length)];
-    const v = depth < 5 ? resolveWildcards(raw, memo, depth + 1) : raw;
+    const raw = wildcardPick(w, id, memo);
+    const v = parent ? raw : resolveWildcards(raw, memo, wildcardToken(w));
     if (flag === "1" || flag === "true") memo.set(id, v);
     return v;
   });
@@ -4130,9 +4159,36 @@ function closeWildcardEditor({ force = false } = {}) {
   hide(wildcardModal);
 }
 
+// Why saving this list would nest wildcards more than one level deep, or "" if it wouldn't.
+function wildcardNestProblem(category, key, values) {
+  const self = `%${category}:${key}%`;
+  const refs = (vals) => vals.flatMap((v) => [...v.matchAll(WILDCARD_RE)]);
+  const refName = ([, c, k]) => `%${wildcardName(c)}:${wildcardName(k)}%`;
+  const tokens = refs(values);
+  for (const t of tokens) {
+    if (refName(t) === self) return `${self} can't use itself.`;
+    const w = findWildcard(t[1], t[2]);
+    if (w && wildcardNests(w)) {
+      return `${t[0]} holds wildcards of its own, so it can't be used here — wildcards can only be nested one level deep.`;
+    }
+  }
+  if (!tokens.length) return "";
+  // This list now holds tokens, so no other list may use it.
+  const user = wildcards.find((w) => w.id !== wcEditing?.w?.id && refs(w.values || []).some((t) => refName(t) === self));
+  return user
+    ? `${wildcardToken(user)} uses ${self}, so ${self} can't hold wildcards — they can only be nested one level deep.`
+    : "";
+}
+
 async function saveWildcard() {
   if (!wcEditing) return;
   const body = { category: wcCategory.value, key: wcKey.value, values: wcLines() };
+  const problem = wildcardNestProblem(wildcardName(body.category), wildcardName(body.key), body.values);
+  if (problem) {
+    wcError.textContent = problem;
+    show(wcError);
+    return;
+  }
   const btn = document.getElementById("wcSave");
   btn.disabled = true;
   try {
@@ -4170,7 +4226,8 @@ document.getElementById("wcTry").addEventListener("click", () => {
     return;
   }
   try {
-    wcTryOut.textContent = `→ ${resolveWildcards(lines[Math.floor(Math.random() * lines.length)])}`;
+    const self = `%${wildcardName(wcCategory.value) || "category"}:${wildcardName(wcKey.value) || "key"}%`;
+    wcTryOut.textContent = `→ ${resolveWildcards(lines[Math.floor(Math.random() * lines.length)], new Map(), self)}`;
   } catch (err) {
     wcTryOut.textContent = err.message;
   }
@@ -4391,6 +4448,17 @@ window.addEventListener("resize", () => wcAcClose());
 // several rules style `… > textarea`. Kept in step on input, scroll, resize, and a
 // light poll that catches code setting .value and fields being shown or hidden.
 const wcHl = new Map(); // textarea → { back, inner, text, geo }
+// iOS Safari insets a textarea's text 3px each side, beyond its padding (and it can't
+// be styled away), so the backdrop adds the same or its lines wrap differently.
+const IS_IOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+const WC_HL_IOS_INSET = IS_IOS ? 3 : 0;
+
+// iOS zooms in on any field whose text is under 16px when it's tapped, and stays zoomed.
+// maximum-scale stops that; iOS still lets the user pinch-zoom regardless.
+if (IS_IOS) {
+  document.querySelector('meta[name="viewport"]')
+    ?.setAttribute("content", "width=device-width, initial-scale=1.0, maximum-scale=1.0");
+}
 
 function wcHlAttach(ta) {
   if (wcHl.has(ta) || ta.closest(".wc-ac")) return;
@@ -4461,6 +4529,10 @@ function wcHlSync(ta, force = false) {
       "fontFamily", "fontSize", "fontWeight", "fontStyle", "letterSpacing", "lineHeight",
       "textTransform", "textIndent", "wordSpacing", "tabSize", "wordBreak",
     ]) s[p] = cs[p];
+    if (WC_HL_IOS_INSET) {
+      s.paddingLeft = `${parseFloat(cs.paddingLeft) + WC_HL_IOS_INSET}px`;
+      s.paddingRight = `${parseFloat(cs.paddingRight) + WC_HL_IOS_INSET}px`;
+    }
   }
   // Placed by where both are on screen, not by offsetLeft/Top: in a scrolling box (the
   // editor modal) the backdrop's containing block isn't the textarea's offsetParent.
