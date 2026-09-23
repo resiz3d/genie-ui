@@ -17,7 +17,7 @@ heading for that version with the date, commit, then tag the commit `vX.Y.Z`.
   landscape), and tapping a field no longer leaves the page zoomed in.
 - **Empty reference slots no longer break a run.** A workflow shared without its
   author's local reference file (`LoadImage` with an empty filename) made ComfyUI
-  open its input *folder* — "LoadImage: [Errno 13] Permission denied:
+  open its input _folder_ — "LoadImage: [Errno 13] Permission denied:
   …\ComfyUI\input" — on every run that didn't supply that reference. Blank
   slots are now unwired and dropped before the workflow is sent; slots with a real
   filename still run as exported.
@@ -41,7 +41,7 @@ heading for that version with the date, commit, then tag the commit `vX.Y.Z`.
 - **A model the workflow names is found even when it sits in a subfolder.**
   ComfyUI lists a model by its path inside the models folder
   (`Minimax\h3.safetensors`), so a workflow naming the bare filename matched
-  nothing and the dropdown quietly fell back to the *first installed model* —
+  nothing and the dropdown quietly fell back to the _first installed model_ —
   which could be a completely different architecture, failing deep in the sampler
   ("SamplerCustomAdvanced: tuple index out of range") rather than up front. The
   same filename elsewhere in the tree is now used, when it's unambiguous.
@@ -163,19 +163,19 @@ heading for that version with the date, commit, then tag the commit `vX.Y.Z`.
   used (Generate, Import, preview) — the compiled text isn't stored, so nothing is
   kept twice:
   - `subject_definitions` comes from the references' gallery key + definition
-    (`<sibella>, seen in <Picture 1>, is …`), plus subjects without an image typed
-    on the prompt (e.g. `<new>`). Keys ignore case (`Sibella` and `sibella` are
+    (`<genie>, seen in <Picture 1>, is …`), plus subjects without an image typed
+    on the prompt (e.g. `<new>`). Keys ignore case (`GENie` and `genie` are
     one subject; keys are stored lowercase), a definition typed on the prompt
     overrides the image's gallery one, and a definition that already starts with
-    `<sibella> is …` (or just `is …`) isn't doubled. Only subjects with a definition get
+    `<genie> is …` (or just `is …`) isn't doubled. Only subjects with a definition get
     a line: a reference whose key isn't defined anywhere (say a second image of
     a subject, cited as `@manuela_sheet` in `<manuela>`'s definition) is just an
     `@key` token.
-  - **@key tokens:** write `@sibella` anywhere in a MiniMax prompt to mean the
+  - **@key tokens:** write `@genie` anywhere in a MiniMax prompt to mean the
     reference file with that key; it compiles to its current label (`<Picture 1>`,
     or `<Picture 1> and <Picture 2>` for a key on several files), so re-ordering
     the references keeps every mention on the right file. A shot that mentions
-    `@sibella` counts as `<sibella>` appearing in it.
+    `@genie` counts as `<genie>` appearing in it.
   - The **reference media** (their thumbnails, key and definition boxes, and
     ＋ Add media) sit between subject_definitions and summary in this form, so the
     images are in view while you write the definitions.
@@ -189,13 +189,13 @@ heading for that version with the date, commit, then tag the commit `vX.Y.Z`.
     keep themselves in time order: change a cut's time and it moves (and renumbers)
     into place when you finish typing.
   - `overall_soundscape` and `non_diegetic_music`.
-  The editor shows the compiled prompt live. **＋ New MiniMax prompt** (Saved
-  Prompts tab) starts one from the form's references; the Save dialog has a
-  **Format** choice (picked for you when the text already has MiniMax sections);
-  and **⇄ To MiniMax** / **⇄ To plain text** convert an existing prompt, splitting
-  text on its section headers, `[Shot N]` markers and "At 00:15.000" paragraphs.
+    The editor shows the compiled prompt live. **＋ New MiniMax prompt** (Saved
+    Prompts tab) starts one from the form's references; the Save dialog has a
+    **Format** choice (picked for you when the text already has MiniMax sections);
+    and **⇄ To MiniMax** / **⇄ To plain text** convert an existing prompt, splitting
+    text on its section headers, `[Shot N]` markers and "At 00:15.000" paragraphs.
 - **Subject key and definition on gallery media.** Each gallery file can now carry
-  a key (e.g. `@sibella`) and a definition of what it shows. Every reference in
+  a key (e.g. `@genie`) and a definition of what it shows. Every reference in
   the saved-prompt editor has a key field and a definition box, saved with
   **Save changes**. They're stored on the gallery item, so every prompt using that
   file shares them. Groundwork for LLM-assisted prompting.
@@ -251,7 +251,7 @@ second path.
 
 ### Highlights
 
-- **Zero-authoring ComfyUI workflows** — drop a raw *File → Export (API)* `.json` in
+- **Zero-authoring ComfyUI workflows** — drop a raw _File → Export (API)_ `.json` in
   `workflows/` and the form is built from recognized nodes, one collapsible section
   per node. Support for a node type is a small JSON file in `node_types/`.
 - **Projects, History and gallery** — every run (local or cloud) is filed per project

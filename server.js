@@ -5,7 +5,13 @@ import { fileURLToPath } from "node:url";
 import { randomUUID, createHash, timingSafeEqual } from "node:crypto";
 import { spawn, execFile } from "node:child_process";
 import os from "node:os";
-import { loadNodeTypes, recognizeWorkflow, applyRecognizedValues, applyReferenceCollections, progressPasses } from "./comfy-recognize.js";
+import {
+  loadNodeTypes,
+  recognizeWorkflow,
+  applyRecognizedValues,
+  applyReferenceCollections,
+  progressPasses,
+} from "./comfy-recognize.js";
 import "dotenv/config";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -13,7 +19,10 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // and the page footer read it from here.
 const APP_VERSION = (() => {
   try {
-    return JSON.parse(fs.readFileSync(path.join(__dirname, "package.json"), "utf8")).version || "";
+    return (
+      JSON.parse(fs.readFileSync(path.join(__dirname, "package.json"), "utf8"))
+        .version || ""
+    );
   } catch {
     return "";
   }
@@ -24,9 +33,10 @@ const UPLOAD_URL = "https://kieai.redpandaai.co/api/file-stream-upload";
 const CREDITS_URL = "https://api.kie.ai/api/v1/chat/credit";
 // Optional: without a key GENie is a pure ComfyUI front-end. The .env.example
 // placeholder counts as no key, so a copied-but-unedited .env behaves the same.
-const API_KEY = /^(|your_api_key_here)$/.test((process.env.KIE_API_KEY || "").trim())
-  ? ""
-  : process.env.KIE_API_KEY.trim();
+const API_KEY =
+  /^(|your_api_key_here)$/.test((process.env.KIE_API_KEY || "").trim()) ? "" : (
+    process.env.KIE_API_KEY.trim()
+  );
 const PORT = process.env.PORT || 3000;
 // Network interface to bind. Default 127.0.0.1 = this PC only. Set HOST=0.0.0.0
 // in .env to also accept connections from other devices on your home network
@@ -41,11 +51,20 @@ const AUTH_ENABLED = APP_PASSWORD.length > 0;
 // holds generated results. Override via .env; a relative value resolves against the
 // app root, an absolute path is used as-is. Per-project subfolders live inside each.
 // The legacy VIDEO_DIR / IMAGES_DIR names are still honored as a fallback.
-const OUTPUT_DIR = path.resolve(__dirname, process.env.OUTPUT_DIR || process.env.VIDEO_DIR || "output");
-const INPUT_DIR = path.resolve(__dirname, process.env.INPUT_DIR || process.env.IMAGES_DIR || "input");
+const OUTPUT_DIR = path.resolve(
+  __dirname,
+  process.env.OUTPUT_DIR || process.env.VIDEO_DIR || "output",
+);
+const INPUT_DIR = path.resolve(
+  __dirname,
+  process.env.INPUT_DIR || process.env.IMAGES_DIR || "input",
+);
 // Where "Export" writes shareable, self-contained history bundles (one subfolder
 // per export). Override via EXPORTS_DIR; created on demand, not at startup.
-const EXPORTS_DIR = path.resolve(__dirname, process.env.EXPORTS_DIR || "exports");
+const EXPORTS_DIR = path.resolve(
+  __dirname,
+  process.env.EXPORTS_DIR || "exports",
+);
 const HISTORY_FILE = path.join(__dirname, "history.json");
 const IMAGES_FILE = path.join(__dirname, "images.json");
 const PROJECTS_FILE = path.join(__dirname, "projects.json");
@@ -53,7 +72,10 @@ const PROJECTS_FILE = path.join(__dirname, "projects.json");
 const WILDCARDS_FILE = path.join(__dirname, "wildcards.json");
 // Per-project data that isn't media: <PROJECT_DATA_DIR>/<slug>/prompts.json holds the
 // project's saved prompts. Keyed by slug like the media folders (slugs survive renames).
-const PROJECT_DATA_DIR = path.resolve(__dirname, process.env.PROJECT_DATA_DIR || "projects");
+const PROJECT_DATA_DIR = path.resolve(
+  __dirname,
+  process.env.PROJECT_DATA_DIR || "projects",
+);
 
 // --- ComfyUI (optional local backend) -------------------------------------
 // Point at a running ComfyUI instance to run local workflows from the UI.
@@ -67,41 +89,62 @@ const PROJECT_DATA_DIR = path.resolve(__dirname, process.env.PROJECT_DATA_DIR ||
 // too and addressed by their relative path, while top-level and shipped ones keep
 // their bare filename, which is what every history entry written before subfolders
 // existed uses.
-const COMFYUI_URL = (process.env.COMFYUI_URL || "http://127.0.0.1:8188").replace(/\/+$/, "");
-const WORKFLOWS_DIR = path.resolve(__dirname, process.env.WORKFLOWS_DIR || "workflows");
+const COMFYUI_URL = (
+  process.env.COMFYUI_URL || "http://127.0.0.1:8188"
+).replace(/\/+$/, "");
+const WORKFLOWS_DIR = path.resolve(
+  __dirname,
+  process.env.WORKFLOWS_DIR || "workflows",
+);
 const WORKFLOWS_DEFAULT_DIR = path.join(WORKFLOWS_DIR, "default");
 // Per-workflow config (chosen model/LoRA/VAE/sampler + the dynamic LoRA list),
 // stored server-side so it's shared across devices (incl. the phone over LAN).
-const COMFY_SETTINGS_DIR = path.resolve(__dirname, process.env.COMFY_SETTINGS_DIR || "settings/comfy");
+const COMFY_SETTINGS_DIR = path.resolve(
+  __dirname,
+  process.env.COMFY_SETTINGS_DIR || "settings/comfy",
+);
 // Data-driven node recognition library. Each node_types/*.json describes which of a
 // node's inputs become form controls, so a raw ComfyUI export drives the form.
 // See comfy-recognize.js and node_types/README.md.
-const NODE_TYPES_DIR = path.resolve(__dirname, process.env.NODE_TYPES_DIR || "node_types");
+const NODE_TYPES_DIR = path.resolve(
+  __dirname,
+  process.env.NODE_TYPES_DIR || "node_types",
+);
 // Live latent previews. ComfyUI honors extra_data.preview_method per prompt, so
 // previews work on any workflow with no workflow-JSON edits and no ComfyUI launch
 // flags. COMFY_PREVIEW_METHOD=off is a hard kill switch whatever a browser asks for.
-const COMFY_PREVIEW_METHOD = (process.env.COMFY_PREVIEW_METHOD || "auto").toLowerCase();
+const COMFY_PREVIEW_METHOD = (
+  process.env.COMFY_PREVIEW_METHOD || "auto"
+).toLowerCase();
 const PREVIEW_METHODS = new Set(["none", "auto", "latent2rgb", "taesd"]);
 
 function comfyPreviewMethod(requested) {
-  if (COMFY_PREVIEW_METHOD === "off" || COMFY_PREVIEW_METHOD === "none") return "none";
+  if (COMFY_PREVIEW_METHOD === "off" || COMFY_PREVIEW_METHOD === "none")
+    return "none";
   const want = String(requested || "").toLowerCase();
   if (want === "off") return "none";
   if (PREVIEW_METHODS.has(want)) return want;
-  return PREVIEW_METHODS.has(COMFY_PREVIEW_METHOD) ? COMFY_PREVIEW_METHOD : "auto";
+  return PREVIEW_METHODS.has(COMFY_PREVIEW_METHOD) ? COMFY_PREVIEW_METHOD : (
+      "auto"
+    );
 }
 
 if (!API_KEY) {
   console.log(
     "\n  No KIE_API_KEY set — kie.ai cloud models are disabled; ComfyUI workflows work as usual.\n" +
-      "  To enable them, add a key from https://kie.ai/api-key to .env and restart.\n"
+      "  To enable them, add a key from https://kie.ai/api-key to .env and restart.\n",
   );
 }
 
 // Guard for routes that call kie.ai: without a key they'd only bounce off its auth.
 function requireKieKey(req, res, next) {
   if (API_KEY) return next();
-  res.status(400).json({ code: 400, msg: "No kie.ai API key configured — add KIE_API_KEY to .env to use the kie.ai models." });
+  res
+    .status(400)
+    .json({
+      code: 400,
+      msg: "No kie.ai API key configured — add KIE_API_KEY to .env to use the kie.ai models.",
+    });
 }
 
 fs.mkdirSync(OUTPUT_DIR, { recursive: true });
@@ -151,7 +194,12 @@ function saveHistoryEntry(entry, fallback) {
 function ensureDefaultProject() {
   const projects = readJson(PROJECTS_FILE);
   if (!projects.some((p) => p.id === "default")) {
-    projects.unshift({ id: "default", name: "Default", slug: "default", createdAt: new Date().toISOString() });
+    projects.unshift({
+      id: "default",
+      name: "Default",
+      slug: "default",
+      createdAt: new Date().toISOString(),
+    });
     writeJson(PROJECTS_FILE, projects);
   }
   return projects;
@@ -160,12 +208,19 @@ function ensureDefaultProject() {
 // Resolve a projectId to a project, falling back to Default.
 function resolveProject(projectId) {
   const projects = ensureDefaultProject();
-  return projects.find((p) => p.id === projectId) || projects.find((p) => p.id === "default");
+  return (
+    projects.find((p) => p.id === projectId) ||
+    projects.find((p) => p.id === "default")
+  );
 }
 
 function slugify(name, projects) {
   const base =
-    name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "project";
+    name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 40) || "project";
   let slug = base;
   let n = 2;
   while (projects.some((p) => p.slug === slug)) slug = `${base}-${n++}`;
@@ -242,7 +297,9 @@ function moveHistoryVideo(entry, targetSlug) {
       }
       return movedUrl;
     } catch (err) {
-      console.error(`moveHistoryVideo: could not move ${from} -> ${to}: ${err.message || err}`);
+      console.error(
+        `moveHistoryVideo: could not move ${from} -> ${to}: ${err.message || err}`,
+      );
       return url; // keep the original, valid location
     }
   };
@@ -268,7 +325,10 @@ function migrateToProjects() {
     try {
       moveGalleryEntry(entry, "default");
     } catch (err) {
-      console.error(`Migration: failed to move ${entry.storedName}:`, err.message);
+      console.error(
+        `Migration: failed to move ${entry.storedName}:`,
+        err.message,
+      );
       continue;
     }
     entry.projectId = "default";
@@ -284,7 +344,10 @@ function migrateToProjects() {
     try {
       moveHistoryVideo(entry, "default");
     } catch (err) {
-      console.error(`Migration: failed to move ${entry.localVideo}:`, err.message);
+      console.error(
+        `Migration: failed to move ${entry.localVideo}:`,
+        err.message,
+      );
     }
     changed = true;
   }
@@ -352,8 +415,9 @@ app.use(express.json({ limit: "120mb" })); // base64 video can approach ~67MB fo
 const AUTH_COOKIE = "seedance_auth";
 // A stable, non-reversible token derived from the password: what we store in the
 // cookie and re-check on every request (survives restarts, reveals no plaintext).
-const AUTH_TOKEN = AUTH_ENABLED
-  ? createHash("sha256").update(`seedance-auth:${APP_PASSWORD}`).digest("hex")
+const AUTH_TOKEN =
+  AUTH_ENABLED ?
+    createHash("sha256").update(`seedance-auth:${APP_PASSWORD}`).digest("hex")
   : "";
 
 function tokenFor(password) {
@@ -373,7 +437,8 @@ function readCookie(req, name) {
   for (const part of raw.split(";")) {
     const eq = part.indexOf("=");
     if (eq < 0) continue;
-    if (part.slice(0, eq).trim() === name) return decodeURIComponent(part.slice(eq + 1).trim());
+    if (part.slice(0, eq).trim() === name)
+      return decodeURIComponent(part.slice(eq + 1).trim());
   }
   return null;
 }
@@ -441,7 +506,10 @@ if (AUTH_ENABLED) {
   // page; any other request → 401.
   app.use((req, res, next) => {
     if (tokenValid(readCookie(req, AUTH_COOKIE))) return next();
-    if (req.method === "GET" && (req.headers.accept || "").includes("text/html")) {
+    if (
+      req.method === "GET" &&
+      (req.headers.accept || "").includes("text/html")
+    ) {
       return res.status(200).type("html").send(loginPage());
     }
     res.status(401).json({ code: 401, msg: "Authentication required" });
@@ -500,7 +568,10 @@ app.post("/api/create", requireKieKey, (req, res) => {
   // `generatePreview` is a UI-only flag (stored in History, honored by the client);
   // strip it so it isn't forwarded to the kie.ai API as an unknown input field.
   const { model: requestedModel, generatePreview, ...input } = req.body || {};
-  const model = ALLOWED_MODELS.has(requestedModel) ? requestedModel : "bytedance/seedance-2";
+  const model =
+    ALLOWED_MODELS.has(requestedModel) ? requestedModel : (
+      "bytedance/seedance-2"
+    );
   const clean = {};
   for (const [k, v] of Object.entries(input)) {
     if (v === "" || v === null || v === undefined) continue;
@@ -516,19 +587,20 @@ app.post("/api/create", requireKieKey, (req, res) => {
         Authorization: `Bearer ${API_KEY}`,
       },
       body: JSON.stringify({ model, input: clean }),
-    })
+    }),
   );
 });
 
 // --- poll task status / result ------------------------------------------
 app.get("/api/status", requireKieKey, (req, res) => {
   const taskId = req.query.taskId;
-  if (!taskId) return res.status(400).json({ code: 400, msg: "taskId is required" });
+  if (!taskId)
+    return res.status(400).json({ code: 400, msg: "taskId is required" });
   forward(
     res,
     fetch(`${API_BASE}/recordInfo?taskId=${encodeURIComponent(taskId)}`, {
       headers: { Authorization: `Bearer ${API_KEY}` },
-    })
+    }),
   );
 });
 
@@ -580,7 +652,10 @@ function parseTokenSpec(inner) {
   }
   const parts = inner.split("|");
   const head = parts[0] || "";
-  const options = parts.slice(1).map((s) => s.trim()).filter((s) => s.length);
+  const options = parts
+    .slice(1)
+    .map((s) => s.trim())
+    .filter((s) => s.length);
   const eq = head.indexOf("=");
   const name = (eq >= 0 ? head.slice(0, eq) : head).trim();
   const def = eq >= 0 ? head.slice(eq + 1).trim() : "";
@@ -598,7 +673,8 @@ function continuationRoles(workflow) {
       let m;
       while ((m = re.exec(v)) !== null) {
         const spec = parseTokenSpec(m[1]);
-        if (spec.role && spec.name && !roles[spec.role]) roles[spec.role] = spec.name;
+        if (spec.role && spec.name && !roles[spec.role])
+          roles[spec.role] = spec.name;
       }
     }
   }
@@ -620,7 +696,12 @@ function controlModel(workflow, text) {
   let references = [];
   let bypassable = [];
   try {
-    ({ controls: recognized, handledNodeIds, references, bypassable } = recognizeWorkflow(workflow, nodeTypes));
+    ({
+      controls: recognized,
+      handledNodeIds,
+      references,
+      bypassable,
+    } = recognizeWorkflow(workflow, nodeTypes));
   } catch (err) {
     console.error("Node recognition failed:", err.message);
   }
@@ -655,10 +736,20 @@ function controlModel(workflow, text) {
       recognized: true,
     });
     if (!nodeMap.has(c.name) && c.owner) {
-      nodeMap.set(c.name, { id: c.owner.id, classType: c.owner.classType, input: c.owner.input });
+      nodeMap.set(c.name, {
+        id: c.owner.id,
+        classType: c.owner.classType,
+        input: c.owner.input,
+      });
     }
   }
-  return { tokens: recTokens, nodeMap, unknownTypes, references, bypassable: bypassable || [] };
+  return {
+    tokens: recTokens,
+    nodeMap,
+    unknownTypes,
+    references,
+    bypassable: bypassable || [],
+  };
 }
 
 // Replace tokens in a string. If the whole string is a single token, return the
@@ -680,10 +771,12 @@ function resolveTokenString(str, values) {
 // Deep-clone a parsed workflow, substituting tokens in every string leaf.
 function substituteWorkflow(node, values) {
   if (typeof node === "string") return resolveTokenString(node, values);
-  if (Array.isArray(node)) return node.map((n) => substituteWorkflow(n, values));
+  if (Array.isArray(node))
+    return node.map((n) => substituteWorkflow(n, values));
   if (node && typeof node === "object") {
     const out = {};
-    for (const [k, v] of Object.entries(node)) out[k] = substituteWorkflow(v, values);
+    for (const [k, v] of Object.entries(node))
+      out[k] = substituteWorkflow(v, values);
     return out;
   }
   return node;
@@ -710,7 +803,13 @@ function insideWorkflowsDir(p) {
   try {
     const real = fs.realpathSync(p);
     const rel = path.relative(fs.realpathSync(WORKFLOWS_DIR), real);
-    if (!rel || rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) return false;
+    if (
+      !rel ||
+      rel === ".." ||
+      rel.startsWith(`..${path.sep}`) ||
+      path.isAbsolute(rel)
+    )
+      return false;
     return fs.statSync(real).isFile();
   } catch {
     return false; // missing, unreadable, or a bad path
@@ -758,9 +857,18 @@ function jsonUnder(dir, { skipTop = [], depth = WORKFLOW_MAX_DEPTH } = {}) {
     for (const d of entries) {
       if (d.isSymbolicLink()) continue;
       if (d.isDirectory()) {
-        if (left <= 0 || d.name.startsWith(".") || WORKFLOW_SKIP_DIRS.has(d.name)) continue;
+        if (
+          left <= 0 ||
+          d.name.startsWith(".") ||
+          WORKFLOW_SKIP_DIRS.has(d.name)
+        )
+          continue;
         if (!rel && skipTop.includes(d.name)) continue; // `default/` is listed separately
-        walk(path.join(abs, d.name), rel ? `${rel}/${d.name}` : d.name, left - 1);
+        walk(
+          path.join(abs, d.name),
+          rel ? `${rel}/${d.name}` : d.name,
+          left - 1,
+        );
       } else if (d.isFile() && d.name.toLowerCase().endsWith(".json")) {
         out.push(rel ? `${rel}/${d.name}` : d.name);
       }
@@ -780,8 +888,14 @@ function jsonUnder(dir, { skipTop = [], depth = WORKFLOW_MAX_DEPTH } = {}) {
 // `default/` itself is listed flat: a nested shipped file would get a path id, which
 // workflowPath resolves against WORKFLOWS_DIR rather than `default/`.
 function listWorkflowFiles() {
-  const custom = jsonUnder(WORKFLOWS_DIR, { skipTop: ["default"] }).map((file) => ({ file, label: file }));
-  const taken = new Set(custom.filter((e) => !e.file.includes("/")).map((e) => e.file.toLowerCase()));
+  const custom = jsonUnder(WORKFLOWS_DIR, { skipTop: ["default"] }).map(
+    (file) => ({ file, label: file }),
+  );
+  const taken = new Set(
+    custom
+      .filter((e) => !e.file.includes("/"))
+      .map((e) => e.file.toLowerCase()),
+  );
   const shipped = jsonUnder(WORKFLOWS_DEFAULT_DIR, { depth: 0 })
     .filter((f) => !taken.has(f.toLowerCase()))
     .map((file) => ({ file, label: `default/${file}` }));
@@ -800,7 +914,12 @@ app.get("/api/workflows", (req, res) => {
       // from the workflow itself rather than picked out of the token list: since
       // {{token}} authoring was retired that list holds only *recognized* controls,
       // which never carry a role, and the Continue/Re-roll buttons silently vanished.
-      return { file, name, tokens: controlModel(workflow, text).tokens, roles: continuationRoles(workflow) };
+      return {
+        file,
+        name,
+        tokens: controlModel(workflow, text).tokens,
+        roles: continuationRoles(workflow),
+      };
     } catch (err) {
       return { file, name, tokens: [], roles: {}, error: err.message };
     }
@@ -814,14 +933,23 @@ app.get("/api/workflows", (req, res) => {
 // when ComfyUI is unreachable (the client then locks the picker controls).
 app.get("/api/comfy/workflow-meta", async (req, res) => {
   const wfPath = workflowPath(req.query.file);
-  if (!wfPath || !fs.existsSync(wfPath)) return res.status(400).json({ code: 400, msg: "Unknown workflow file" });
+  if (!wfPath || !fs.existsSync(wfPath))
+    return res.status(400).json({ code: 400, msg: "Unknown workflow file" });
   let workflow, tokens, nodeMap, unknownTypes, references, libraryBypassable;
   try {
     const text = fs.readFileSync(wfPath, "utf8");
     workflow = JSON.parse(text);
-    ({ tokens, nodeMap, unknownTypes, references, bypassable: libraryBypassable } = controlModel(workflow, text));
+    ({
+      tokens,
+      nodeMap,
+      unknownTypes,
+      references,
+      bypassable: libraryBypassable,
+    } = controlModel(workflow, text));
   } catch (err) {
-    return res.status(400).json({ code: 400, msg: `Workflow is not valid JSON: ${err.message}` });
+    return res
+      .status(400)
+      .json({ code: 400, msg: `Workflow is not valid JSON: ${err.message}` });
   }
   // Attach each token's node input key (e.g. `vae_name`, `image`) — available even
   // offline, and used to tell a model-file selector from a media-upload field.
@@ -841,9 +969,13 @@ app.get("/api/comfy/workflow-meta", async (req, res) => {
   // seconds" control (see tailSupport).
   const withTail = (list) =>
     list.map((t) =>
-      t.inputKey === "video" && t.nodeId
-        ? { ...t, tail: tailSupport(workflow, t.nodeId), soundtrack: videoHasSoundtrack(workflow, t.nodeId) }
-        : t
+      t.inputKey === "video" && t.nodeId ?
+        {
+          ...t,
+          tail: tailSupport(workflow, t.nodeId),
+          soundtrack: videoHasSoundtrack(workflow, t.nodeId),
+        }
+      : t,
     );
   const scheme = refLabelScheme(workflow);
   let objectInfo;
@@ -867,7 +999,9 @@ app.get("/api/comfy/workflow-meta", async (req, res) => {
       },
     });
   }
-  const enriched = withKeys.map((t) => enrichToken(t, nodeMap, objectInfo, workflow));
+  const enriched = withKeys.map((t) =>
+    enrichToken(t, nodeMap, objectInfo, workflow),
+  );
   res.json({
     code: 200,
     msg: "success",
@@ -897,9 +1031,14 @@ function comfySettingsPath(file) {
   const segs = workflowIdSegments(file);
   if (!segs) return null;
   const parts = segs.map((s, i) =>
-    (i === segs.length - 1 ? s.replace(/\.json$/i, "") : s).replace(/[^a-zA-Z0-9._-]/g, "_")
+    (i === segs.length - 1 ? s.replace(/\.json$/i, "") : s).replace(
+      /[^a-zA-Z0-9._-]/g,
+      "_",
+    ),
   );
-  return parts[parts.length - 1] ? `${path.join(COMFY_SETTINGS_DIR, ...parts)}.json` : null;
+  return parts[parts.length - 1] ?
+      `${path.join(COMFY_SETTINGS_DIR, ...parts)}.json`
+    : null;
 }
 app.get("/api/comfy/settings", (req, res) => {
   const p = comfySettingsPath(req.query.file);
@@ -936,28 +1075,40 @@ app.post("/api/comfy/upload", async (req, res) => {
   try {
     if (id) {
       const entry = readJson(IMAGES_FILE).find((i) => i.id === id);
-      if (!entry) return res.status(404).json({ code: 404, msg: "gallery item not found" });
+      if (!entry)
+        return res
+          .status(404)
+          .json({ code: 404, msg: "gallery item not found" });
       buf = fs.readFileSync(path.join(INPUT_DIR, entry.storedName));
       name = entry.name || fileName || "image.png";
     } else if (base64Data) {
       buf = Buffer.from(String(base64Data).split(",").pop(), "base64");
       name = fileName || "image.png";
     } else {
-      return res.status(400).json({ code: 400, msg: "base64Data or id is required" });
+      return res
+        .status(400)
+        .json({ code: 400, msg: "base64Data or id is required" });
     }
     const form = new FormData();
     form.append("image", new Blob([buf]), name);
     form.append("overwrite", "true");
-    const r = await fetch(`${COMFYUI_URL}/upload/image`, { method: "POST", body: form });
+    const r = await fetch(`${COMFYUI_URL}/upload/image`, {
+      method: "POST",
+      body: form,
+    });
     const body = await r.json().catch(() => ({}));
     if (!r.ok || !body.name) {
-      return res.status(502).json({ code: 502, msg: "ComfyUI rejected the image upload" });
+      return res
+        .status(502)
+        .json({ code: 502, msg: "ComfyUI rejected the image upload" });
     }
     const ref = body.subfolder ? `${body.subfolder}/${body.name}` : body.name;
     res.json({ code: 200, msg: "success", data: { filename: ref } });
   } catch (err) {
     console.error("ComfyUI upload error:", err);
-    res.status(502).json({ code: 502, msg: `Could not reach ComfyUI at ${COMFYUI_URL}` });
+    res
+      .status(502)
+      .json({ code: 502, msg: `Could not reach ComfyUI at ${COMFYUI_URL}` });
   }
 });
 
@@ -966,12 +1117,19 @@ app.post("/api/comfy/upload", async (req, res) => {
 // run is queued.
 app.get("/api/comfy/probe", async (req, res) => {
   const entry = readJson(IMAGES_FILE).find((i) => i.id === req.query.id);
-  if (!entry) return res.status(404).json({ code: 404, msg: "gallery item not found" });
+  if (!entry)
+    return res.status(404).json({ code: 404, msg: "gallery item not found" });
   const probe = await probeVideo(path.join(INPUT_DIR, entry.storedName));
   if (!probe) {
     return res
       .status(422)
-      .json({ code: 422, msg: ffprobeMissing ? "ffprobe was not found on PATH" : "Could not read the video's length" });
+      .json({
+        code: 422,
+        msg:
+          ffprobeMissing ?
+            "ffprobe was not found on PATH"
+          : "Could not read the video's length",
+      });
   }
   res.json({ code: 200, msg: "success", data: probe });
 });
@@ -982,7 +1140,8 @@ function nodeHasToken(node, name) {
     if (typeof v !== "string") continue;
     const re = /\{\{([\s\S]*?)\}\}/g;
     let m;
-    while ((m = re.exec(v)) !== null) if (parseTokenSpec(m[1]).name === name) return true;
+    while ((m = re.exec(v)) !== null)
+      if (parseTokenSpec(m[1]).name === name) return true;
   }
   return false;
 }
@@ -1002,7 +1161,8 @@ function pruneWorkflow(workflow, pruneNames) {
   for (const node of Object.values(workflow)) {
     if (!node?.inputs) continue;
     for (const [k, v] of Object.entries(node.inputs)) {
-      if (Array.isArray(v) && v.length === 2 && removed.has(String(v[0]))) delete node.inputs[k];
+      if (Array.isArray(v) && v.length === 2 && removed.has(String(v[0])))
+        delete node.inputs[k];
     }
   }
   return workflow;
@@ -1014,7 +1174,12 @@ let objectInfoCache = null;
 let objectInfoAt = 0;
 const OBJECT_INFO_TTL_MS = 30000;
 async function getObjectInfo(force = false) {
-  if (!force && objectInfoCache && Date.now() - objectInfoAt < OBJECT_INFO_TTL_MS) return objectInfoCache;
+  if (
+    !force &&
+    objectInfoCache &&
+    Date.now() - objectInfoAt < OBJECT_INFO_TTL_MS
+  )
+    return objectInfoCache;
   const r = await fetch(`${COMFYUI_URL}/object_info`);
   if (!r.ok) throw new Error(`object_info ${r.status}`);
   objectInfoCache = await r.json();
@@ -1036,7 +1201,8 @@ function mapTokenNodes(workflow) {
       let m;
       while ((m = re.exec(v)) !== null) {
         const name = parseTokenSpec(m[1]).name;
-        if (name && !map.has(name)) map.set(name, { id, classType: cls, input: k });
+        if (name && !map.has(name))
+          map.set(name, { id, classType: cls, input: k });
       }
     }
   }
@@ -1063,13 +1229,17 @@ function enrichToken(token, nodeMap, objectInfo, workflow = null) {
   const [type, cfg] = spec;
   // ComfyUI's own default for the input — what a section's Reset falls back to when
   // the node_types entry doesn't name a recommended value.
-  if (cfg && cfg.default !== undefined) token = { ...token, nodeDefault: cfg.default };
+  if (cfg && cfg.default !== undefined)
+    token = { ...token, nodeDefault: cfg.default };
   if (token.options && token.options.length) return token;
   if (type === "BOOLEAN") return { ...token, bool: true };
   // A combo (enum) is reported one of two ways: legacy nodes put the choices array
   // directly in `type` (e.g. VAELoader.vae_name); newer-schema nodes report the
   // string "COMBO" with the choices in cfg.options (e.g. KSamplerSelect.sampler_name).
-  const comboOptions = Array.isArray(type) ? type : type === "COMBO" ? cfg?.options : null;
+  const comboOptions =
+    Array.isArray(type) ? type
+    : type === "COMBO" ? cfg?.options
+    : null;
   if (Array.isArray(comboOptions)) {
     const key = (loc.input || "").toLowerCase();
     let uploadKind = null;
@@ -1084,7 +1254,8 @@ function enrichToken(token, nodeMap, objectInfo, workflow = null) {
     // uses `min` as the stepping base and at ~1e18+ magnitude can't represent normal
     // values, so the arrows do nothing. Drop bounds beyond the safe-integer range so
     // the field is treated as unbounded (arrows work) instead.
-    const sane = (v) => (Number.isFinite(v) && Math.abs(v) <= Number.MAX_SAFE_INTEGER ? v : null);
+    const sane = (v) =>
+      Number.isFinite(v) && Math.abs(v) <= Number.MAX_SAFE_INTEGER ? v : null;
     return {
       ...token,
       num: type === "INT" ? "int" : "float",
@@ -1102,12 +1273,17 @@ function enrichToken(token, nodeMap, objectInfo, workflow = null) {
 // cfg?], …] }. Resolve an input from there, preferring the choice the node is set to
 // in the workflow, and return it in the ordinary [type, cfg] input-spec shape.
 function formatWidgetSpec(info, loc, workflow) {
-  const inputs = { ...(info?.input?.required || {}), ...(info?.input?.optional || {}) };
+  const inputs = {
+    ...(info?.input?.required || {}),
+    ...(info?.input?.optional || {}),
+  };
   for (const [comboKey, spec] of Object.entries(inputs)) {
     const formats = Array.isArray(spec) ? spec[1]?.formats : null;
     if (!formats || typeof formats !== "object") continue;
     const current = workflow?.[loc.id]?.inputs?.[comboKey];
-    const lists = [formats[current], ...Object.values(formats)].filter(Array.isArray);
+    const lists = [formats[current], ...Object.values(formats)].filter(
+      Array.isArray,
+    );
     for (const widgets of lists) {
       const w = widgets.find((x) => Array.isArray(x) && x[0] === loc.input);
       if (w) return [w[1], w[2] || {}];
@@ -1125,7 +1301,8 @@ function dynamicComboSpec(info, loc, workflow) {
   if (dot <= 0) return null;
   const comboKey = loc.input.slice(0, dot);
   const childKey = loc.input.slice(dot + 1);
-  const spec = info?.input?.required?.[comboKey] || info?.input?.optional?.[comboKey];
+  const spec =
+    info?.input?.required?.[comboKey] || info?.input?.optional?.[comboKey];
   if (!Array.isArray(spec) || spec[0] !== "COMFY_DYNAMICCOMBO_V3") return null;
   const current = workflow?.[loc.id]?.inputs?.[comboKey];
   const options = Array.isArray(spec[1]?.options) ? spec[1].options : [];
@@ -1149,7 +1326,11 @@ function loraOptionsFrom(objectInfo) {
 // --- dynamic LoRA injection --------------------------------------------------
 const clampStrength = (v) => Math.max(-5, Math.min(5, Number(v) || 0));
 const linkEq = (a, b) =>
-  Array.isArray(a) && a.length === 2 && Array.isArray(b) && String(a[0]) === String(b[0]) && a[1] === b[1];
+  Array.isArray(a) &&
+  a.length === 2 &&
+  Array.isArray(b) &&
+  String(a[0]) === String(b[0]) &&
+  a[1] === b[1];
 
 // The MODEL link extra LoRAs splice onto: the model loader's output, or the last
 // LoRA already stacked directly on it — so they land ahead of MODEL patches
@@ -1157,8 +1338,16 @@ const linkEq = (a, b) =>
 // sampler. Found by walking the `model` chain up from the node that samples with it
 // (a sampler, else a guider — SamplerCustomAdvanced takes its model via the guider).
 function loraModelSource(workflow) {
-  const modelLink = (node) => (Array.isArray(node?.inputs?.model) && node.inputs.model.length === 2 ? node.inputs.model : null);
-  const samplerClasses = new Set(["KSampler", "KSamplerAdvanced", "SamplerCustom", "SamplerCustomAdvanced"]);
+  const modelLink = (node) =>
+    Array.isArray(node?.inputs?.model) && node.inputs.model.length === 2 ?
+      node.inputs.model
+    : null;
+  const samplerClasses = new Set([
+    "KSampler",
+    "KSamplerAdvanced",
+    "SamplerCustom",
+    "SamplerCustomAdvanced",
+  ]);
   const nodes = Object.values(workflow);
   const start =
     nodes.find((n) => samplerClasses.has(n?.class_type) && modelLink(n)) ||
@@ -1169,12 +1358,20 @@ function loraModelSource(workflow) {
   // Upstream links, nearest the sampler first; the last is the loader's output.
   const chain = [];
   const seen = new Set();
-  for (let link = modelLink(start); link && !seen.has(String(link[0])); link = modelLink(workflow[link[0]])) {
+  for (
+    let link = modelLink(start);
+    link && !seen.has(String(link[0]));
+    link = modelLink(workflow[link[0]])
+  ) {
     seen.add(String(link[0]));
     chain.push(link);
   }
   let source = chain[chain.length - 1];
-  for (let i = chain.length - 2; i >= 0 && /lora/i.test(workflow[chain[i][0]]?.class_type || ""); i--) {
+  for (
+    let i = chain.length - 2;
+    i >= 0 && /lora/i.test(workflow[chain[i][0]]?.class_type || "");
+    i--
+  ) {
     source = chain[i];
   }
   return source;
@@ -1185,7 +1382,11 @@ function loraModelSource(workflow) {
 // every run with nothing on screen to say so — and a file you don't have fails the run —
 // so they're listed in the UI, where each can be pointed at another of your input files
 // or left out of the run entirely.
-const MEDIA_LOADER_INPUTS = [["image", "image"], ["audio", "audio"], ["video", "video"]];
+const MEDIA_LOADER_INPUTS = [
+  ["image", "image"],
+  ["audio", "audio"],
+  ["video", "video"],
+];
 
 // The loader's filename input, e.g. ["image", "she-hulk.webp"] — null for anything else.
 function mediaLoaderInput(node) {
@@ -1205,7 +1406,8 @@ function workflowMedia(workflow, references = []) {
     const target = workflow[ref.targetNodeId];
     for (const w of ref.wires || []) {
       for (const [k, v] of Object.entries(target?.inputs || {})) {
-        if (k.startsWith(w.prefix) && Array.isArray(v) && v.length === 2) inReference.set(String(v[0]), ref.label || ref.name);
+        if (k.startsWith(w.prefix) && Array.isArray(v) && v.length === 2)
+          inReference.set(String(v[0]), ref.label || ref.name);
       }
     }
   }
@@ -1228,7 +1430,8 @@ function workflowMedia(workflow, references = []) {
 function removeMediaNode(workflow, id) {
   for (const n of Object.values(workflow)) {
     for (const [k, v] of Object.entries(n.inputs || {})) {
-      if (Array.isArray(v) && v.length === 2 && String(v[0]) === String(id)) delete n.inputs[k];
+      if (Array.isArray(v) && v.length === 2 && String(v[0]) === String(id))
+        delete n.inputs[k];
     }
   }
   delete workflow[String(id)];
@@ -1253,7 +1456,8 @@ function applyWorkflowMedia(workflow, media) {
 // The files in ComfyUI's input folder, per kind — what those loaders can be pointed at.
 function mediaOptionsFrom(objectInfo) {
   const opts = (cls, input) => objectInfo?.[cls]?.input?.required?.[input]?.[0];
-  const list = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === "string") : []);
+  const list = (v) =>
+    Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
   return {
     image: list(opts("LoadImage", "image")),
     audio: list(opts("LoadAudio", "audio")),
@@ -1267,11 +1471,17 @@ function mediaOptionsFrom(objectInfo) {
 // you add, and can be re-pointed, re-weighted or switched off.
 function workflowLoras(workflow) {
   return Object.entries(workflow || {})
-    .filter(([, n]) => /lora/i.test(n?.class_type || "") && typeof n?.inputs?.lora_name === "string")
+    .filter(
+      ([, n]) =>
+        /lora/i.test(n?.class_type || "") &&
+        typeof n?.inputs?.lora_name === "string",
+    )
     .map(([id, n]) => ({
       nodeId: String(id),
       name: n.inputs.lora_name,
-      strength: clampStrength(n.inputs.strength_model ?? n.inputs.strength ?? 1),
+      strength: clampStrength(
+        n.inputs.strength_model ?? n.inputs.strength ?? 1,
+      ),
       title: n._meta?.title || n.class_type,
       modelOnly: !Array.isArray(n.inputs.clip),
     }))
@@ -1310,7 +1520,8 @@ function applyWorkflowLoras(workflow, loras) {
     const inputs = workflow[String(l.nodeId)].inputs;
     inputs.lora_name = String(l.name);
     const s = clampStrength(l.strength);
-    for (const k of ["strength_model", "strength_clip", "strength"]) if (k in inputs) inputs[k] = s;
+    for (const k of ["strength_model", "strength_clip", "strength"])
+      if (k in inputs) inputs[k] = s;
   }
   return workflow;
 }
@@ -1319,16 +1530,24 @@ function applyWorkflowLoras(workflow, loras) {
 // everything that consumes them — so any workflow gets extra LoRAs without being
 // pre-wired. `loras` is [{name, strength}]. Throws if no MODEL source is found.
 function injectLoras(workflow, loras) {
-  const enabled = (Array.isArray(loras) ? loras : []).filter((l) => l && l.name);
+  const enabled = (Array.isArray(loras) ? loras : []).filter(
+    (l) => l && l.name,
+  );
   if (!enabled.length) return workflow;
 
   const modelSource = loraModelSource(workflow);
-  if (!modelSource) throw new Error("Couldn't find a MODEL input to attach LoRAs to (is this a checkpoint workflow?).");
+  if (!modelSource)
+    throw new Error(
+      "Couldn't find a MODEL input to attach LoRAs to (is this a checkpoint workflow?).",
+    );
 
   let clipSource = null;
   for (const node of Object.values(workflow)) {
     // Any CLIP text encoder (CLIPTextEncode, CLIPTextEncodeSDXL, …) with a clip link.
-    if (/cliptextencode/i.test(node.class_type || "") && Array.isArray(node.inputs?.clip)) {
+    if (
+      /cliptextencode/i.test(node.class_type || "") &&
+      Array.isArray(node.inputs?.clip)
+    ) {
       clipSource = node.inputs.clip;
       break;
     }
@@ -1345,7 +1564,14 @@ function injectLoras(workflow, loras) {
     }
   }
 
-  let nextId = 1 + Math.max(0, ...Object.keys(workflow).map((k) => Number(k)).filter(Number.isFinite));
+  let nextId =
+    1 +
+    Math.max(
+      0,
+      ...Object.keys(workflow)
+        .map((k) => Number(k))
+        .filter(Number.isFinite),
+    );
   let prevModel = modelSource;
   let prevClip = clipSource;
   for (const l of enabled) {
@@ -1354,7 +1580,13 @@ function injectLoras(workflow, loras) {
     if (useClip) {
       workflow[id] = {
         class_type: "LoraLoader",
-        inputs: { lora_name: l.name, strength_model: s, strength_clip: s, model: prevModel, clip: prevClip },
+        inputs: {
+          lora_name: l.name,
+          strength_model: s,
+          strength_clip: s,
+          model: prevModel,
+          clip: prevClip,
+        },
       };
       prevModel = [id, 0];
       prevClip = [id, 1];
@@ -1367,7 +1599,8 @@ function injectLoras(workflow, loras) {
     }
   }
   for (const [id, k] of modelConsumers) workflow[id].inputs[k] = prevModel;
-  if (useClip) for (const [id, k] of clipConsumers) workflow[id].inputs[k] = prevClip;
+  if (useClip)
+    for (const [id, k] of clipConsumers) workflow[id].inputs[k] = prevClip;
   return workflow;
 }
 
@@ -1378,7 +1611,9 @@ function injectLoras(workflow, loras) {
 function bypassNode(workflow, id) {
   const node = workflow[id];
   if (!node) return;
-  const linkInputs = Object.entries(node.inputs || {}).filter(([, v]) => Array.isArray(v) && v.length === 2);
+  const linkInputs = Object.entries(node.inputs || {}).filter(
+    ([, v]) => Array.isArray(v) && v.length === 2,
+  );
   // Which input carries the signal that should survive the node's removal. Inferring it
   // works for single-in/single-out patches (a `model` input, or the only link input), but
   // a node with several link inputs has to name it: `_meta.bypass_passthrough: "positive"`.
@@ -1405,7 +1640,11 @@ function bypassNode(workflow, id) {
 function bypassableNodes(workflow) {
   return Object.entries(workflow || {})
     .filter(([, n]) => n?._meta?.bypassable)
-    .map(([id, n]) => ({ id, title: n._meta.title || `Node ${id}`, off: !!n._meta.bypassed_by_default }));
+    .map(([id, n]) => ({
+      id,
+      title: n._meta.title || `Node ${id}`,
+      off: !!n._meta.bypassed_by_default,
+    }));
 }
 
 // --- reference-video tails ----------------------------------------------------
@@ -1428,7 +1667,14 @@ function tailSupport(workflow, nodeId) {
   const input = node?._meta?.tail_input || DEFAULT_TAIL_INPUT;
   if (!node?.inputs || !(input in node.inputs)) return null;
   const g = node._meta?.tail_frame_grid;
-  const grid = Array.isArray(g) && g.length === 2 && g.every((n) => Number.isInteger(n) && n > 0) ? g : null;
+  const grid =
+    (
+      Array.isArray(g) &&
+      g.length === 2 &&
+      g.every((n) => Number.isInteger(n) && n > 0)
+    ) ?
+      g
+    : null;
   return { input, grid };
 }
 
@@ -1442,7 +1688,12 @@ function tailSupport(workflow, nodeId) {
 function videoHasSoundtrack(workflow, nodeId) {
   for (const node of Object.values(workflow || {})) {
     for (const [k, v] of Object.entries(node?.inputs || {})) {
-      if (k.startsWith("ref_video_audios.") && Array.isArray(v) && String(v[0]) === String(nodeId)) return true;
+      if (
+        k.startsWith("ref_video_audios.") &&
+        Array.isArray(v) &&
+        String(v[0]) === String(nodeId)
+      )
+        return true;
     }
   }
   return false;
@@ -1451,7 +1702,9 @@ function videoHasSoundtrack(workflow, nodeId) {
 // Which label scheme the client should apply, or null to leave its own numbering
 // alone. Node-specific by nature, so it's named rather than assumed.
 function refLabelScheme(workflow) {
-  const has = Object.values(workflow || {}).some((n) => n?.class_type === "MiniMaxH3ReferenceToVideo");
+  const has = Object.values(workflow || {}).some(
+    (n) => n?.class_type === "MiniMaxH3ReferenceToVideo",
+  );
   return has ? "minimax_h3" : null;
 }
 
@@ -1464,8 +1717,18 @@ function probeVideo(file) {
   return new Promise((resolve) => {
     execFile(
       "ffprobe",
-      ["-v", "error", "-select_streams", "v:0", "-count_packets",
-        "-show_entries", "stream=nb_frames,nb_read_packets,r_frame_rate,duration", "-of", "json", file],
+      [
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-count_packets",
+        "-show_entries",
+        "stream=nb_frames,nb_read_packets,r_frame_rate,duration",
+        "-of",
+        "json",
+        file,
+      ],
       { timeout: 30000, windowsHide: true },
       (err, stdout) => {
         if (err) {
@@ -1481,11 +1744,19 @@ function probeVideo(file) {
         const [num, den] = String(s?.r_frame_rate || "").split("/");
         const fps = Number(num) / (Number(den) || 1);
         const duration = Number(s?.duration);
-        const frames = Number(s?.nb_frames) || Number(s?.nb_read_packets) ||
-          (Number.isFinite(fps) && Number.isFinite(duration) ? Math.round(fps * duration) : 0);
+        const frames =
+          Number(s?.nb_frames) ||
+          Number(s?.nb_read_packets) ||
+          (Number.isFinite(fps) && Number.isFinite(duration) ?
+            Math.round(fps * duration)
+          : 0);
         if (!Number.isFinite(fps) || fps <= 0 || !frames) return resolve(null);
-        resolve({ fps, frames, duration: Number.isFinite(duration) ? duration : frames / fps });
-      }
+        resolve({
+          fps,
+          frames,
+          duration: Number.isFinite(duration) ? duration : frames / fps,
+        });
+      },
     );
   });
 }
@@ -1512,16 +1783,21 @@ async function applyTails(workflow, nodeMap, tails) {
     const loc = nodeMap.get(name);
     const support = loc && tailSupport(workflow, loc.id);
     if (!support) continue; // slot pruned, or its loader can't skip frames
-    const entry = spec?.id ? readJson(IMAGES_FILE).find((i) => i.id === spec.id) : null;
-    const probe = entry ? await probeVideo(path.join(INPUT_DIR, entry.storedName)) : null;
+    const entry =
+      spec?.id ? readJson(IMAGES_FILE).find((i) => i.id === spec.id) : null;
+    const probe =
+      entry ? await probeVideo(path.join(INPUT_DIR, entry.storedName)) : null;
     if (!probe) {
       warnings.push(
         `Couldn't read the length of ${entry?.name || name}${ffprobeMissing ? " (ffprobe not found on PATH)" : ""} — ` +
-          "used the whole clip."
+          "used the whole clip.",
       );
       continue;
     }
-    const keep = snapTailFrames(Math.min(probe.frames, Math.max(1, Math.round(seconds * probe.fps))), support.grid);
+    const keep = snapTailFrames(
+      Math.min(probe.frames, Math.max(1, Math.round(seconds * probe.fps))),
+      support.grid,
+    );
     workflow[loc.id].inputs[support.input] = Math.max(0, probe.frames - keep);
     effective[name] = {
       seconds: Math.round((keep / probe.fps) * 100) / 100,
@@ -1545,11 +1821,18 @@ function formatComfyPromptError(body) {
     if (base) lines.push(e.details ? `${base}: ${e.details}` : base);
   }
   for (const [nodeId, info] of Object.entries(body?.node_errors || {})) {
-    const where = info.class_type ? `${info.class_type} (node ${nodeId})` : `node ${nodeId}`;
+    const where =
+      info.class_type ?
+        `${info.class_type} (node ${nodeId})`
+      : `node ${nodeId}`;
     for (const e of info.errors || []) {
       let detail = e.details || "";
       if (detail.length > 300) detail = detail.slice(0, 297) + "…";
-      lines.push(detail ? `${where}: ${e.message} — ${detail}` : `${where}: ${e.message}`);
+      lines.push(
+        detail ?
+          `${where}: ${e.message} — ${detail}`
+        : `${where}: ${e.message}`,
+      );
     }
   }
   return lines.length ? lines.join("\n") : "ComfyUI rejected the workflow.";
@@ -1559,18 +1842,31 @@ function formatComfyPromptError(body) {
 // (out of VRAM, model mismatch, missing file) get a short plain-English headline
 // instead of the raw traceback message.
 function formatComfyExecError(entry) {
-  const m = (entry.status?.messages || []).find((x) => x[0] === "execution_error");
+  const m = (entry.status?.messages || []).find(
+    (x) => x[0] === "execution_error",
+  );
   const info = m?.[1] || {};
   const raw = info.exception_message || "";
   const where = info.node_type ? `${info.node_type}: ` : "";
   const hay = `${info.exception_type || ""} ${raw}`.toLowerCase();
-  if (hay.includes("out of memory") || hay.includes("outofmemory") || hay.includes("cuda oom")) {
+  if (
+    hay.includes("out of memory") ||
+    hay.includes("outofmemory") ||
+    hay.includes("cuda oom")
+  ) {
     return `${where}Out of VRAM — the GPU ran out of memory. Try a lower resolution, fewer frames/steps, or a lighter model.`;
   }
-  if (hay.includes("error(s) in loading state_dict") || hay.includes("size mismatch")) {
+  if (
+    hay.includes("error(s) in loading state_dict") ||
+    hay.includes("size mismatch")
+  ) {
     return `${where}Model mismatch — a loaded checkpoint/LoRA doesn't fit this workflow's nodes.`;
   }
-  if (hay.includes("no such file") || hay.includes("filenotfounderror") || hay.includes("cannot find")) {
+  if (
+    hay.includes("no such file") ||
+    hay.includes("filenotfounderror") ||
+    hay.includes("cannot find")
+  ) {
     return `${where}Missing file — a model or input the workflow needs isn't where ComfyUI expects it.`;
   }
   if (!raw) return "ComfyUI reported an execution error.";
@@ -1582,7 +1878,8 @@ function formatComfyExecError(entry) {
 // connection and remember the latest {value,max} per prompt so /api/comfy/status
 // can report a % while a run is in flight. The socket is opened lazily when a run
 // is generated/polled, and the next poll reconnects it if it dropped.
-const COMFY_WS_URL = COMFYUI_URL.replace(/^http/i, "ws") + "/ws?clientId=kie-seedance-ui";
+const COMFY_WS_URL =
+  COMFYUI_URL.replace(/^http/i, "ws") + "/ws?clientId=kie-seedance-ui";
 let comfyWs = null;
 let comfyWsConnecting = false;
 let comfyCurrentPrompt = null;
@@ -1608,7 +1905,12 @@ function capturePreview(data) {
   if (!mime || !pid) return;
   // Buffer.from(arrayBuffer, 8) is a view, not a copy — the socket hands us a fresh
   // buffer per message, so there's nothing to clone.
-  comfyPreview.set(pid, { buf: Buffer.from(data, 8), mime, seq: ++previewSeq, updatedAt: Date.now() });
+  comfyPreview.set(pid, {
+    buf: Buffer.from(data, 8),
+    mime,
+    seq: ++previewSeq,
+    updatedAt: Date.now(),
+  });
   if (comfyPreview.size > PREVIEW_MAX_PROMPTS) pruneComfyPreview(true);
   broadcastPreview(pid, previewSeq);
 }
@@ -1617,8 +1919,10 @@ function capturePreview(data) {
 // evicts the oldest prompt so a burst of abandoned runs can't pile up.
 function pruneComfyPreview(force) {
   const cutoff = Date.now() - 2 * 60 * 1000;
-  for (const [pid, f] of comfyPreview) if (f.updatedAt < cutoff) comfyPreview.delete(pid);
-  while (force && comfyPreview.size > PREVIEW_MAX_PROMPTS) comfyPreview.delete(comfyPreview.keys().next().value);
+  for (const [pid, f] of comfyPreview)
+    if (f.updatedAt < cutoff) comfyPreview.delete(pid);
+  while (force && comfyPreview.size > PREVIEW_MAX_PROMPTS)
+    comfyPreview.delete(comfyPreview.keys().next().value);
 }
 
 function ensureComfyWs() {
@@ -1639,7 +1943,10 @@ function ensureComfyWs() {
     comfyWsConnecting = false;
     comfyCurrentPrompt = null; // stale after a reconnect — don't misattribute frames
   };
-  ws.addEventListener("open", () => { comfyWs = ws; comfyWsConnecting = false; });
+  ws.addEventListener("open", () => {
+    comfyWs = ws;
+    comfyWsConnecting = false;
+  });
   ws.addEventListener("close", drop);
   ws.addEventListener("error", drop);
   ws.addEventListener("message", (ev) => {
@@ -1647,11 +1954,19 @@ function ensureComfyWs() {
       // Binary = a latent preview frame. binaryType is "arraybuffer" above; the Blob
       // branch only guards against that ever not being honored.
       if (ev.data instanceof ArrayBuffer) capturePreview(ev.data);
-      else ev.data?.arrayBuffer?.().then(capturePreview).catch(() => {});
+      else
+        ev.data
+          ?.arrayBuffer?.()
+          .then(capturePreview)
+          .catch(() => {});
       return;
     }
     let msg;
-    try { msg = JSON.parse(ev.data); } catch { return; }
+    try {
+      msg = JSON.parse(ev.data);
+    } catch {
+      return;
+    }
     const { type, data } = msg || {};
     if (type === "execution_start" || type === "executing") {
       if (data?.prompt_id) comfyCurrentPrompt = data.prompt_id;
@@ -1659,7 +1974,11 @@ function ensureComfyWs() {
       const pid = data?.prompt_id || comfyCurrentPrompt;
       if (pid) comfyCurrentPrompt = pid; // the preview frame that follows belongs to this prompt
       if (pid && Number.isFinite(data?.value) && Number.isFinite(data?.max)) {
-        comfyProgress.set(pid, { value: data.value, max: data.max, updatedAt: Date.now() });
+        comfyProgress.set(pid, {
+          value: data.value,
+          max: data.max,
+          updatedAt: Date.now(),
+        });
       }
     } else if (
       type === "executed" ||
@@ -1670,7 +1989,8 @@ function ensureComfyWs() {
       if (data?.prompt_id) comfyProgress.delete(data.prompt_id);
       // Previews survive `executed` (that fires per output node) — only a finished
       // or failed run drops one.
-      if (data?.prompt_id && type !== "executed") comfyPreview.delete(data.prompt_id);
+      if (data?.prompt_id && type !== "executed")
+        comfyPreview.delete(data.prompt_id);
     }
   });
 }
@@ -1682,7 +2002,9 @@ function progressPassesFor(promptId) {
   if (!comfyProgressPasses.has(promptId)) {
     let passes = 1;
     try {
-      passes = readJson(HISTORY_FILE).find((e) => e.taskId === promptId)?.progressPasses || 1;
+      passes =
+        readJson(HISTORY_FILE).find((e) => e.taskId === promptId)
+          ?.progressPasses || 1;
     } catch {
       /* unreadable history — assume a single pass */
     }
@@ -1695,7 +2017,8 @@ function progressPassesFor(promptId) {
 // Drop progress we haven't heard about in 10 min (finished/abandoned prompts).
 function pruneComfyProgress() {
   const cutoff = Date.now() - 10 * 60 * 1000;
-  for (const [pid, p] of comfyProgress) if (p.updatedAt < cutoff) comfyProgress.delete(pid);
+  for (const [pid, p] of comfyProgress)
+    if (p.updatedAt < cutoff) comfyProgress.delete(pid);
 }
 
 // --- system stats (CPU / RAM / GPU / VRAM) -----------------------------------
@@ -1729,7 +2052,10 @@ function nvidiaSmi() {
   return new Promise((resolve) => {
     execFile(
       "nvidia-smi",
-      ["--query-gpu=utilization.gpu,memory.used,memory.total,name", "--format=csv,noheader,nounits"],
+      [
+        "--query-gpu=utilization.gpu,memory.used,memory.total,name",
+        "--format=csv,noheader,nounits",
+      ],
       { timeout: 2500, windowsHide: true },
       (err, stdout) => {
         if (err) {
@@ -1740,12 +2066,24 @@ function nvidiaSmi() {
           .trim()
           .split("\n")
           .map((line) => {
-            const [util, memUsed, memTotal, ...name] = line.split(",").map((s) => s.trim());
-            return { util: Number(util), memUsed: Number(memUsed), memTotal: Number(memTotal), name: name.join(",") };
+            const [util, memUsed, memTotal, ...name] = line
+              .split(",")
+              .map((s) => s.trim());
+            return {
+              util: Number(util),
+              memUsed: Number(memUsed),
+              memTotal: Number(memTotal),
+              name: name.join(","),
+            };
           })
-          .filter((g) => Number.isFinite(g.util) && Number.isFinite(g.memTotal) && g.memTotal > 0);
+          .filter(
+            (g) =>
+              Number.isFinite(g.util) &&
+              Number.isFinite(g.memTotal) &&
+              g.memTotal > 0,
+          );
         resolve(gpus.length ? gpus : null);
-      }
+      },
     );
   });
 }
@@ -1755,7 +2093,9 @@ async function comfyVram() {
   try {
     const r = await fetch(`${COMFYUI_URL}/system_stats`);
     const s = await r.json();
-    const dev = (s.devices || []).find((d) => d.type !== "cpu" && d.vram_total) || (s.devices || [])[0];
+    const dev =
+      (s.devices || []).find((d) => d.type !== "cpu" && d.vram_total) ||
+      (s.devices || [])[0];
     if (!dev || !dev.vram_total) return null;
     const used = dev.vram_total - (dev.vram_free ?? 0);
     return {
@@ -1774,8 +2114,22 @@ async function comfyVram() {
 // orphan the run).
 app.post("/api/comfy/generate", async (req, res) => {
   ensureComfyWs(); // start listening for progress before the run begins
-  const { file, values, prune, loras, bypass, tails, input, mediaLocalIds, projectId, refVideoSeconds, previewMethod, continueFrom, references: providedRefs, workflowMedia: mediaState } =
-    req.body || {};
+  const {
+    file,
+    values,
+    prune,
+    loras,
+    bypass,
+    tails,
+    input,
+    mediaLocalIds,
+    projectId,
+    refVideoSeconds,
+    previewMethod,
+    continueFrom,
+    references: providedRefs,
+    workflowMedia: mediaState,
+  } = req.body || {};
   const wfPath = workflowPath(file);
   if (!wfPath || !fs.existsSync(wfPath)) {
     return res.status(400).json({ code: 400, msg: "Unknown workflow file" });
@@ -1797,7 +2151,8 @@ app.post("/api/comfy/generate", async (req, res) => {
     let recognizedControls = [];
     let recognizedRefs = [];
     try {
-      ({ controls: recognizedControls, references: recognizedRefs } = recognizeWorkflow(workflow, loadNodeTypes(NODE_TYPES_DIR)));
+      ({ controls: recognizedControls, references: recognizedRefs } =
+        recognizeWorkflow(workflow, loadNodeTypes(NODE_TYPES_DIR)));
     } catch (err) {
       console.error("Node recognition failed:", err.message);
     }
@@ -1807,16 +2162,25 @@ app.post("/api/comfy/generate", async (req, res) => {
     // redo of an existing run into its own slot; otherwise allocate a fresh one.
     const roles = continuationRoles(workflow);
     if (roles["continue.out"]) {
-      const c = (continueFrom && typeof continueFrom === "object") ? continueFrom : {};
-      const slot = Number.isInteger(c.slot) && c.slot > 0 ? c.slot : allocateContinuationSlot();
+      const c =
+        continueFrom && typeof continueFrom === "object" ? continueFrom : {};
+      const slot =
+        Number.isInteger(c.slot) && c.slot > 0 ?
+          c.slot
+        : allocateContinuationSlot();
       const from = Number.isInteger(c.from) && c.from > 0 ? c.from : null;
       // Always fill both, as numbers: 0 is the no-parent case. Leaving continue.in to
       // its token default would substitute the literal string "0" into what is almost
       // certainly an INT input, since the role tokens are never form controls.
       continuationValues = { [roles["continue.out"]]: slot };
-      if (roles["continue.in"]) continuationValues[roles["continue.in"]] = from || 0;
+      if (roles["continue.in"])
+        continuationValues[roles["continue.in"]] = from || 0;
       runValues = { ...runValues, ...continuationValues };
-      continuation = { parentId: c.parentId ? String(c.parentId) : null, from, slot };
+      continuation = {
+        parentId: c.parentId ? String(c.parentId) : null,
+        from,
+        slot,
+      };
     }
     // Token substitution is now confined to the continuation role tokens — the one
     // remaining {{token}} use (see continuationRoles). All form values are written by
@@ -1826,13 +2190,24 @@ app.post("/api/comfy/generate", async (req, res) => {
     applyRecognizedValues(workflow, recognizedControls, runValues); // patch recognized node inputs
     applyReferenceCollections(workflow, recognizedRefs, providedRefs); // inject dynamic ref media loaders
     tailResult = await applyTails(workflow, tokenNodes, tails); // trim references to their last N seconds
-    for (const id of Array.isArray(bypass) ? bypass : []) bypassNode(workflow, String(id)); // disabled patch nodes
+    for (const id of Array.isArray(bypass) ? bypass : [])
+      bypassNode(workflow, String(id)); // disabled patch nodes
     applyWorkflowMedia(workflow, mediaState); // the workflow's own media loaders: re-pointed, or removed when off
     applyWorkflowLoras(workflow, loras); // the workflow's own LoRA nodes: edited, or removed when off
-    workflow = injectLoras(workflow, (Array.isArray(loras) ? loras : []).filter((l) => !l?.nodeId && l?.enabled !== false));
+    workflow = injectLoras(
+      workflow,
+      (Array.isArray(loras) ? loras : []).filter(
+        (l) => !l?.nodeId && l?.enabled !== false,
+      ),
+    );
     passes = progressPasses(workflow, loadNodeTypes(NODE_TYPES_DIR)); // after values + bypass
   } catch (err) {
-    return res.status(400).json({ code: 400, msg: err.message || "Workflow could not be prepared" });
+    return res
+      .status(400)
+      .json({
+        code: 400,
+        msg: err.message || "Workflow could not be prepared",
+      });
   }
   try {
     const r = await fetch(`${COMFYUI_URL}/prompt`, {
@@ -1843,11 +2218,16 @@ app.post("/api/comfy/generate", async (req, res) => {
       // ComfyUI's own web UI. Without one, preview frames are broadcast to every
       // socket — ours included. (ComfyUI applies the method to a process-global
       // setting, so it persists until the next prompt sets its own. Harmless.)
-      body: JSON.stringify({ prompt: workflow, extra_data: { preview_method: comfyPreviewMethod(previewMethod) } }),
+      body: JSON.stringify({
+        prompt: workflow,
+        extra_data: { preview_method: comfyPreviewMethod(previewMethod) },
+      }),
     });
     const body = await r.json().catch(() => ({}));
     if (!r.ok || !body.prompt_id) {
-      return res.status(r.status || 502).json({ code: r.status || 502, msg: formatComfyPromptError(body) });
+      return res
+        .status(r.status || 502)
+        .json({ code: r.status || 502, msg: formatComfyPromptError(body) });
     }
     comfyProgressPasses.set(body.prompt_id, passes);
     // Create the pending History entry now, so the server-side sweep can finish the
@@ -1867,7 +2247,10 @@ app.post("/api/comfy/generate", async (req, res) => {
         projectId: proj.id,
         // Record the tails actually applied (frame-exact, grid-snapped), not what
         // was asked for — that's what re-import should restore.
-        input: Object.keys(tailResult.effective).length ? { ...baseInput, tails: tailResult.effective } : baseInput,
+        input:
+          Object.keys(tailResult.effective).length ?
+            { ...baseInput, tails: tailResult.effective }
+          : baseInput,
         mediaLocalIds,
         refVideoSeconds,
         imageLocalIds: mediaLocalIds?.image || [],
@@ -1885,11 +2268,18 @@ app.post("/api/comfy/generate", async (req, res) => {
     res.json({
       code: 200,
       msg: "success",
-      data: { promptId: body.prompt_id, historyId, continuation, warnings: tailResult.warnings },
+      data: {
+        promptId: body.prompt_id,
+        historyId,
+        continuation,
+        warnings: tailResult.warnings,
+      },
     });
   } catch (err) {
     console.error("ComfyUI generate error:", err);
-    res.status(502).json({ code: 502, msg: `Could not reach ComfyUI at ${COMFYUI_URL}` });
+    res
+      .status(502)
+      .json({ code: 502, msg: `Could not reach ComfyUI at ${COMFYUI_URL}` });
   }
 });
 
@@ -1905,7 +2295,7 @@ function collectComfyOutputs(entry) {
       for (const f of out[key] || []) {
         (key === "images" ? stills : moving).push(
           `${COMFYUI_URL}/view?filename=${encodeURIComponent(f.filename)}` +
-            `&subfolder=${encodeURIComponent(f.subfolder || "")}&type=${encodeURIComponent(f.type || "output")}`
+            `&subfolder=${encodeURIComponent(f.subfolder || "")}&type=${encodeURIComponent(f.type || "output")}`,
         );
       }
     }
@@ -1927,8 +2317,13 @@ function comfyExecRuntime(entry) {
     const [type, data] = m || [];
     const ts = Number(data?.timestamp);
     if (!Number.isFinite(ts)) continue;
-    if (type === "execution_start") start = start == null ? ts : Math.min(start, ts);
-    else if (type === "execution_success" || type === "execution_error" || type === "execution_interrupted")
+    if (type === "execution_start")
+      start = start == null ? ts : Math.min(start, ts);
+    else if (
+      type === "execution_success" ||
+      type === "execution_error" ||
+      type === "execution_interrupted"
+    )
       end = end == null ? ts : Math.max(end, ts);
   }
   return start != null && end != null && end >= start ? end - start : null;
@@ -1949,13 +2344,19 @@ async function comfyPromptQueued(promptId) {
 // Poll a ComfyUI job; normalize to the kie.ai status shape the frontend expects.
 app.get("/api/comfy/status", async (req, res) => {
   const promptId = req.query.promptId;
-  if (!promptId) return res.status(400).json({ code: 400, msg: "promptId is required" });
+  if (!promptId)
+    return res.status(400).json({ code: 400, msg: "promptId is required" });
   ensureComfyWs(); // keep the progress socket alive while a run is polled
   pruneComfyProgress();
   const prog = comfyProgress.get(promptId);
-  const progress = prog ? { value: prog.value, max: prog.max, passes: progressPassesFor(promptId) } : undefined;
+  const progress =
+    prog ?
+      { value: prog.value, max: prog.max, passes: progressPassesFor(promptId) }
+    : undefined;
   try {
-    const r = await fetch(`${COMFYUI_URL}/history/${encodeURIComponent(promptId)}`);
+    const r = await fetch(
+      `${COMFYUI_URL}/history/${encodeURIComponent(promptId)}`,
+    );
     const hist = await r.json().catch(() => ({}));
     const entry = hist?.[promptId];
     if (!entry) {
@@ -1970,21 +2371,36 @@ app.get("/api/comfy/status", async (req, res) => {
 
     if (entry.status?.status_str === "error") {
       comfyProgress.delete(promptId);
-      return res.json({ code: 200, msg: "success", data: { state: "fail", failMsg: formatComfyExecError(entry) } });
+      return res.json({
+        code: 200,
+        msg: "success",
+        data: { state: "fail", failMsg: formatComfyExecError(entry) },
+      });
     }
 
     const urls = collectComfyOutputs(entry);
-    if (!urls.length) return res.json({ code: 200, msg: "success", data: { state: "waiting", progress } });
+    if (!urls.length)
+      return res.json({
+        code: 200,
+        msg: "success",
+        data: { state: "waiting", progress },
+      });
     res.json({
       code: 200,
       msg: "success",
       // runtimeMs is ComfyUI's own per-prompt execution time so the client can store
       // the actual run time, not now-minus-created (which over-counts queued items).
-      data: { state: "success", resultJson: JSON.stringify({ resultUrls: urls }), runtimeMs: comfyExecRuntime(entry) },
+      data: {
+        state: "success",
+        resultJson: JSON.stringify({ resultUrls: urls }),
+        runtimeMs: comfyExecRuntime(entry),
+      },
     });
   } catch (err) {
     console.error("ComfyUI status error:", err);
-    res.status(502).json({ code: 502, msg: `Could not reach ComfyUI at ${COMFYUI_URL}` });
+    res
+      .status(502)
+      .json({ code: 502, msg: `Could not reach ComfyUI at ${COMFYUI_URL}` });
   }
 });
 
@@ -1992,9 +2408,12 @@ app.get("/api/comfy/status", async (req, res) => {
 // still pending, or interrupt it if it's the one currently running.
 app.post("/api/comfy/cancel", async (req, res) => {
   const promptId = req.body?.promptId;
-  if (!promptId) return res.status(400).json({ code: 400, msg: "promptId is required" });
+  if (!promptId)
+    return res.status(400).json({ code: 400, msg: "promptId is required" });
   try {
-    const queue = await fetch(`${COMFYUI_URL}/queue`).then((r) => r.json()).catch(() => ({}));
+    const queue = await fetch(`${COMFYUI_URL}/queue`)
+      .then((r) => r.json())
+      .catch(() => ({}));
     const inList = (list) => (list || []).some((item) => item[1] === promptId);
     const running = inList(queue.queue_running);
     const pending = inList(queue.queue_pending);
@@ -2009,7 +2428,9 @@ app.post("/api/comfy/cancel", async (req, res) => {
     res.json({ code: 200, msg: "cancelled", data: { running, pending } });
   } catch (err) {
     console.error("ComfyUI cancel error:", err);
-    res.status(502).json({ code: 502, msg: `Could not reach ComfyUI at ${COMFYUI_URL}` });
+    res
+      .status(502)
+      .json({ code: 502, msg: `Could not reach ComfyUI at ${COMFYUI_URL}` });
   }
 });
 
@@ -2023,11 +2444,19 @@ app.post("/api/comfy/free", async (req, res) => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ unload_models: true, free_memory: true }),
     });
-    if (!r.ok) return res.status(502).json({ code: 502, msg: `ComfyUI refused to free memory (HTTP ${r.status})` });
+    if (!r.ok)
+      return res
+        .status(502)
+        .json({
+          code: 502,
+          msg: `ComfyUI refused to free memory (HTTP ${r.status})`,
+        });
     res.json({ code: 200, msg: "freeing" });
   } catch (err) {
     console.error("ComfyUI free error:", err);
-    res.status(502).json({ code: 502, msg: `Could not reach ComfyUI at ${COMFYUI_URL}` });
+    res
+      .status(502)
+      .json({ code: 502, msg: `Could not reach ComfyUI at ${COMFYUI_URL}` });
   }
 });
 
@@ -2043,18 +2472,26 @@ let comfyWatchBusy = false;
 
 // Finish one pending entry: download its output (→ done) or mark it failed. Re-reads
 // history so it no-ops if the browser already finished the same entry.
-async function finalizePendingComfy(id, { resultUrls, resultUrl, fail, runtimeMs }) {
+async function finalizePendingComfy(
+  id,
+  { resultUrls, resultUrl, fail, runtimeMs },
+) {
   const entries = readJson(HISTORY_FILE);
   const entry = entries.find((e) => e.id === id);
   if (!entry || entry.status !== "pending") return; // already finished elsewhere
-  const urls = (resultUrls && resultUrls.length ? resultUrls : resultUrl ? [resultUrl] : []).filter(Boolean);
+  const urls = (
+    resultUrls && resultUrls.length ? resultUrls
+    : resultUrl ? [resultUrl]
+    : []).filter(Boolean);
   if (urls.length) {
     await attachOutputs(entry, urls); // downloads every output (a batch can be several)
     entry.status = "done";
     // Prefer ComfyUI's own per-prompt execution time; fall back to since-created only
     // when it's unavailable (older ComfyUI / missing timestamps).
     entry.runtimeMs =
-      typeof runtimeMs === "number" ? runtimeMs : Date.now() - new Date(entry.createdAt).getTime();
+      typeof runtimeMs === "number" ? runtimeMs : (
+        Date.now() - new Date(entry.createdAt).getTime()
+      );
   } else {
     entry.status = "failed";
     if (fail) entry.error = fail;
@@ -2073,39 +2510,57 @@ async function sweepPendingComfy() {
   comfyWatchBusy = true;
   try {
     const pending = readJson(HISTORY_FILE).filter(
-      (e) => e.status === "pending" && e.taskId && (e.input?.model || "").startsWith("comfy:")
+      (e) =>
+        e.status === "pending" &&
+        e.taskId &&
+        (e.input?.model || "").startsWith("comfy:"),
     );
     if (!pending.length) return;
     let queueSnapshot = undefined; // fetched once, lazily, only if a prompt is missing
     for (const entry of pending) {
       let hist;
       try {
-        hist = await fetch(`${COMFYUI_URL}/history/${encodeURIComponent(entry.taskId)}`).then((r) => r.json());
+        hist = await fetch(
+          `${COMFYUI_URL}/history/${encodeURIComponent(entry.taskId)}`,
+        ).then((r) => r.json());
       } catch {
         return; // ComfyUI unreachable — leave entries pending, retry next sweep
       }
       const h = hist?.[entry.taskId];
       if (h) {
         if (h.status?.status_str === "error") {
-          await finalizePendingComfy(entry.id, { fail: formatComfyExecError(h) });
+          await finalizePendingComfy(entry.id, {
+            fail: formatComfyExecError(h),
+          });
         } else {
           const urls = collectComfyOutputs(h);
-          if (urls.length) await finalizePendingComfy(entry.id, { resultUrls: urls, runtimeMs: comfyExecRuntime(h) });
+          if (urls.length)
+            await finalizePendingComfy(entry.id, {
+              resultUrls: urls,
+              runtimeMs: comfyExecRuntime(h),
+            });
           // in history but no outputs yet → still running; leave pending
         }
         continue;
       }
       // Not in history: give young prompts grace (submit→queue race), then decide.
-      if (Date.now() - new Date(entry.createdAt).getTime() < COMFY_LOST_GRACE_MS) continue;
+      if (
+        Date.now() - new Date(entry.createdAt).getTime() <
+        COMFY_LOST_GRACE_MS
+      )
+        continue;
       if (queueSnapshot === undefined) {
         try {
-          queueSnapshot = await fetch(`${COMFYUI_URL}/queue`).then((r) => r.json());
+          queueSnapshot = await fetch(`${COMFYUI_URL}/queue`).then((r) =>
+            r.json(),
+          );
         } catch {
           return; // can't tell — leave pending
         }
       }
       const inQ = (list) => (list || []).some((it) => it[1] === entry.taskId);
-      if (inQ(queueSnapshot.queue_running) || inQ(queueSnapshot.queue_pending)) continue; // still queued
+      if (inQ(queueSnapshot.queue_running) || inQ(queueSnapshot.queue_pending))
+        continue; // still queued
       await finalizePendingComfy(entry.id, {
         fail:
           "ComfyUI has no record of this run (it was likely restarted after it finished). " +
@@ -2134,7 +2589,10 @@ let kieWatchBusy = false;
 
 // Finish one pending kie.ai entry: download its output (→ done) or mark it failed.
 // Re-reads history so it no-ops if the browser already finished the same entry.
-async function finalizePendingKie(id, { resultUrls, fail, costCredits, runtimeMs }) {
+async function finalizePendingKie(
+  id,
+  { resultUrls, fail, costCredits, runtimeMs },
+) {
   const entries = readJson(HISTORY_FILE);
   const entry = entries.find((e) => e.id === id);
   if (!entry || entry.status !== "pending") return; // already finished elsewhere
@@ -2144,7 +2602,9 @@ async function finalizePendingKie(id, { resultUrls, fail, costCredits, runtimeMs
     entry.status = "done";
     if (typeof costCredits === "number") entry.costCredits = costCredits;
     entry.runtimeMs =
-      typeof runtimeMs === "number" ? runtimeMs : Date.now() - new Date(entry.createdAt).getTime();
+      typeof runtimeMs === "number" ? runtimeMs : (
+        Date.now() - new Date(entry.createdAt).getTime()
+      );
   } else {
     entry.status = "failed";
     if (fail) entry.error = fail;
@@ -2163,20 +2623,31 @@ async function sweepPendingKie() {
   kieWatchBusy = true;
   try {
     const pending = readJson(HISTORY_FILE).filter(
-      (e) => e.status === "pending" && e.taskId && !(e.input?.model || "").startsWith("comfy:")
+      (e) =>
+        e.status === "pending" &&
+        e.taskId &&
+        !(e.input?.model || "").startsWith("comfy:"),
     );
     for (const entry of pending) {
       let body;
       try {
-        const r = await fetch(`${API_BASE}/recordInfo?taskId=${encodeURIComponent(entry.taskId)}`, {
-          headers: { Authorization: `Bearer ${API_KEY}` },
-        });
+        const r = await fetch(
+          `${API_BASE}/recordInfo?taskId=${encodeURIComponent(entry.taskId)}`,
+          {
+            headers: { Authorization: `Bearer ${API_KEY}` },
+          },
+        );
         body = await r.json().catch(() => ({}));
         if (!r.ok || body?.code !== 200) {
           // 404 means kie.ai has no such task; only give up once it's clearly not
           // coming back. Everything else (5xx, rate limit) is transient — retry next sweep.
-          if (r.status === 404 && Date.now() - new Date(entry.createdAt).getTime() > KIE_MAX_AGE_MS) {
-            await finalizePendingKie(entry.id, { fail: "kie.ai has no record of this task." });
+          if (
+            r.status === 404 &&
+            Date.now() - new Date(entry.createdAt).getTime() > KIE_MAX_AGE_MS
+          ) {
+            await finalizePendingKie(entry.id, {
+              fail: "kie.ai has no record of this task.",
+            });
           }
           continue;
         }
@@ -2196,26 +2667,32 @@ async function sweepPendingKie() {
           // recordInfo's costTime is in SECONDS (despite older docs); prefer the exact
           // wall-clock span when both timestamps are present.
           const wallMs =
-            Number(d.completeTime) && Number(d.createTime)
-              ? Number(d.completeTime) - Number(d.createTime)
-              : Number(d.costTime)
-                ? Number(d.costTime) * 1000
-                : undefined;
+            Number(d.completeTime) && Number(d.createTime) ?
+              Number(d.completeTime) - Number(d.createTime)
+            : Number(d.costTime) ? Number(d.costTime) * 1000
+            : undefined;
           await finalizePendingKie(entry.id, {
             resultUrls: urls,
             costCredits: Number.isFinite(cost) && cost > 0 ? cost : undefined,
             runtimeMs: wallMs,
           });
         } else {
-          await finalizePendingKie(entry.id, { fail: "Task succeeded but returned no result URL." });
+          await finalizePendingKie(entry.id, {
+            fail: "Task succeeded but returned no result URL.",
+          });
         }
       } else if (d.state === "fail") {
         await finalizePendingKie(entry.id, {
           fail: d.failMsg || `Generation failed (code ${d.failCode ?? "?"}).`,
         });
-      } else if (Date.now() - new Date(entry.createdAt).getTime() > KIE_MAX_AGE_MS) {
+      } else if (
+        Date.now() - new Date(entry.createdAt).getTime() >
+        KIE_MAX_AGE_MS
+      ) {
         // Stuck "waiting" for over a day — kie.ai almost certainly dropped it.
-        await finalizePendingKie(entry.id, { fail: "Timed out — kie.ai never reported completion." });
+        await finalizePendingKie(entry.id, {
+          fail: "Timed out — kie.ai never reported completion.",
+        });
       }
       // else still waiting → leave pending, check again next sweep
     }
@@ -2245,7 +2722,11 @@ app.get("/api/comfy/stats", async (req, res) => {
   if (gpus) {
     const g = gpus[0]; // primary GPU
     gpu = g.util;
-    vram = { used: g.memUsed, total: g.memTotal, pct: Math.round((g.memUsed / g.memTotal) * 100) };
+    vram = {
+      used: g.memUsed,
+      total: g.memTotal,
+      pct: Math.round((g.memUsed / g.memTotal) * 100),
+    };
   } else {
     vram = await comfyVram(); // GPU % unavailable without nvidia-smi
   }
@@ -2286,7 +2767,8 @@ app.get("/api/comfy/preview-stream", (req, res) => {
   // Catch a late joiner up (a reload mid-run): without this the card stays blank
   // until the next sampler step, which on a video workflow is a long time.
   pruneComfyPreview();
-  for (const [pid, f] of comfyPreview) res.write(`data: ${JSON.stringify({ promptId: pid, seq: f.seq })}\n\n`);
+  for (const [pid, f] of comfyPreview)
+    res.write(`data: ${JSON.stringify({ promptId: pid, seq: f.seq })}\n\n`);
   // Comment heartbeat: keeps idle proxies and socket timeouts from closing the stream.
   const beat = setInterval(() => {
     try {
@@ -2320,7 +2802,9 @@ app.post("/api/open-folder", (req, res) => {
   }
   fs.mkdirSync(dir, { recursive: true });
   const cmd =
-    process.platform === "win32" ? "explorer" : process.platform === "darwin" ? "open" : "xdg-open";
+    process.platform === "win32" ? "explorer"
+    : process.platform === "darwin" ? "open"
+    : "xdg-open";
   try {
     spawn(cmd, [dir], { detached: true, stdio: "ignore" }).unref();
     res.json({ code: 200, msg: "opened" });
@@ -2344,7 +2828,9 @@ function entryIsImage(entry) {
   const input = entry.input || {};
   if ((input.model || "").startsWith("comfy:")) {
     const out = (entry.localVideo || entry.resultUrl || "").split("?")[0];
-    const fromQuery = /[?&]filename=[^&]*\.(png|jpe?g|webp|gif|bmp)/i.test(entry.resultUrl || "");
+    const fromQuery = /[?&]filename=[^&]*\.(png|jpe?g|webp|gif|bmp)/i.test(
+      entry.resultUrl || "",
+    );
     return fromQuery || /\.(png|jpe?g|webp|gif|bmp)$/i.test(out);
   }
   return isImageOutputModel(input.model);
@@ -2366,14 +2852,19 @@ function entryTagSet(entry) {
 // MiniMax H3 names its two tiers 768P / 2K instead of the Seedance ladder; both
 // are nominal 16:9 areas (1366x768 and 2560x1440).
 const KIE_RES_MP = {
-  "480p": 0.41, "720p": 0.92, "1080p": 2.07, "4k": 8.29,
-  "768P": 1.05, "2K": 3.69,
+  "480p": 0.41,
+  "720p": 0.92,
+  "1080p": 2.07,
+  "4k": 8.29,
+  "768P": 1.05,
+  "2K": 3.69,
 };
 function entryMegapixels(input) {
   const v = (input && input.values) || {};
   const w = Number(v.width);
   const h = Number(v.height);
-  if (Number.isFinite(w) && w > 0 && Number.isFinite(h) && h > 0) return (w * h) / 1e6;
+  if (Number.isFinite(w) && w > 0 && Number.isFinite(h) && h > 0)
+    return (w * h) / 1e6;
   const mp = Number(v.megapixels);
   if (Number.isFinite(mp) && mp > 0) return mp;
   const r = input && input.resolution;
@@ -2430,7 +2921,10 @@ function computeAutoDraft(input) {
 function escapeHtml(s) {
   return String(s ?? "").replace(
     /[&<>"']/g,
-    (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]
+    (c) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[
+        c
+      ],
   );
 }
 
@@ -2461,8 +2955,10 @@ function entryMetaRows(entry) {
     if (input.duration) rows.push(["Duration", `${input.duration}s`]);
   }
   if (input.aspect_ratio) rows.push(["Aspect ratio", input.aspect_ratio]);
-  if (typeof entry.costCredits === "number") rows.push(["Cost", `${entry.costCredits.toLocaleString()} credits`]);
-  if (entry.createdAt) rows.push(["Date", new Date(entry.createdAt).toLocaleString()]);
+  if (typeof entry.costCredits === "number")
+    rows.push(["Cost", `${entry.costCredits.toLocaleString()} credits`]);
+  if (entry.createdAt)
+    rows.push(["Date", new Date(entry.createdAt).toLocaleString()]);
   return rows;
 }
 
@@ -2483,17 +2979,22 @@ function buildExportHtml(view, meta) {
     .map(({ entry, inputs, output }) => {
       const input = entry.input || {};
       const metaRows = entryMetaRows(entry)
-        .map(([k, v]) => `<div class="mrow"><span class="mk">${escapeHtml(k)}</span><span class="mv">${escapeHtml(v)}</span></div>`)
+        .map(
+          ([k, v]) =>
+            `<div class="mrow"><span class="mk">${escapeHtml(k)}</span><span class="mv">${escapeHtml(v)}</span></div>`,
+        )
         .join("");
-      const inputThumbs = inputs.map((i) => exportThumb(i.kind, i.src, i.name)).join("");
+      const inputThumbs = inputs
+        .map((i) => exportThumb(i.kind, i.src, i.name))
+        .join("");
       return `<section class="card">
   <div class="col left">
     <div class="prompt">${escapeHtml(input.prompt || "(no prompt)")}</div>
     <div class="meta">${metaRows}</div>
     ${
-      inputs.length
-        ? `<div class="lbl">Inputs (${inputs.length})</div><div class="thumbs">${inputThumbs}</div>`
-        : `<div class="lbl">Inputs</div><div class="muted">None</div>`
+      inputs.length ?
+        `<div class="lbl">Inputs (${inputs.length})</div><div class="thumbs">${inputThumbs}</div>`
+      : `<div class="lbl">Inputs</div><div class="muted">None</div>`
     }
   </div>
   <div class="col right">
@@ -2577,12 +3078,16 @@ app.post("/api/export", (req, res) => {
   const { projectId, excludeTags } = req.body || {};
   // Export is always scoped to a single project — there is no all-projects export.
   if (!projectId || projectId === "all") {
-    return res.status(400).json({ code: 400, msg: "Choose a specific project to export." });
+    return res
+      .status(400)
+      .json({ code: 400, msg: "Choose a specific project to export." });
   }
   const scope = resolveProject(projectId);
 
   // Tags to exclude; defaults to hidden. Only finished entries are exportable.
-  const exclude = new Set(Array.isArray(excludeTags) ? excludeTags : ["hidden"]);
+  const exclude = new Set(
+    Array.isArray(excludeTags) ? excludeTags : ["hidden"],
+  );
   const allHistory = readJson(HISTORY_FILE);
   const entries = allHistory.filter((e) => {
     if ((e.projectId || "default") !== scope.id) return false;
@@ -2591,7 +3096,12 @@ app.post("/api/export", (req, res) => {
     return ![...exclude].some((t) => tags.has(t)); // drop entries carrying an excluded tag
   });
   if (!entries.length) {
-    return res.status(400).json({ code: 400, msg: "No history to export for this project (after tag filters)." });
+    return res
+      .status(400)
+      .json({
+        code: 400,
+        msg: "No history to export for this project (after tag filters).",
+      });
   }
 
   const imgById = new Map(readJson(IMAGES_FILE).map((i) => [i.id, i]));
@@ -2605,7 +3115,9 @@ app.post("/api/export", (req, res) => {
     fs.mkdirSync(path.join(outDir, "output"), { recursive: true });
   } catch (err) {
     console.error("Export: failed to create folder:", err);
-    return res.status(500).json({ code: 500, msg: "Failed to create export folder." });
+    return res
+      .status(500)
+      .json({ code: 500, msg: "Failed to create export folder." });
   }
 
   let copied = 0;
@@ -2632,7 +3144,11 @@ app.post("/api/export", (req, res) => {
         const g = imgById.get(id);
         if (!g) return; // gallery item was deleted — nothing local to copy
         const ext = path.extname(g.storedName) || "";
-        const href = copyInto(path.join(INPUT_DIR, g.storedName), "input", `${entry.id}-${kind}-${idx}${ext}`);
+        const href = copyInto(
+          path.join(INPUT_DIR, g.storedName),
+          "input",
+          `${entry.id}-${kind}-${idx}${ext}`,
+        );
         if (href) inputs.push({ kind, src: href, name: g.name || "" });
       });
     }
@@ -2641,35 +3157,57 @@ app.post("/api/export", (req, res) => {
     if (entry.localVideo?.startsWith("/output/")) {
       const rel = entry.localVideo.slice("/output/".length);
       const ext = path.extname(rel) || "";
-      const href = copyInto(path.join(OUTPUT_DIR, rel), "output", `${entry.id}${ext}`);
+      const href = copyInto(
+        path.join(OUTPUT_DIR, rel),
+        "output",
+        `${entry.id}${ext}`,
+      );
       // Kind from the model, or from the file extension (ComfyUI outputs aren't
       // typed by the model id and may be images or video).
-      const isImg = isImageOutputModel(entry.input?.model) || /\.(png|jpe?g|webp|gif|bmp)$/i.test(rel);
+      const isImg =
+        isImageOutputModel(entry.input?.model) ||
+        /\.(png|jpe?g|webp|gif|bmp)$/i.test(rel);
       if (href) output = { kind: isImg ? "image" : "video", src: href };
     }
     return { entry, inputs, output };
   });
 
   try {
-    const totalCredits = entries.reduce((sum, e) => sum + (typeof e.costCredits === "number" ? e.costCredits : 0), 0);
-    const html = buildExportHtml(view, { scopeLabel: scope.name, count: entries.length, totalCredits });
+    const totalCredits = entries.reduce(
+      (sum, e) => sum + (typeof e.costCredits === "number" ? e.costCredits : 0),
+      0,
+    );
+    const html = buildExportHtml(view, {
+      scopeLabel: scope.name,
+      count: entries.length,
+      totalCredits,
+    });
     fs.writeFileSync(path.join(outDir, "index.html"), html);
   } catch (err) {
     console.error("Export: failed to write index.html:", err);
-    return res.status(500).json({ code: 500, msg: "Failed to write export page." });
+    return res
+      .status(500)
+      .json({ code: 500, msg: "Failed to write export page." });
   }
 
   // Best-effort: reveal the finished export in the OS file browser.
   try {
     const cmd =
-      process.platform === "win32" ? "explorer" : process.platform === "darwin" ? "open" : "xdg-open";
+      process.platform === "win32" ? "explorer"
+      : process.platform === "darwin" ? "open"
+      : "xdg-open";
     spawn(cmd, [outDir], { detached: true, stdio: "ignore" }).unref();
   } catch {}
 
   res.json({
     code: 200,
     msg: "exported",
-    data: { folder: folderName, path: outDir, entries: entries.length, filesCopied: copied },
+    data: {
+      folder: folderName,
+      path: outDir,
+      entries: entries.length,
+      filesCopied: copied,
+    },
   });
 });
 
@@ -2681,8 +3219,17 @@ app.get("/api/ping", (req, res) => {
 // --- account credit balance ---------------------------------------------
 app.get("/api/credits", (req, res) => {
   // No key: report "not configured" (the header hides the balance) instead of an error.
-  if (!API_KEY) return res.json({ code: 200, msg: "no api key", data: null, configured: false });
-  forward(res, fetch(CREDITS_URL, { headers: { Authorization: `Bearer ${API_KEY}` } }));
+  if (!API_KEY)
+    return res.json({
+      code: 200,
+      msg: "no api key",
+      data: null,
+      configured: false,
+    });
+  forward(
+    res,
+    fetch(CREDITS_URL, { headers: { Authorization: `Bearer ${API_KEY}` } }),
+  );
 });
 
 // --- projects CRUD --------------------------------------------------------
@@ -2692,9 +3239,15 @@ app.get("/api/projects", (req, res) => {
 
 app.post("/api/projects", (req, res) => {
   const name = (req.body?.name || "").trim();
-  if (!name) return res.status(400).json({ code: 400, msg: "name is required" });
+  if (!name)
+    return res.status(400).json({ code: 400, msg: "name is required" });
   const projects = ensureDefaultProject();
-  const proj = { id: randomUUID(), name, slug: slugify(name, projects), createdAt: new Date().toISOString() };
+  const proj = {
+    id: randomUUID(),
+    name,
+    slug: slugify(name, projects),
+    createdAt: new Date().toISOString(),
+  };
   projects.push(proj);
   writeJson(PROJECTS_FILE, projects);
   fs.mkdirSync(path.join(INPUT_DIR, proj.slug), { recursive: true });
@@ -2704,10 +3257,12 @@ app.post("/api/projects", (req, res) => {
 
 app.put("/api/projects/:id", (req, res) => {
   const name = (req.body?.name || "").trim();
-  if (!name) return res.status(400).json({ code: 400, msg: "name is required" });
+  if (!name)
+    return res.status(400).json({ code: 400, msg: "name is required" });
   const projects = ensureDefaultProject();
   const proj = projects.find((p) => p.id === req.params.id);
-  if (!proj) return res.status(404).json({ code: 404, msg: "project not found" });
+  if (!proj)
+    return res.status(404).json({ code: 404, msg: "project not found" });
   proj.name = name; // slug (and folders) intentionally stay put on rename
   writeJson(PROJECTS_FILE, projects);
   res.json({ code: 200, msg: "renamed", data: proj });
@@ -2716,11 +3271,14 @@ app.put("/api/projects/:id", (req, res) => {
 // Delete a project: its gallery media and history move to Default.
 app.delete("/api/projects/:id", (req, res) => {
   if (req.params.id === "default") {
-    return res.status(403).json({ code: 403, msg: "The Default project cannot be deleted" });
+    return res
+      .status(403)
+      .json({ code: 403, msg: "The Default project cannot be deleted" });
   }
   const projects = ensureDefaultProject();
   const proj = projects.find((p) => p.id === req.params.id);
-  if (!proj) return res.status(404).json({ code: 404, msg: "project not found" });
+  if (!proj)
+    return res.status(404).json({ code: 404, msg: "project not found" });
 
   const images = readJson(IMAGES_FILE);
   for (const entry of images) {
@@ -2728,7 +3286,10 @@ app.delete("/api/projects/:id", (req, res) => {
     try {
       moveGalleryEntry(entry, "default");
     } catch (err) {
-      console.error(`Failed to move ${entry.storedName} to default:`, err.message);
+      console.error(
+        `Failed to move ${entry.storedName} to default:`,
+        err.message,
+      );
     }
     entry.projectId = "default";
   }
@@ -2741,7 +3302,10 @@ app.delete("/api/projects/:id", (req, res) => {
     try {
       moveHistoryVideo(entry, "default");
     } catch (err) {
-      console.error(`Failed to move ${entry.localVideo} to default:`, err.message);
+      console.error(
+        `Failed to move ${entry.localVideo} to default:`,
+        err.message,
+      );
     }
   }
   writeJson(HISTORY_FILE, history);
@@ -2756,7 +3320,10 @@ app.delete("/api/projects/:id", (req, res) => {
     fs.rmSync(promptsFile(proj), { force: true });
   } catch {}
 
-  writeJson(PROJECTS_FILE, projects.filter((p) => p.id !== proj.id));
+  writeJson(
+    PROJECTS_FILE,
+    projects.filter((p) => p.id !== proj.id),
+  );
   // remove the now-empty project folders (best-effort)
   for (const dir of [
     path.join(INPUT_DIR, proj.slug),
@@ -2782,13 +3349,17 @@ const EXT_MAP = {
 // --- save dropped media locally (NO API call — happens at generate time) ---
 app.post("/api/upload", (req, res) => {
   const { base64Data, fileName, projectId } = req.body || {};
-  if (!base64Data) return res.status(400).json({ code: 400, msg: "base64Data is required" });
+  if (!base64Data)
+    return res.status(400).json({ code: 400, msg: "base64Data is required" });
 
   const proj = resolveProject(projectId);
   const m = /^data:([^;]+);base64,(.+)$/s.exec(base64Data);
   const mime = m ? m[1] : "image/png";
   const rawB64 = m ? m[2] : base64Data;
-  const kind = mime.startsWith("video/") ? "video" : mime.startsWith("audio/") ? "audio" : "image";
+  const kind =
+    mime.startsWith("video/") ? "video"
+    : mime.startsWith("audio/") ? "audio"
+    : "image";
   const sub = mime.split("/")[1] || "png";
   // audio/mp4 needs to be distinguished from video/mp4
   const ext = kind === "audio" && sub === "mp4" ? "m4a" : EXT_MAP[sub] || sub;
@@ -2797,7 +3368,10 @@ app.post("/api/upload", (req, res) => {
 
   try {
     fs.mkdirSync(path.join(INPUT_DIR, proj.slug), { recursive: true });
-    fs.writeFileSync(path.join(INPUT_DIR, storedName), Buffer.from(rawB64, "base64"));
+    fs.writeFileSync(
+      path.join(INPUT_DIR, storedName),
+      Buffer.from(rawB64, "base64"),
+    );
   } catch (err) {
     console.error("Failed to save file:", err);
     return res.status(500).json({ code: 500, msg: "Failed to save file" });
@@ -2844,8 +3418,8 @@ app.get("/api/images", (req, res) => {
 });
 
 // A subject key ("stub") for a gallery item: how a prompt (and later the LLM) refers
-// to what the image shows, e.g. "sibella" for @sibella. One lowercase word — letters,
-// digits, _ and - — with any leading @ or <> dropped, so "Sibella" and "sibella" match.
+// to what the image shows, e.g. "genie" for @genie. One lowercase word — letters,
+// digits, _ and - — with any leading @ or <> dropped, so "GENie" and "genie" match.
 function normalizeMediaKey(key) {
   return String(key ?? "")
     .trim()
@@ -2871,18 +3445,26 @@ app.put("/api/images/:id", (req, res) => {
     changed = true;
   }
   if (definition !== undefined) {
-    entry.definition = String(definition ?? "").trim().slice(0, 4000);
+    entry.definition = String(definition ?? "")
+      .trim()
+      .slice(0, 4000);
     changed = true;
   }
   if (projectId !== undefined) {
     const proj = ensureDefaultProject().find((p) => p.id === projectId);
-    if (!proj) return res.status(400).json({ code: 400, msg: "unknown projectId" });
+    if (!proj)
+      return res.status(400).json({ code: 400, msg: "unknown projectId" });
     if ((entry.projectId || "default") !== proj.id) {
       try {
         moveGalleryEntry(entry, proj.slug);
       } catch (err) {
         console.error("Failed to move file:", err);
-        return res.status(409).json({ code: 409, msg: "Failed to move the file (is it open elsewhere?)" });
+        return res
+          .status(409)
+          .json({
+            code: 409,
+            msg: "Failed to move the file (is it open elsewhere?)",
+          });
       }
       entry.projectId = proj.id;
       changed = true;
@@ -2901,7 +3483,10 @@ app.delete("/api/images/:id", (req, res) => {
   } catch (err) {
     console.error("Failed to delete file:", err);
   }
-  writeJson(IMAGES_FILE, images.filter((i) => i.id !== req.params.id));
+  writeJson(
+    IMAGES_FILE,
+    images.filter((i) => i.id !== req.params.id),
+  );
   res.json({ code: 200, msg: "deleted" });
 });
 
@@ -2932,29 +3517,45 @@ function sanitizeMinimax(mm) {
   const str = (v, n = 20000) => String(v ?? "").slice(0, n);
   const time = (v) => {
     const n = Number(v);
-    return v === null || v === "" || v === undefined || !Number.isFinite(n) ? null : Math.max(0, n);
+    return v === null || v === "" || v === undefined || !Number.isFinite(n) ?
+        null
+      : Math.max(0, n);
   };
-  const shots = Array.isArray(o.shots) && o.shots.length ? o.shots.slice(0, 100) : [{}];
-  const retention = o.retention && typeof o.retention === "object" ? o.retention : {};
+  const shots =
+    Array.isArray(o.shots) && o.shots.length ? o.shots.slice(0, 100) : [{}];
+  const retention =
+    o.retention && typeof o.retention === "object" ? o.retention : {};
   // Earlier prompts kept the summary's task types as a list — fold them into the text.
-  const types = (Array.isArray(o.summaryTypes) ? o.summaryTypes : []).map((t) => str(t, 40)).filter(Boolean).slice(0, 6);
+  const types = (Array.isArray(o.summaryTypes) ? o.summaryTypes : [])
+    .map((t) => str(t, 40))
+    .filter(Boolean)
+    .slice(0, 6);
   let summary = str(o.summary, 4000);
-  if (types.length && !summary.trimStart().startsWith("[")) summary = `[${types.join(" + ")}] ${summary}`.trim();
+  if (types.length && !summary.trimStart().startsWith("["))
+    summary = `[${types.join(" + ")}] ${summary}`.trim();
   return {
     summary,
     style: str(o.style, 4000),
-    shots: shots.map((s, i) => ({ at: i === 0 ? null : time(s?.at), text: str(s?.text) })),
+    shots: shots.map((s, i) => ({
+      at: i === 0 ? null : time(s?.at),
+      text: str(s?.text),
+    })),
     subjects: (Array.isArray(o.subjects) ? o.subjects : [])
       .slice(0, 50)
-      .map((s) => ({ key: normalizeMediaKey(s?.key), definition: str(s?.definition, 4000) })),
+      .map((s) => ({
+        key: normalizeMediaKey(s?.key),
+        definition: str(s?.definition, 4000),
+      })),
     retention: Object.fromEntries(
       Object.entries(retention)
         .slice(0, 100)
         // Written by the author ("fully_preserved - …"); earlier prompts stored { marker, note }.
         .map(([k, v]) => [
           str(k, 60),
-          typeof v === "string" ? str(v, 4000) : `${str(v?.marker, 40)}${v?.note ? ` - ${str(v.note, 2000)}` : ""}`.trim(),
-        ])
+          typeof v === "string" ?
+            str(v, 4000)
+          : `${str(v?.marker, 40)}${v?.note ? ` - ${str(v.note, 2000)}` : ""}`.trim(),
+        ]),
     ),
     soundscape: str(o.soundscape, 4000),
     music: str(o.music, 4000),
@@ -2967,7 +3568,8 @@ function promptsFile(proj) {
 }
 const promptWeight = (p) => (Number.isFinite(p.weight) ? p.weight : 0);
 // Stable, so ties keep their stored order.
-const byPromptWeight = (list) => [...list].sort((a, b) => promptWeight(a) - promptWeight(b));
+const byPromptWeight = (list) =>
+  [...list].sort((a, b) => promptWeight(a) - promptWeight(b));
 
 function readPrompts(proj) {
   const list = readJson(promptsFile(proj));
@@ -2980,26 +3582,49 @@ function writePrompts(proj, list) {
 
 // Strict lookup (no fallback to Default): a typo'd id must not write into Default.
 function findProject(projectId) {
-  return ensureDefaultProject().find((p) => p.id === (projectId || "default")) || null;
+  return (
+    ensureDefaultProject().find((p) => p.id === (projectId || "default")) ||
+    null
+  );
 }
 
 // Validate/trim a client-sent prompt body. Fields left undefined stay unchanged on update.
 function sanitizePromptFields(body = {}) {
   const out = {};
-  if (body.title !== undefined) out.title = String(body.title ?? "").trim().slice(0, 200);
-  if (body.type !== undefined) out.type = PROMPT_TYPES.has(body.type) ? body.type : "default";
-  if (body.minimax !== undefined) out.minimax = body.minimax === null ? null : sanitizeMinimax(body.minimax);
-  if (body.prompt !== undefined) out.prompt = String(body.prompt ?? "").slice(0, 50000);
+  if (body.title !== undefined)
+    out.title = String(body.title ?? "")
+      .trim()
+      .slice(0, 200);
+  if (body.type !== undefined)
+    out.type = PROMPT_TYPES.has(body.type) ? body.type : "default";
+  if (body.minimax !== undefined)
+    out.minimax = body.minimax === null ? null : sanitizeMinimax(body.minimax);
+  if (body.prompt !== undefined)
+    out.prompt = String(body.prompt ?? "").slice(0, 50000);
   if (body.duration !== undefined) {
     const d = Number(body.duration);
-    out.duration = body.duration === null || body.duration === "" || !Number.isFinite(d) || d <= 0 ? null : d;
+    out.duration =
+      (
+        body.duration === null ||
+        body.duration === "" ||
+        !Number.isFinite(d) ||
+        d <= 0
+      ) ?
+        null
+      : d;
   }
   if (body.historyId !== undefined) {
-    out.historyId = typeof body.historyId === "string" && body.historyId ? body.historyId.slice(0, 100) : null;
+    out.historyId =
+      typeof body.historyId === "string" && body.historyId ?
+        body.historyId.slice(0, 100)
+      : null;
   }
   if (body.weight !== undefined) {
     const w = Number(body.weight);
-    out.weight = body.weight === null || body.weight === "" || !Number.isFinite(w) ? 0 : Math.round(w);
+    out.weight =
+      body.weight === null || body.weight === "" || !Number.isFinite(w) ?
+        0
+      : Math.round(w);
   }
   if (body.refs !== undefined) {
     out.refs = (Array.isArray(body.refs) ? body.refs : [])
@@ -3025,13 +3650,20 @@ function sanitizePromptFields(body = {}) {
 // { missing: true } once that entry is deleted or has no file.
 function withRefDetails(prompts) {
   const byId = new Map(readJson(IMAGES_FILE).map((i) => [i.id, i]));
-  const history = prompts.some((p) => p.historyId) ? new Map(readJson(HISTORY_FILE).map((e) => [e.id, e])) : null;
+  const history =
+    prompts.some((p) => p.historyId) ?
+      new Map(readJson(HISTORY_FILE).map((e) => [e.id, e]))
+    : null;
   const outputOf = (historyId) => {
     const e = history.get(historyId);
     const o = e && ((e.outputs || [])[0] || e);
     const url = o && (o.localVideo || o.resultUrl);
-    if (!url) return e?.status === "pending" ? { historyId, pending: true } : { historyId, missing: true };
-    const isImg = /\.(png|jpe?g|webp|gif|bmp)$/i.test(url.split("?")[0]) || entryIsImage(e);
+    if (!url)
+      return e?.status === "pending" ?
+          { historyId, pending: true }
+        : { historyId, missing: true };
+    const isImg =
+      /\.(png|jpe?g|webp|gif|bmp)$/i.test(url.split("?")[0]) || entryIsImage(e);
     return { historyId, kind: isImg ? "image" : "video", url };
   };
   return prompts.map((p) => ({
@@ -3083,7 +3715,10 @@ if (!fs.existsSync(WILDCARDS_FILE) && fs.existsSync(DEFAULT_WILDCARDS_FILE)) {
     fs.copyFileSync(DEFAULT_WILDCARDS_FILE, WILDCARDS_FILE);
     console.log("Created wildcards.json from default.wildcards.json");
   } catch (err) {
-    console.error("Couldn't create wildcards.json from the defaults:", err.message);
+    console.error(
+      "Couldn't create wildcards.json from the defaults:",
+      err.message,
+    );
   }
 }
 
@@ -3101,7 +3736,11 @@ function normalizeWildcardName(v) {
 function sanitizeWildcardValues(v) {
   const list = Array.isArray(v) ? v : String(v ?? "").split(/\r?\n/);
   return list
-    .map((x) => String(x ?? "").trim().slice(0, 2000))
+    .map((x) =>
+      String(x ?? "")
+        .trim()
+        .slice(0, 2000),
+    )
     .filter(Boolean)
     .slice(0, WILDCARD_MAX_VALUES);
 }
@@ -3113,8 +3752,12 @@ function readWildcards() {
 
 // A name problem for `fields` (null if fine): both parts set, and not already taken.
 function wildcardConflict(list, fields, selfId = null) {
-  if (!fields.category || !fields.key) return "category and key are required (letters, numbers, _ or -)";
-  const dup = list.find((w) => w.id !== selfId && w.category === fields.category && w.key === fields.key);
+  if (!fields.category || !fields.key)
+    return "category and key are required (letters, numbers, _ or -)";
+  const dup = list.find(
+    (w) =>
+      w.id !== selfId && w.category === fields.category && w.key === fields.key,
+  );
   return dup ? `%${fields.category}:${fields.key}% already exists` : null;
 }
 
@@ -3140,12 +3783,17 @@ app.post("/api/wildcards", (req, res) => {
 app.put("/api/wildcards/:id", (req, res) => {
   const list = readWildcards();
   const entry = list.find((w) => w.id === req.params.id);
-  if (!entry) return res.status(404).json({ code: 404, msg: "wildcard not found" });
+  if (!entry)
+    return res.status(404).json({ code: 404, msg: "wildcard not found" });
   const b = req.body || {};
   const fields = {
-    category: b.category !== undefined ? normalizeWildcardName(b.category) : entry.category,
+    category:
+      b.category !== undefined ?
+        normalizeWildcardName(b.category)
+      : entry.category,
     key: b.key !== undefined ? normalizeWildcardName(b.key) : entry.key,
-    values: b.values !== undefined ? sanitizeWildcardValues(b.values) : entry.values,
+    values:
+      b.values !== undefined ? sanitizeWildcardValues(b.values) : entry.values,
   };
   const problem = wildcardConflict(list, fields, entry.id);
   if (problem) return res.status(400).json({ code: 400, msg: problem });
@@ -3159,24 +3807,43 @@ app.delete("/api/wildcards/:id", (req, res) => {
   if (!list.some((w) => w.id === req.params.id)) {
     return res.status(404).json({ code: 404, msg: "wildcard not found" });
   }
-  writeJson(WILDCARDS_FILE, list.filter((w) => w.id !== req.params.id));
+  writeJson(
+    WILDCARDS_FILE,
+    list.filter((w) => w.id !== req.params.id),
+  );
   res.json({ code: 200, msg: "deleted" });
 });
 
 app.get("/api/prompts", (req, res) => {
   const proj = findProject(req.query.projectId);
-  if (!proj) return res.status(400).json({ code: 400, msg: "unknown projectId" });
-  res.json({ code: 200, msg: "success", data: withRefDetails(readPrompts(proj)) });
+  if (!proj)
+    return res.status(400).json({ code: 400, msg: "unknown projectId" });
+  res.json({
+    code: 200,
+    msg: "success",
+    data: withRefDetails(readPrompts(proj)),
+  });
 });
 
 app.post("/api/prompts", (req, res) => {
   const proj = findProject(req.body?.projectId);
-  if (!proj) return res.status(400).json({ code: 400, msg: "unknown projectId" });
-  const fields = sanitizePromptFields({ type: "default", duration: null, weight: 0, refs: [], ...req.body });
-  if (!fields.title) return res.status(400).json({ code: 400, msg: "title is required" });
-  if (STRUCTURED_PROMPT_TYPES.has(fields.type)) fields.minimax ||= sanitizeMinimax(null); // a new one may start blank
+  if (!proj)
+    return res.status(400).json({ code: 400, msg: "unknown projectId" });
+  const fields = sanitizePromptFields({
+    type: "default",
+    duration: null,
+    weight: 0,
+    refs: [],
+    ...req.body,
+  });
+  if (!fields.title)
+    return res.status(400).json({ code: 400, msg: "title is required" });
+  if (STRUCTURED_PROMPT_TYPES.has(fields.type))
+    fields.minimax ||= sanitizeMinimax(null); // a new one may start blank
   else if (!fields.prompt?.trim() && !fields.refs.length) {
-    return res.status(400).json({ code: 400, msg: "nothing to save — the prompt is empty" });
+    return res
+      .status(400)
+      .json({ code: 400, msg: "nothing to save — the prompt is empty" });
   }
   const now = new Date().toISOString();
   const entry = { id: randomUUID(), ...fields, createdAt: now, updatedAt: now };
@@ -3189,13 +3856,18 @@ app.post("/api/prompts", (req, res) => {
 // keeps its weight.
 app.post("/api/prompts/reorder", (req, res) => {
   const proj = findProject(req.body?.projectId);
-  if (!proj) return res.status(400).json({ code: 400, msg: "unknown projectId" });
+  if (!proj)
+    return res.status(400).json({ code: 400, msg: "unknown projectId" });
   const ids = Array.isArray(req.body?.ids) ? req.body.ids.map(String) : [];
   const rank = new Map(ids.map((id, i) => [id, i]));
   const list = readPrompts(proj);
   for (const p of list) if (rank.has(p.id)) p.weight = rank.get(p.id);
   writePrompts(proj, list);
-  res.json({ code: 200, msg: "reordered", data: withRefDetails(readPrompts(proj)) });
+  res.json({
+    code: 200,
+    msg: "reordered",
+    data: withRefDetails(readPrompts(proj)),
+  });
 });
 
 // Point `promptId` (null = none) at `historyId`, clearing that entry from any other
@@ -3224,7 +3896,8 @@ function linkPromptToHistory(proj, promptId, historyId) {
 app.post("/api/prompts/link", (req, res) => {
   const { projectId, historyId, promptId } = req.body || {};
   const proj = findProject(projectId);
-  if (!proj) return res.status(400).json({ code: 400, msg: "unknown projectId" });
+  if (!proj)
+    return res.status(400).json({ code: 400, msg: "unknown projectId" });
   if (typeof historyId !== "string" || !historyId) {
     return res.status(400).json({ code: 400, msg: "historyId is required" });
   }
@@ -3235,15 +3908,21 @@ app.post("/api/prompts/link", (req, res) => {
     return res.status(404).json({ code: 404, msg: "prompt not found" });
   }
   linkPromptToHistory(proj, promptId || null, historyId);
-  res.json({ code: 200, msg: promptId ? "linked" : "unlinked", data: withRefDetails(readPrompts(proj)) });
+  res.json({
+    code: 200,
+    msg: promptId ? "linked" : "unlinked",
+    data: withRefDetails(readPrompts(proj)),
+  });
 });
 
 app.put("/api/prompts/:id", (req, res) => {
   const proj = findProject(req.body?.projectId);
-  if (!proj) return res.status(400).json({ code: 400, msg: "unknown projectId" });
+  if (!proj)
+    return res.status(400).json({ code: 400, msg: "unknown projectId" });
   const list = readPrompts(proj);
   const entry = list.find((p) => p.id === req.params.id);
-  if (!entry) return res.status(404).json({ code: 404, msg: "prompt not found" });
+  if (!entry)
+    return res.status(404).json({ code: 404, msg: "prompt not found" });
   const fields = sanitizePromptFields(req.body);
   if (fields.title !== undefined && !fields.title) {
     return res.status(400).json({ code: 400, msg: "title can't be empty" });
@@ -3257,22 +3936,28 @@ app.put("/api/prompts/:id", (req, res) => {
 
 app.delete("/api/prompts/:id", (req, res) => {
   const proj = findProject(req.query.projectId);
-  if (!proj) return res.status(400).json({ code: 400, msg: "unknown projectId" });
+  if (!proj)
+    return res.status(400).json({ code: 400, msg: "unknown projectId" });
   const list = readPrompts(proj);
   if (!list.some((p) => p.id === req.params.id)) {
     return res.status(404).json({ code: 404, msg: "prompt not found" });
   }
-  writePrompts(proj, list.filter((p) => p.id !== req.params.id));
+  writePrompts(
+    proj,
+    list.filter((p) => p.id !== req.params.id),
+  );
   res.json({ code: 200, msg: "deleted" });
 });
 
 // Duplicate within the same project; the copy lands right below the original.
 app.post("/api/prompts/:id/duplicate", (req, res) => {
   const proj = findProject(req.body?.projectId);
-  if (!proj) return res.status(400).json({ code: 400, msg: "unknown projectId" });
+  if (!proj)
+    return res.status(400).json({ code: 400, msg: "unknown projectId" });
   const list = readPrompts(proj);
   const idx = list.findIndex((p) => p.id === req.params.id);
-  if (idx < 0) return res.status(404).json({ code: 404, msg: "prompt not found" });
+  if (idx < 0)
+    return res.status(404).json({ code: 404, msg: "prompt not found" });
   const copy = copyOfPrompt(list[idx]);
   copy.title = `${list[idx].title} (copy)`.slice(0, 200);
   list.splice(idx + 1, 0, copy);
@@ -3287,18 +3972,37 @@ app.post("/api/prompts/:id/transfer", (req, res) => {
   const { projectId, toProjectId, mode } = req.body || {};
   const from = findProject(projectId);
   const to = findProject(toProjectId);
-  if (!from || !to) return res.status(400).json({ code: 400, msg: "unknown projectId" });
+  if (!from || !to)
+    return res.status(400).json({ code: 400, msg: "unknown projectId" });
   if (mode !== "copy" && mode !== "move") {
-    return res.status(400).json({ code: 400, msg: 'mode must be "copy" or "move"' });
+    return res
+      .status(400)
+      .json({ code: 400, msg: 'mode must be "copy" or "move"' });
   }
-  if (from.id === to.id) return res.status(400).json({ code: 400, msg: "pick a different project" });
+  if (from.id === to.id)
+    return res.status(400).json({ code: 400, msg: "pick a different project" });
   const src = readPrompts(from);
   const entry = src.find((p) => p.id === req.params.id);
-  if (!entry) return res.status(404).json({ code: 404, msg: "prompt not found" });
-  const moved = mode === "move" ? { ...entry, updatedAt: new Date().toISOString() } : copyOfPrompt(entry);
-  writePrompts(to, [moved, ...readPrompts(to).filter((p) => p.id !== moved.id)]);
-  if (mode === "move") writePrompts(from, src.filter((p) => p.id !== entry.id));
-  res.json({ code: 200, msg: mode === "move" ? "moved" : "copied", data: withRefDetails([moved])[0] });
+  if (!entry)
+    return res.status(404).json({ code: 404, msg: "prompt not found" });
+  const moved =
+    mode === "move" ?
+      { ...entry, updatedAt: new Date().toISOString() }
+    : copyOfPrompt(entry);
+  writePrompts(to, [
+    moved,
+    ...readPrompts(to).filter((p) => p.id !== moved.id),
+  ]);
+  if (mode === "move")
+    writePrompts(
+      from,
+      src.filter((p) => p.id !== entry.id),
+    );
+  res.json({
+    code: 200,
+    msg: mode === "move" ? "moved" : "copied",
+    data: withRefDetails([moved])[0],
+  });
 });
 
 // Download a finished result into a project's video folder; returns the served
@@ -3307,7 +4011,9 @@ async function downloadOutput(resultUrl, proj, id, suffix = "") {
   // Extension from the path, or from a ?filename= query (ComfyUI /view uses that).
   let fnameHint = resultUrl.split("?")[0];
   try {
-    const q = new URL(resultUrl, "http://localhost").searchParams.get("filename");
+    const q = new URL(resultUrl, "http://localhost").searchParams.get(
+      "filename",
+    );
     if (q) fnameHint = q;
   } catch {
     /* non-URL resultUrl — fall back to the path */
@@ -3331,9 +4037,13 @@ async function downloadOutput(resultUrl, proj, id, suffix = "") {
     } catch (err) {
       lastErr = err;
     }
-    if (attempt < 2) await new Promise((res) => setTimeout(res, 500 * (attempt + 1)));
+    if (attempt < 2)
+      await new Promise((res) => setTimeout(res, 500 * (attempt + 1)));
   }
-  console.error(`Failed to download output from ${resultUrl}:`, lastErr?.message || lastErr);
+  console.error(
+    `Failed to download output from ${resultUrl}:`,
+    lastErr?.message || lastErr,
+  );
   return null;
 }
 
@@ -3373,12 +4083,32 @@ function autoLinkSavedPrompt(entry) {
   try {
     linkPromptToHistory(proj, sp.id, entry.id);
   } catch (err) {
-    console.error(`Couldn't link entry ${entry.id} to saved prompt ${sp.id}:`, err.message);
+    console.error(
+      `Couldn't link entry ${entry.id} to saved prompt ${sp.id}:`,
+      err.message,
+    );
   }
 }
 
 // Build a history entry object (output fields may be null for a pending entry).
-function makeHistoryEntry({ id, taskId, projectId, input, resultUrl, localVideo, costCredits, refVideoSeconds, imageLocalIds, mediaLocalIds, status, runtimeMs, draft, hidden, favorite, continuation }) {
+function makeHistoryEntry({
+  id,
+  taskId,
+  projectId,
+  input,
+  resultUrl,
+  localVideo,
+  costCredits,
+  refVideoSeconds,
+  imageLocalIds,
+  mediaLocalIds,
+  status,
+  runtimeMs,
+  draft,
+  hidden,
+  favorite,
+  continuation,
+}) {
   return {
     id,
     createdAt: new Date().toISOString(),
@@ -3405,28 +4135,51 @@ function makeHistoryEntry({ id, taskId, projectId, input, resultUrl, localVideo,
     refVideoSeconds: typeof refVideoSeconds === "number" ? refVideoSeconds : 0,
     imageLocalIds: Array.isArray(imageLocalIds) ? imageLocalIds : [],
     // per-kind local ids: { image: [], video: [], audio: [] }
-    mediaLocalIds: mediaLocalIds && typeof mediaLocalIds === "object" ? mediaLocalIds : null,
+    mediaLocalIds:
+      mediaLocalIds && typeof mediaLocalIds === "object" ? mediaLocalIds : null,
     // Links this run to the one it continues, for a workflow that declares the
     // continuation tokens: `from` is the opaque integer it was given to read, `slot`
     // the one it was given to write. null for every ordinary run — nothing else about
     // a normal generation changes shape.
-    continuation: continuation && typeof continuation === "object" ? continuation : null,
+    continuation:
+      continuation && typeof continuation === "object" ? continuation : null,
   };
 }
 
 // --- save a finished generation to history (+ download the video) -------
 app.post("/api/save", async (req, res) => {
-  const { input, taskId, resultUrl, costCredits, imageLocalIds, mediaLocalIds, projectId, refVideoSeconds, startedAt } =
-    req.body || {};
-  if (!resultUrl) return res.status(400).json({ code: 400, msg: "resultUrl is required" });
+  const {
+    input,
+    taskId,
+    resultUrl,
+    costCredits,
+    imageLocalIds,
+    mediaLocalIds,
+    projectId,
+    refVideoSeconds,
+    startedAt,
+  } = req.body || {};
+  if (!resultUrl)
+    return res.status(400).json({ code: 400, msg: "resultUrl is required" });
 
   const proj = resolveProject(projectId);
   const id = `${Date.now()}`;
   const localVideo = await downloadOutput(resultUrl, proj, id);
   // No pending entry existed, so runtime comes from the client's job start time.
-  const runtimeMs = typeof startedAt === "number" ? Date.now() - startedAt : null;
+  const runtimeMs =
+    typeof startedAt === "number" ? Date.now() - startedAt : null;
   const entry = makeHistoryEntry({
-    id, taskId, projectId: proj.id, input, resultUrl, localVideo, costCredits, refVideoSeconds, imageLocalIds, mediaLocalIds, runtimeMs,
+    id,
+    taskId,
+    projectId: proj.id,
+    input,
+    resultUrl,
+    localVideo,
+    costCredits,
+    refVideoSeconds,
+    imageLocalIds,
+    mediaLocalIds,
+    runtimeMs,
     draft: computeAutoDraft(input),
   });
   const entries = readJson(HISTORY_FILE);
@@ -3438,10 +4191,23 @@ app.post("/api/save", async (req, res) => {
 // --- create a PENDING history entry at submit time (prompt saved immediately,
 // before the generation succeeds, so a failed/stopped run doesn't lose it) ----
 app.post("/api/history", (req, res) => {
-  const { input, taskId, mediaLocalIds, projectId, refVideoSeconds, imageLocalIds } = req.body || {};
+  const {
+    input,
+    taskId,
+    mediaLocalIds,
+    projectId,
+    refVideoSeconds,
+    imageLocalIds,
+  } = req.body || {};
   const proj = resolveProject(projectId);
   const entry = makeHistoryEntry({
-    id: `${Date.now()}`, taskId, projectId: proj.id, input, mediaLocalIds, refVideoSeconds, imageLocalIds,
+    id: `${Date.now()}`,
+    taskId,
+    projectId: proj.id,
+    input,
+    mediaLocalIds,
+    refVideoSeconds,
+    imageLocalIds,
     status: "pending",
   });
   const entries = readJson(HISTORY_FILE);
@@ -3455,7 +4221,8 @@ app.post("/api/history/:id/result", async (req, res) => {
   const { resultUrl, resultUrls, costCredits, runtimeMs } = req.body || {};
   const entries = readJson(HISTORY_FILE);
   const entry = entries.find((e) => e.id === req.params.id);
-  if (!entry) return res.status(404).json({ code: 404, msg: "history entry not found" });
+  if (!entry)
+    return res.status(404).json({ code: 404, msg: "history entry not found" });
 
   // Idempotent: if the server-side sweep already finished this entry, don't
   // re-download or recompute the run-time.
@@ -3464,19 +4231,29 @@ app.post("/api/history/:id/result", async (req, res) => {
   }
 
   // A ComfyUI batch can return several files; kie.ai always one.
-  const urls = (resultUrls && resultUrls.length ? resultUrls : resultUrl ? [resultUrl] : []).filter(Boolean);
+  const urls = (
+    resultUrls && resultUrls.length ? resultUrls
+    : resultUrl ? [resultUrl]
+    : []).filter(Boolean);
   try {
     if (urls.length) await attachOutputs(entry, urls); // also applies server-side auto-draft
   } catch (err) {
     console.error(`attachOutputs failed for entry ${entry.id}:`, err);
-    return res.status(502).json({ code: 502, msg: `Failed to save the output: ${err.message || err}` });
+    return res
+      .status(502)
+      .json({
+        code: 502,
+        msg: `Failed to save the output: ${err.message || err}`,
+      });
   }
   if (typeof costCredits === "number") entry.costCredits = costCredits;
   entry.status = "done";
   // Prefer a caller-supplied run time (ComfyUI's real per-prompt execution time);
   // fall back to since-created for kie.ai jobs, which are submitted one at a time.
   entry.runtimeMs =
-    typeof runtimeMs === "number" ? runtimeMs : Date.now() - new Date(entry.createdAt).getTime();
+    typeof runtimeMs === "number" ? runtimeMs : (
+      Date.now() - new Date(entry.createdAt).getTime()
+    );
   // Re-read + merge just this entry: two runs finishing at nearly the same instant
   // (common now that the sweep, client, and other tabs can all finalize) each held a
   // full-array snapshot, so a plain writeJson(entries) would clobber the other's
@@ -3492,25 +4269,35 @@ app.post("/api/history/:id/result", async (req, res) => {
 app.post("/api/history/:id/redownload", async (req, res) => {
   const entries = readJson(HISTORY_FILE);
   const entry = entries.find((e) => e.id === req.params.id);
-  if (!entry) return res.status(404).json({ code: 404, msg: "history entry not found" });
+  if (!entry)
+    return res.status(404).json({ code: 404, msg: "history entry not found" });
   const urls = (
-    Array.isArray(entry.outputs) && entry.outputs.length
-      ? entry.outputs.map((o) => o.resultUrl)
-      : [entry.resultUrl]
-  ).filter(Boolean);
+    Array.isArray(entry.outputs) && entry.outputs.length ?
+      entry.outputs.map((o) => o.resultUrl)
+    : [entry.resultUrl]).filter(Boolean);
   if (!urls.length) {
-    return res.status(400).json({ code: 400, msg: "This entry has no source URL to re-download from." });
+    return res
+      .status(400)
+      .json({
+        code: 400,
+        msg: "This entry has no source URL to re-download from.",
+      });
   }
   try {
     await attachOutputs(entry, urls);
   } catch (err) {
     console.error(`redownload failed for entry ${entry.id}:`, err);
-    return res.status(502).json({ code: 502, msg: `Re-download failed: ${err.message || err}` });
+    return res
+      .status(502)
+      .json({ code: 502, msg: `Re-download failed: ${err.message || err}` });
   }
   if (!entry.localVideo) {
     return res
       .status(502)
-      .json({ code: 502, msg: "Re-download failed — the source link may have expired." });
+      .json({
+        code: 502,
+        msg: "Re-download failed — the source link may have expired.",
+      });
   }
   entry.status = "done";
   saveHistoryEntry(entry, entries);
@@ -3524,10 +4311,12 @@ app.post("/api/history/:id/redownload", async (req, res) => {
 // `pending` so a late call can't disturb a finished entry.
 app.post("/api/history/:id/task", (req, res) => {
   const { taskId, balanceBefore, startedAt } = req.body || {};
-  if (!taskId) return res.status(400).json({ code: 400, msg: "taskId is required" });
+  if (!taskId)
+    return res.status(400).json({ code: 400, msg: "taskId is required" });
   const entries = readJson(HISTORY_FILE);
   const entry = entries.find((e) => e.id === req.params.id);
-  if (!entry) return res.status(404).json({ code: 404, msg: "history entry not found" });
+  if (!entry)
+    return res.status(404).json({ code: 404, msg: "history entry not found" });
   if (entry.status === "pending") {
     entry.taskId = taskId;
     if (typeof balanceBefore === "number") entry.balanceBefore = balanceBefore;
@@ -3542,7 +4331,8 @@ app.post("/api/history/:id/task", (req, res) => {
 app.post("/api/history/:id/fail", (req, res) => {
   const entries = readJson(HISTORY_FILE);
   const entry = entries.find((e) => e.id === req.params.id);
-  if (!entry) return res.status(404).json({ code: 404, msg: "history entry not found" });
+  if (!entry)
+    return res.status(404).json({ code: 404, msg: "history entry not found" });
   if (entry.status === "pending") {
     entry.status = "failed";
     entry.error = String(req.body?.error || "Generation failed.");
@@ -3559,7 +4349,11 @@ app.get("/api/history", (req, res) => {
 // attach a live poller to a run started on another device, and notice a run the
 // server-side sweep finished. Far cheaper than refetching the whole history.
 app.get("/api/history/pending", (req, res) => {
-  res.json({ code: 200, msg: "success", data: readJson(HISTORY_FILE).filter((e) => e.status === "pending") });
+  res.json({
+    code: 200,
+    msg: "success",
+    data: readJson(HISTORY_FILE).filter((e) => e.status === "pending"),
+  });
 });
 
 // --- reassign a history entry to another project (video file moves too) ---
@@ -3567,18 +4361,25 @@ app.put("/api/history/:id", (req, res) => {
   const { projectId } = req.body || {};
   const projects = ensureDefaultProject();
   const proj = projects.find((p) => p.id === projectId);
-  if (!proj) return res.status(400).json({ code: 400, msg: "unknown projectId" });
+  if (!proj)
+    return res.status(400).json({ code: 400, msg: "unknown projectId" });
 
   const entries = readJson(HISTORY_FILE);
   const entry = entries.find((e) => e.id === req.params.id);
-  if (!entry) return res.status(404).json({ code: 404, msg: "history entry not found" });
+  if (!entry)
+    return res.status(404).json({ code: 404, msg: "history entry not found" });
 
   if ((entry.projectId || "default") !== proj.id) {
     try {
       moveHistoryVideo(entry, proj.slug);
     } catch (err) {
       console.error("Failed to move video:", err);
-      return res.status(409).json({ code: 409, msg: "Failed to move the video file (is it playing?)" });
+      return res
+        .status(409)
+        .json({
+          code: 409,
+          msg: "Failed to move the video file (is it playing?)",
+        });
     }
     entry.projectId = proj.id;
     writeJson(HISTORY_FILE, entries);
@@ -3588,13 +4389,22 @@ app.put("/api/history/:id", (req, res) => {
 
 // --- global app settings (auto-draft MP threshold) ------------------------
 app.get("/api/settings", (req, res) => {
-  res.json({ code: 200, msg: "success", data: { autoDraftMaxMP: Number(readAppSettings().autoDraftMaxMP) || 0 } });
+  res.json({
+    code: 200,
+    msg: "success",
+    data: { autoDraftMaxMP: Number(readAppSettings().autoDraftMaxMP) || 0 },
+  });
 });
 app.put("/api/settings", (req, res) => {
   const s = readAppSettings();
-  if (req.body?.autoDraftMaxMP != null) s.autoDraftMaxMP = Math.max(0, Number(req.body.autoDraftMaxMP) || 0);
+  if (req.body?.autoDraftMaxMP != null)
+    s.autoDraftMaxMP = Math.max(0, Number(req.body.autoDraftMaxMP) || 0);
   writeAppSettings(s);
-  res.json({ code: 200, msg: "updated", data: { autoDraftMaxMP: Number(s.autoDraftMaxMP) || 0 } });
+  res.json({
+    code: 200,
+    msg: "updated",
+    data: { autoDraftMaxMP: Number(s.autoDraftMaxMP) || 0 },
+  });
 });
 
 // --- toggle an entry's tags (hidden / draft / favorite) -------------------
@@ -3602,7 +4412,8 @@ app.post("/api/history/:id/tags", (req, res) => {
   const { hidden, draft, favorite } = req.body || {};
   const entries = readJson(HISTORY_FILE);
   const entry = entries.find((e) => e.id === req.params.id);
-  if (!entry) return res.status(404).json({ code: 404, msg: "history entry not found" });
+  if (!entry)
+    return res.status(404).json({ code: 404, msg: "history entry not found" });
   if (typeof hidden === "boolean") entry.hidden = hidden;
   // draft and favorite both change where the file lives (see outputSubfolder), so
   // relocate whenever either flips.
@@ -3617,7 +4428,12 @@ app.post("/api/history/:id/tags", (req, res) => {
       moveHistoryVideo(entry, resolveProject(entry.projectId).slug);
     } catch (err) {
       console.error("Failed to move output for tag toggle:", err);
-      return res.status(409).json({ code: 409, msg: "Failed to move the output file (is it playing?)" });
+      return res
+        .status(409)
+        .json({
+          code: 409,
+          msg: "Failed to move the output file (is it playing?)",
+        });
     }
   }
   writeJson(HISTORY_FILE, entries);
@@ -3628,16 +4444,20 @@ app.post("/api/history/:id/tags", (req, res) => {
 app.delete("/api/history/:id", (req, res) => {
   const entries = readJson(HISTORY_FILE);
   const idx = entries.findIndex((e) => e.id === req.params.id);
-  if (idx < 0) return res.status(404).json({ code: 404, msg: "history entry not found" });
+  if (idx < 0)
+    return res.status(404).json({ code: 404, msg: "history entry not found" });
 
   const entry = entries[idx];
   // Best-effort removal of the saved output file (input gallery media is shared,
   // so it's left alone).
   if (entry.localVideo?.startsWith("/output/")) {
     try {
-      fs.unlinkSync(path.join(OUTPUT_DIR, entry.localVideo.slice("/output/".length)));
+      fs.unlinkSync(
+        path.join(OUTPUT_DIR, entry.localVideo.slice("/output/".length)),
+      );
     } catch (err) {
-      if (err.code !== "ENOENT") console.error("Failed to delete output file:", err.message);
+      if (err.code !== "ENOENT")
+        console.error("Failed to delete output file:", err.message);
     }
   }
   entries.splice(idx, 1);
@@ -3662,20 +4482,28 @@ const MIME_BY_EXT = {
 app.post("/api/history/:id/to-gallery", (req, res) => {
   const entries = readJson(HISTORY_FILE);
   const entry = entries.find((e) => e.id === req.params.id);
-  if (!entry) return res.status(404).json({ code: 404, msg: "history entry not found" });
+  if (!entry)
+    return res.status(404).json({ code: 404, msg: "history entry not found" });
   if (!entry.localVideo?.startsWith("/output/")) {
-    return res.status(400).json({ code: 400, msg: "no saved output file for this entry" });
+    return res
+      .status(400)
+      .json({ code: 400, msg: "no saved output file for this entry" });
   }
 
   const rel = entry.localVideo.slice("/output/".length); // <slug>/<file>
   const src = path.join(OUTPUT_DIR, rel);
   if (!fs.existsSync(src)) {
-    return res.status(404).json({ code: 404, msg: "saved output file is missing on disk" });
+    return res
+      .status(404)
+      .json({ code: 404, msg: "saved output file is missing on disk" });
   }
 
   const ext = (path.extname(src).slice(1) || "png").toLowerCase();
   const mime = MIME_BY_EXT[ext] || "image/png";
-  const kind = mime.startsWith("video/") ? "video" : mime.startsWith("audio/") ? "audio" : "image";
+  const kind =
+    mime.startsWith("video/") ? "video"
+    : mime.startsWith("audio/") ? "audio"
+    : "image";
   const proj = resolveProject(entry.projectId);
   const id = randomUUID();
   const storedName = `${proj.slug}/${id}.${ext}`;
@@ -3710,21 +4538,29 @@ function lanUrls(port) {
   const urls = [];
   for (const ifaces of Object.values(os.networkInterfaces())) {
     for (const i of ifaces || []) {
-      if (i.family === "IPv4" && !i.internal) urls.push(`http://${i.address}:${port}`);
+      if (i.family === "IPv4" && !i.internal)
+        urls.push(`http://${i.address}:${port}`);
     }
   }
   return urls;
 }
 
 app.listen(PORT, HOST, () => {
-  const loopback = HOST === "127.0.0.1" || HOST === "localhost" || HOST === "::1";
-  console.log(`\n  GENie${APP_VERSION ? ` v${APP_VERSION}` : ""} running:  http://localhost:${PORT}`);
-  console.log(`  Password protection:   ${AUTH_ENABLED ? "ON" : "OFF (set APP_PASSWORD in .env to enable)"}`);
+  const loopback =
+    HOST === "127.0.0.1" || HOST === "localhost" || HOST === "::1";
+  console.log(
+    `\n  GENie${APP_VERSION ? ` v${APP_VERSION}` : ""} running:  http://localhost:${PORT}`,
+  );
+  console.log(
+    `  Password protection:   ${AUTH_ENABLED ? "ON" : "OFF (set APP_PASSWORD in .env to enable)"}`,
+  );
 
   if (!loopback) {
     const urls = lanUrls(PORT);
     if (urls.length) {
-      console.log("\n  On your home network (other devices on the same Wi-Fi/LAN):");
+      console.log(
+        "\n  On your home network (other devices on the same Wi-Fi/LAN):",
+      );
       for (const u of urls) console.log(`    ${u}`);
     }
     const noLogin =

@@ -13,7 +13,9 @@ const creditsValue = document.getElementById("creditsValue");
 const refreshCredits = document.getElementById("refreshCredits");
 const estimateEl = document.getElementById("estimate");
 const projectCreditsTotal = document.getElementById("projectCreditsTotal");
-const projectCreditsBreakdown = document.getElementById("projectCreditsBreakdown");
+const projectCreditsBreakdown = document.getElementById(
+  "projectCreditsBreakdown",
+);
 
 // History
 const historyEl = document.getElementById("history");
@@ -134,7 +136,10 @@ function openLightbox(kind, src, name, nav = null) {
 function updateLightboxNav() {
   const active = !!lightboxNav;
   lightboxPrev.classList.toggle("hidden", !active || lightboxNav.index <= 0);
-  lightboxNext.classList.toggle("hidden", !active || lightboxNav.index >= lightboxNav.items.length - 1);
+  lightboxNext.classList.toggle(
+    "hidden",
+    !active || lightboxNav.index >= lightboxNav.items.length - 1,
+  );
 }
 
 function stepLightbox(delta) {
@@ -198,7 +203,9 @@ function makeGalleryThumb(item, { onPick, refresh, title } = {}) {
   const div = document.createElement("div");
   div.className = `thumb ready${kind === "audio" ? " audio-thumb" : ""}`;
   div.title = title || `${item.name} — click to add`;
-  div.appendChild(makeThumbContent(kind, { thumb: item.localUrl, name: item.name }));
+  div.appendChild(
+    makeThumbContent(kind, { thumb: item.localUrl, name: item.name }),
+  );
 
   if (kind !== "image") {
     const badge = document.createElement("span");
@@ -211,7 +218,10 @@ function makeGalleryThumb(item, { onPick, refresh, title } = {}) {
 
   // After a move/delete: reload the shared gallery data, then re-render this
   // caller's own view (the main gallery re-renders via loadGallery itself).
-  const afterChange = async () => { await loadGallery(); refresh?.(); };
+  const afterChange = async () => {
+    await loadGallery();
+    refresh?.();
+  };
 
   // move to another project (file physically moves)
   const mv = document.createElement("button");
@@ -228,7 +238,8 @@ function makeGalleryThumb(item, { onPick, refresh, title } = {}) {
     ph.disabled = true;
     sel.appendChild(ph);
     for (const p of projects) {
-      if (p.id !== (item.projectId || "default")) sel.appendChild(new Option(p.name, p.id));
+      if (p.id !== (item.projectId || "default"))
+        sel.appendChild(new Option(p.name, p.id));
     }
     sel.addEventListener("click", (ev) => ev.stopPropagation());
     sel.addEventListener("change", async () => {
@@ -302,7 +313,15 @@ function makeMediaList(kind, opts = {}) {
 
   // Per-file "use last N sec" rows, for video fields whose loader can skip frames.
   const tailGrid = opts.tail ? opts.tailGrid || null : null;
-  let dropzone, thumbs, fileInput, clearBtn, galleryWrap, galleryThumbs, galleryEmptyEl, fieldEl, tailsEl;
+  let dropzone,
+    thumbs,
+    fileInput,
+    clearBtn,
+    galleryWrap,
+    galleryThumbs,
+    galleryEmptyEl,
+    fieldEl,
+    tailsEl;
   if (opts.build) {
     // Build the field ourselves (ComfyUI controls have no static markup).
     const noun = mediaType === "audio" ? "audio files" : `${mediaType}s`;
@@ -373,7 +392,8 @@ function makeMediaList(kind, opts = {}) {
         div.appendChild(x);
 
         const zoomSrc = item.thumb || item.remoteUrl;
-        if (zoomSrc) div.appendChild(makeZoomButton(mediaType, zoomSrc, item.name));
+        if (zoomSrc)
+          div.appendChild(makeZoomButton(mediaType, zoomSrc, item.name));
 
         // drag-to-reorder within this list
         div.addEventListener("dragstart", (e) => {
@@ -383,7 +403,9 @@ function makeMediaList(kind, opts = {}) {
         });
         div.addEventListener("dragend", () => {
           div.classList.remove("dragging");
-          thumbs.querySelectorAll(".drop-target").forEach((t) => t.classList.remove("drop-target"));
+          thumbs
+            .querySelectorAll(".drop-target")
+            .forEach((t) => t.classList.remove("drop-target"));
         });
         div.addEventListener("dragover", (e) => {
           if (![...e.dataTransfer.types].includes(reorderType)) return;
@@ -392,7 +414,9 @@ function makeMediaList(kind, opts = {}) {
           e.dataTransfer.dropEffect = "move";
           div.classList.add("drop-target");
         });
-        div.addEventListener("dragleave", () => div.classList.remove("drop-target"));
+        div.addEventListener("dragleave", () =>
+          div.classList.remove("drop-target"),
+        );
         div.addEventListener("drop", (e) => {
           if (![...e.dataTransfer.types].includes(reorderType)) return;
           e.preventDefault();
@@ -430,8 +454,10 @@ function makeMediaList(kind, opts = {}) {
             seconds: item.tailSec || 0,
             probe: item.probe || null,
             grid: tailGrid,
-            onInput: (v) => { item.tailSec = v; },
-          })
+            onInput: (v) => {
+              item.tailSec = v;
+            },
+          }),
         );
       });
     },
@@ -457,7 +483,14 @@ function makeMediaList(kind, opts = {}) {
       if (!url) return;
       if (single) list.items = [];
       else if (!roomFor()) return;
-      const entry = { uid: nextUid++, localId: null, remoteUrl: url, thumb: url, name: url, status: "ready" };
+      const entry = {
+        uid: nextUid++,
+        localId: null,
+        remoteUrl: url,
+        thumb: url,
+        name: url,
+        status: "ready",
+      };
       list.items.push(entry);
       list.render();
       if (mediaType === "video") {
@@ -489,10 +522,15 @@ function makeMediaList(kind, opts = {}) {
           const res = await fetch("/api/upload", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ base64Data: reader.result, fileName: file.name, projectId: activeProjectId }),
+            body: JSON.stringify({
+              base64Data: reader.result,
+              fileName: file.name,
+              projectId: activeProjectId,
+            }),
           });
           const data = await res.json();
-          if (!res.ok || !data.image?.id) throw new Error(data.msg || "Save failed");
+          if (!res.ok || !data.image?.id)
+            throw new Error(data.msg || "Save failed");
           entry.localId = data.image.id;
           entry.thumb = data.image.localUrl || entry.thumb;
           entry.status = "ready";
@@ -536,7 +574,8 @@ function makeMediaList(kind, opts = {}) {
 
     addFiles(fileList) {
       let files = single ? [...fileList].slice(0, 1) : [...fileList];
-      if (Number.isFinite(max)) files = files.slice(0, Math.max(0, max - list.items.length));
+      if (Number.isFinite(max))
+        files = files.slice(0, Math.max(0, max - list.items.length));
       for (const file of files) {
         if (file.type.startsWith(`${mediaType}/`)) list.addFile(file);
       }
@@ -553,21 +592,25 @@ function makeMediaList(kind, opts = {}) {
           urls.push(item.remoteUrl);
           continue;
         }
-        if (!item.localId) throw new Error(`${item.name || kind}: missing source`);
+        if (!item.localId)
+          throw new Error(`${item.name || kind}: missing source`);
         const res = await fetch("/api/reupload", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ id: item.localId }),
         });
         const data = await res.json();
-        if (!res.ok || !data.hostedUrl) throw new Error(`${item.name || kind}: upload failed`);
+        if (!res.ok || !data.hostedUrl)
+          throw new Error(`${item.name || kind}: upload failed`);
         urls.push(data.hostedUrl);
       }
       return urls;
     },
 
     localIds() {
-      return list.items.filter((i) => i.status === "ready" && i.localId).map((i) => i.localId);
+      return list.items
+        .filter((i) => i.status === "ready" && i.localId)
+        .map((i) => i.localId);
     },
 
     clear() {
@@ -588,14 +631,14 @@ function makeMediaList(kind, opts = {}) {
       if ([...e.dataTransfer.types].includes(reorderType)) return; // internal reorder, not a file drop
       e.preventDefault();
       dropzone.classList.add("dragover");
-    })
+    }),
   );
   ["dragleave", "drop"].forEach((evt) =>
     dropzone.addEventListener(evt, (e) => {
       e.preventDefault();
       if (evt === "dragleave" && dropzone.contains(e.relatedTarget)) return;
       dropzone.classList.remove("dragover");
-    })
+    }),
   );
   dropzone.addEventListener("drop", (e) => {
     if ([...e.dataTransfer.types].includes(reorderType)) return;
@@ -604,7 +647,9 @@ function makeMediaList(kind, opts = {}) {
       return;
     }
     if (opts.localOnly) return; // ComfyUI needs a real file, not a hosted URL
-    const url = e.dataTransfer.getData("text/uri-list") || e.dataTransfer.getData("text/plain");
+    const url =
+      e.dataTransfer.getData("text/uri-list") ||
+      e.dataTransfer.getData("text/plain");
     if (url && /^https?:\/\//i.test(url.trim())) list.addUrl(url.trim());
   });
 
@@ -615,16 +660,23 @@ function makeMediaList(kind, opts = {}) {
     const renderPicker = () => {
       galleryThumbs.innerHTML = "";
       const gitems = galleryItems.filter(
-        (i) => (i.kind || "image") === mediaType && (i.projectId || "default") === activeProjectId
+        (i) =>
+          (i.kind || "image") === mediaType &&
+          (i.projectId || "default") === activeProjectId,
       );
       galleryEmptyEl.classList.toggle("hidden", gitems.length > 0);
       for (const item of gitems) {
         galleryThumbs.appendChild(
-          makeGalleryThumb(item, { onPick: (it) => list.addFromGallery(it), refresh: renderPicker })
+          makeGalleryThumb(item, {
+            onPick: (it) => list.addFromGallery(it),
+            refresh: renderPicker,
+          }),
         );
       }
     };
-    galleryWrap.addEventListener("toggle", () => { if (galleryWrap.open) renderPicker(); });
+    galleryWrap.addEventListener("toggle", () => {
+      if (galleryWrap.open) renderPicker();
+    });
   }
 
   return list;
@@ -635,7 +687,8 @@ function probeDuration(src) {
   return new Promise((resolve) => {
     const v = document.createElement("video");
     v.preload = "metadata";
-    v.onloadedmetadata = () => resolve(Number.isFinite(v.duration) ? v.duration : null);
+    v.onloadedmetadata = () =>
+      resolve(Number.isFinite(v.duration) ? v.duration : null);
     v.onerror = () => resolve(null);
     v.src = src;
   });
@@ -709,9 +762,12 @@ async function loadProjects() {
   projects.sort((a, b) => {
     if (a.id === "default") return -1;
     if (b.id === "default") return 1;
-    return (a.name || "").localeCompare(b.name || "", undefined, { sensitivity: "base" });
+    return (a.name || "").localeCompare(b.name || "", undefined, {
+      sensitivity: "base",
+    });
   });
-  if (!projects.some((p) => p.id === activeProjectId)) activeProjectId = "default";
+  if (!projects.some((p) => p.id === activeProjectId))
+    activeProjectId = "default";
   renderProjectControls();
   loadSavedPrompts(); // project names in the cards (and a vanished active project) changed
 }
@@ -739,7 +795,10 @@ function renderProjectControls() {
     opt.textContent = p.name;
     historyFilter.appendChild(opt);
   }
-  historyFilter.value = [...historyFilter.options].some((o) => o.value === prev) ? prev : activeProjectId;
+  historyFilter.value =
+    [...historyFilter.options].some((o) => o.value === prev) ? prev : (
+      activeProjectId
+    );
 
   renderGallery(galleryItems);
   renderHistory(historyEntries);
@@ -756,7 +815,9 @@ function setActiveProject(id) {
   renderHistory(historyEntries);
 }
 
-projectSelect.addEventListener("change", () => setActiveProject(projectSelect.value));
+projectSelect.addEventListener("change", () =>
+  setActiveProject(projectSelect.value),
+);
 historyFilter.addEventListener("change", () => {
   historyPage = 1; // new filter → back to page 1
   renderHistory(historyEntries);
@@ -779,7 +840,9 @@ for (const el of hideTagEls) {
 }
 fetch("/api/settings")
   .then((r) => r.json())
-  .then((d) => { autoDraftMaxEl.value = Number(d.data?.autoDraftMaxMP) || 0; })
+  .then((d) => {
+    autoDraftMaxEl.value = Number(d.data?.autoDraftMaxMP) || 0;
+  })
   .catch(() => {});
 autoDraftMaxEl.addEventListener("change", () => {
   const autoDraftMaxMP = Math.max(0, Number(autoDraftMaxEl.value) || 0);
@@ -829,7 +892,8 @@ document.getElementById("openFolder").addEventListener("click", async () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ projectId: historyFilter.value || "all" }),
     });
-    if (!res.ok) throw new Error((await res.json()).msg || "Failed to open folder");
+    if (!res.ok)
+      throw new Error((await res.json()).msg || "Failed to open folder");
   } catch (err) {
     alert(err.message || String(err));
   }
@@ -842,7 +906,9 @@ document.getElementById("exportHistory").addEventListener("click", () => {
   // Export is per-project — the History filter must be on a specific project.
   const projectId = historyFilter.value;
   if (!projectId || projectId === "all") {
-    alert('Pick a specific project in the History filter to export (the "All projects" view can\'t be exported).');
+    alert(
+      'Pick a specific project in the History filter to export (the "All projects" view can\'t be exported).',
+    );
     return;
   }
   const opts = [
@@ -865,11 +931,17 @@ document.getElementById("exportHistory").addEventListener("click", () => {
   }
   show(exportModal);
 });
-document.getElementById("exportCancel").addEventListener("click", () => hide(exportModal));
-exportModal.addEventListener("click", (e) => { if (e.target === exportModal) hide(exportModal); });
+document
+  .getElementById("exportCancel")
+  .addEventListener("click", () => hide(exportModal));
+exportModal.addEventListener("click", (e) => {
+  if (e.target === exportModal) hide(exportModal);
+});
 document.getElementById("exportConfirm").addEventListener("click", async () => {
   const projectId = historyFilter.value;
-  const excludeTags = [...exportExcludeTags.querySelectorAll("input:checked")].map((c) => c.value);
+  const excludeTags = [
+    ...exportExcludeTags.querySelectorAll("input:checked"),
+  ].map((c) => c.value);
   const btn = document.getElementById("exportConfirm");
   const original = btn.innerHTML;
   btn.disabled = true;
@@ -886,7 +958,7 @@ document.getElementById("exportConfirm").addEventListener("click", async () => {
     alert(
       `Exported ${data.data.entries} generation(s) (${data.data.filesCopied} files) to:\n\n` +
         `${data.data.path}\n\n` +
-        `It opened in your file browser. Open index.html to view it, or zip the folder to share.`
+        `It opened in your file browser. Open index.html to view it, or zip the folder to share.`,
     );
   } catch (err) {
     alert(err.message || String(err));
@@ -906,7 +978,8 @@ newProjectBtn.addEventListener("click", async () => {
       body: JSON.stringify({ name: name.trim() }),
     });
     const data = await res.json();
-    if (!res.ok || !data.data?.id) throw new Error(data.msg || "Failed to create project");
+    if (!res.ok || !data.data?.id)
+      throw new Error(data.msg || "Failed to create project");
     await loadProjects();
     setActiveProject(data.data.id);
   } catch (err) {
@@ -938,9 +1011,16 @@ deleteProjectBtn.addEventListener("click", async () => {
     return;
   }
   const name = projectName(activeProjectId);
-  if (!confirm(`Delete project "${name}"?\n\nIts gallery media and history will move to Default.`)) return;
+  if (
+    !confirm(
+      `Delete project "${name}"?\n\nIts gallery media and history will move to Default.`,
+    )
+  )
+    return;
   try {
-    const res = await fetch(`/api/projects/${activeProjectId}`, { method: "DELETE" });
+    const res = await fetch(`/api/projects/${activeProjectId}`, {
+      method: "DELETE",
+    });
     const data = await res.json();
     if (!res.ok) throw new Error(data.msg || "Delete failed");
     await loadProjects();
@@ -957,7 +1037,9 @@ deleteProjectBtn.addEventListener("click", async () => {
 // Returns the created gallery entries; anything that fails is reported and skipped.
 async function uploadToGallery(files, projectId = activeProjectId) {
   const saved = [];
-  for (const file of [...files].filter((f) => /^(image|video|audio)\//.test(f.type))) {
+  for (const file of [...files].filter((f) =>
+    /^(image|video|audio)\//.test(f.type),
+  )) {
     try {
       const base64Data = await new Promise((resolve, reject) => {
         const reader = new FileReader();
@@ -971,7 +1053,8 @@ async function uploadToGallery(files, projectId = activeProjectId) {
         body: JSON.stringify({ base64Data, fileName: file.name, projectId }),
       });
       const data = await res.json();
-      if (!res.ok || !data.image?.id) throw new Error(data.msg || "Save failed");
+      if (!res.ok || !data.image?.id)
+        throw new Error(data.msg || "Save failed");
       saved.push(data.image);
     } catch (err) {
       alert(`Couldn't save ${file.name}: ${err.message || err}`);
@@ -992,8 +1075,13 @@ async function addFilesToGallery(files) {
   if (!list.length) return;
   galleryDropHint.textContent = `Saving ${plural(list.length, "file")}…`;
   const saved = await uploadToGallery(list);
-  galleryDropHint.textContent = saved.length ? `Added ${plural(saved.length, "file")} to ${projectName(activeProjectId)}.` : "";
-  setTimeout(() => { galleryDropHint.innerHTML = GALLERY_DROP_HINT; }, 2000);
+  galleryDropHint.textContent =
+    saved.length ?
+      `Added ${plural(saved.length, "file")} to ${projectName(activeProjectId)}.`
+    : "";
+  setTimeout(() => {
+    galleryDropHint.innerHTML = GALLERY_DROP_HINT;
+  }, 2000);
 }
 
 galleryDrop.addEventListener("click", () => galleryFileInput.click());
@@ -1006,13 +1094,13 @@ galleryFileInput.addEventListener("change", () => {
     if (!e.dataTransfer?.types?.includes("Files")) return;
     e.preventDefault();
     galleryDrop.classList.add("dragover");
-  })
+  }),
 );
 ["dragleave", "drop"].forEach((evt) =>
   galleryDrop.addEventListener(evt, (e) => {
     if (evt === "dragleave" && galleryDrop.contains(e.relatedTarget)) return;
     galleryDrop.classList.remove("dragover");
-  })
+  }),
 );
 galleryDrop.addEventListener("drop", (e) => {
   if (!e.dataTransfer?.files?.length) return;
@@ -1034,13 +1122,17 @@ async function loadGallery() {
 function renderGallery(items) {
   galleryEl.innerHTML = "";
   // strict per-project scoping (entries predating projects belong to Default)
-  const visible = items.filter((i) => (i.projectId || "default") === activeProjectId);
+  const visible = items.filter(
+    (i) => (i.projectId || "default") === activeProjectId,
+  );
   galleryCount.textContent = visible.length ? `(${visible.length})` : "";
   galleryEmpty.classList.toggle("hidden", visible.length > 0);
 
   for (const item of visible) {
     galleryEl.appendChild(
-      makeGalleryThumb(item, { onPick: (it) => lists[it.kind || "image"].addFromGallery(it) })
+      makeGalleryThumb(item, {
+        onPick: (it) => lists[it.kind || "image"].addFromGallery(it),
+      }),
     );
   }
 }
@@ -1053,7 +1145,9 @@ async function loadCredits() {
     // No kie.ai key configured: there's no balance to show, so hide the pill. A real
     // key that fails to load still shows "—", so a broken key stays noticeable.
     kieConfigured = data.configured !== false;
-    document.getElementById("credits").classList.toggle("hidden", !kieConfigured);
+    document
+      .getElementById("credits")
+      .classList.toggle("hidden", !kieConfigured);
     syncKieAvailability();
     if (typeof data.data === "number") {
       currentCredits = data.data;
@@ -1083,7 +1177,9 @@ function syncKieAvailability() {
   document.getElementById("projectCredits").classList.add("hidden");
   const current = modelSelect.options[modelSelect.selectedIndex];
   if (!current || current.disabled) {
-    const firstComfy = [...modelSelect.options].find((o) => o.value.startsWith("comfy:") && !o.disabled);
+    const firstComfy = [...modelSelect.options].find(
+      (o) => o.value.startsWith("comfy:") && !o.disabled,
+    );
     if (firstComfy) {
       modelSelect.value = firstComfy.value;
       applyModelUI();
@@ -1114,7 +1210,7 @@ function recentMatches(model, extra = () => true) {
         (e.input?.model || "bytedance/seedance-2") === model &&
         typeof e.costCredits === "number" &&
         e.costCredits > 0 &&
-        extra(e)
+        extra(e),
     )
     .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
 }
@@ -1129,7 +1225,7 @@ function ratePerSec(model, resolution, audioOn) {
       e.input?.resolution === resolution &&
       // H3 has no generate_audio param, so every run of it is an audio run.
       (audioOn === null || (e.input?.generate_audio !== false) === audioOn) &&
-      e.input?.duration > 0
+      e.input?.duration > 0,
   )
     .slice(0, RECENT_RATE_SAMPLES)
     .map((e) => e.costCredits / (e.input.duration + (e.refVideoSeconds || 0)));
@@ -1142,7 +1238,10 @@ function updateEstimate() {
   // Image models: flat per-generation cost, learned per model + quality tier.
   if (isSeedream()) {
     const quality = qualitySelect.value;
-    const costs = recentMatches(model, (e) => (e.input?.quality || "basic") === quality)
+    const costs = recentMatches(
+      model,
+      (e) => (e.input?.quality || "basic") === quality,
+    )
       .slice(0, RECENT_RATE_SAMPLES)
       .map((e) => e.costCredits);
     if (!costs.length) {
@@ -1158,7 +1257,8 @@ function updateEstimate() {
 
   const resolution = document.getElementById("resolution").value;
   const duration = Number(document.getElementById("duration").value) || 0;
-  const audioOn = isH3() ? null : document.getElementById("generate_audio").checked;
+  const audioOn =
+    isH3() ? null : document.getElementById("generate_audio").checked;
   const r = ratePerSec(model, resolution, audioOn);
   if (!r || !duration) {
     const label = `${videoModelLabel(model)} at ${resolution}`;
@@ -1168,8 +1268,10 @@ function updateEstimate() {
   }
   const refSecs = usesRefMedia() ? refVideoSeconds() : 0;
   const est = Math.round(r.rate * (duration + refSecs));
-  const refNote = refSecs > 0 ? ` (incl. ~${Math.round(refSecs)}s video ref)` : "";
-  const overLimit = refSecs > 15 ? ` ⚠ video refs exceed the 15s total limit` : "";
+  const refNote =
+    refSecs > 0 ? ` (incl. ~${Math.round(refSecs)}s video ref)` : "";
+  const overLimit =
+    refSecs > 15 ? ` ⚠ video refs exceed the 15s total limit` : "";
   estimateEl.innerHTML = `Est. cost: ~<b>${est.toLocaleString()}</b> credits${refNote}${batchCostNote(est)}${overLimit}`;
   estimateEl.title = `Based on your ${r.n} most recent run${r.n > 1 ? "s" : ""} at this resolution/audio setting (median).`;
 }
@@ -1181,9 +1283,11 @@ function batchCostNote(each) {
 }
 
 ["resolution", "duration"].forEach((id) =>
-  document.getElementById(id).addEventListener("input", updateEstimate)
+  document.getElementById(id).addEventListener("input", updateEstimate),
 );
-document.getElementById("generate_audio").addEventListener("change", updateEstimate);
+document
+  .getElementById("generate_audio")
+  .addEventListener("change", updateEstimate);
 document.getElementById("queueCount").addEventListener("input", updateEstimate);
 
 // Per-model form shaping: Seedance 2 Fast and Mini cap resolution at 720p;
@@ -1196,17 +1300,48 @@ const aspectSelect = document.getElementById("aspect_ratio");
 
 const VIDEO_ASPECTS = ["16:9", "4:3", "1:1", "3:4", "9:16", "21:9"];
 // Seedance 2.5 and 2.0 Mini add an "adaptive" ratio (2.0 and Fast don't).
-const VIDEO_ASPECTS_ADAPTIVE = ["adaptive", "16:9", "4:3", "1:1", "3:4", "9:16", "21:9"];
-const IMAGE_ASPECTS = ["1:1", "4:3", "3:4", "16:9", "9:16", "2:3", "3:2", "21:9"];
+const VIDEO_ASPECTS_ADAPTIVE = [
+  "adaptive",
+  "16:9",
+  "4:3",
+  "1:1",
+  "3:4",
+  "9:16",
+  "21:9",
+];
+const IMAGE_ASPECTS = [
+  "1:1",
+  "4:3",
+  "3:4",
+  "16:9",
+  "9:16",
+  "2:3",
+  "3:2",
+  "21:9",
+];
 
 // Output-format options by output medium: [value, label].
-const IMAGE_FORMATS = [["png", "PNG"], ["jpeg", "JPEG"]];
-const VIDEO_FORMATS = [["mp4", "mp4"], ["mov", "mov"]];
+const IMAGE_FORMATS = [
+  ["png", "PNG"],
+  ["jpeg", "JPEG"],
+];
+const VIDEO_FORMATS = [
+  ["mp4", "mp4"],
+  ["mov", "mov"],
+];
 
 // Resolution options by model family: [value, label]. Seedance uses the familiar
 // ladder; MiniMax H3 has its own two-tier naming and rejects anything else.
-const SEEDANCE_RESOLUTIONS = [["480p", "480p"], ["720p", "720p"], ["1080p", "1080p"], ["4k", "4K"]];
-const H3_RESOLUTIONS = [["768P", "768p"], ["2K", "2K"]];
+const SEEDANCE_RESOLUTIONS = [
+  ["480p", "480p"],
+  ["720p", "720p"],
+  ["1080p", "1080p"],
+  ["4k", "4K"],
+];
+const H3_RESOLUTIONS = [
+  ["768P", "768p"],
+  ["2K", "2K"],
+];
 
 const isSeedream = () => modelSelect.value.startsWith("seedream/");
 const is25 = () => modelSelect.value === "bytedance/seedance-2-5";
@@ -1221,24 +1356,30 @@ const isComfy = () => modelSelect.value.startsWith("comfy:");
 const comfyFile = () => modelSelect.value.slice("comfy:".length);
 // Every Seedance video model (2.5 / 2 / Fast / Mini) exposes first/last-frame
 // inputs; 2.5-only extras (mp4/mov, adaptive, 30s, return_last_frame) stay on is25.
-const isSeedanceVideo = () => modelSelect.value.startsWith("bytedance/seedance-");
+const isSeedanceVideo = () =>
+  modelSelect.value.startsWith("bytedance/seedance-");
 
 // Seedance makes reference images and first/last frames mutually exclusive (the
 // API rejects mixing them), so a toggle picks which set is active. Only the active
 // set is shown and sent. `frameMode()` is the raw toggle; `usesFrames()` is true
 // only when a Seedance video model is active AND the toggle is on frames.
 function frameMode() {
-  return document.querySelector('input[name="imageSource"]:checked')?.value || "refs";
+  return (
+    document.querySelector('input[name="imageSource"]:checked')?.value || "refs"
+  );
 }
 // H3 image-to-video has no reference-image alternative — it is always the frame form.
-const usesFrames = () => isH3I2V() || (isSeedanceVideo() && frameMode() === "frames");
+const usesFrames = () =>
+  isH3I2V() || (isSeedanceVideo() && frameMode() === "frames");
 // Which reference fields the active model+mode actually sends. Image models take
 // neither; H3 takes video/audio only in reference-to-video, and takes reference
 // images in that mode alone too.
 const usesRefMedia = () => !isSeedream() && (!isH3() || isH3Ref());
 const usesRefImages = () => !isT2I() && !isH3T2V() && !usesFrames();
-const isI2I = () => isSeedream() && modelSelect.value.endsWith("-image-to-image");
-const isT2I = () => isSeedream() && modelSelect.value.endsWith("-text-to-image");
+const isI2I = () =>
+  isSeedream() && modelSelect.value.endsWith("-image-to-image");
+const isT2I = () =>
+  isSeedream() && modelSelect.value.endsWith("-text-to-image");
 // all seedream variants end in "-to-image"; video models never do
 const isImageOutput = (model) => (model || "").includes("-to-image");
 
@@ -1314,10 +1455,9 @@ function setAspectOptions(values, preferred = "16:9") {
   const cur = aspectSelect.value;
   aspectSelect.innerHTML = "";
   for (const v of values) aspectSelect.appendChild(new Option(v, v));
-  aspectSelect.value = values.includes(cur)
-    ? cur
-    : values.includes(preferred)
-    ? preferred
+  aspectSelect.value =
+    values.includes(cur) ? cur
+    : values.includes(preferred) ? preferred
     : values[0];
 }
 
@@ -1326,7 +1466,8 @@ function setAspectOptions(values, preferred = "16:9") {
 function setResolutionOptions(values, def) {
   const cur = resolutionSelect.value;
   resolutionSelect.innerHTML = "";
-  for (const [v, label] of values) resolutionSelect.appendChild(new Option(label, v));
+  for (const [v, label] of values)
+    resolutionSelect.appendChild(new Option(label, v));
   resolutionSelect.value = values.some(([v]) => v === cur) ? cur : def;
 }
 
@@ -1335,14 +1476,22 @@ const outputFormatSelect = document.getElementById("output_format");
 function setFormatOptions(values, def) {
   const cur = outputFormatSelect.value;
   outputFormatSelect.innerHTML = "";
-  for (const [v, label] of values) outputFormatSelect.appendChild(new Option(label, v));
+  for (const [v, label] of values)
+    outputFormatSelect.appendChild(new Option(label, v));
   outputFormatSelect.value = values.some(([v]) => v === cur) ? cur : def;
 }
 
 // kie.ai form fields hidden entirely when a local ComfyUI workflow is selected.
 const KIE_FIELDS = [
-  "promptField", "imageSourceField", "imageField", "firstFrameField",
-  "lastFrameField", "videoField", "audioField", "optionsRow", "checksRow",
+  "promptField",
+  "imageSourceField",
+  "imageField",
+  "firstFrameField",
+  "lastFrameField",
+  "videoField",
+  "audioField",
+  "optionsRow",
+  "checksRow",
 ];
 
 function applyModelUI() {
@@ -1350,10 +1499,13 @@ function applyModelUI() {
   const cc = document.getElementById("comfyControls");
   cc.classList.toggle("hidden", !comfy);
   cc.classList.toggle("comfy-grid", comfy);
-  document.getElementById("previewMethodField").classList.toggle("hidden", !comfy);
+  document
+    .getElementById("previewMethodField")
+    .classList.toggle("hidden", !comfy);
   if (comfy) {
     // Swap the whole kie.ai form for the recognized workflow controls.
-    for (const id of KIE_FIELDS) document.getElementById(id).classList.add("hidden");
+    for (const id of KIE_FIELDS)
+      document.getElementById(id).classList.add("hidden");
     estimateEl.classList.add("hidden");
     comfyRenderPromise = renderComfyControls(); // async (fetches ComfyUI options); awaited on re-import
     comfyRenderPromise.then(syncPromptTabs, () => {}); // saved-prompts panel → the workflow's prompt
@@ -1361,7 +1513,8 @@ function applyModelUI() {
     updateModelChrome();
     return;
   }
-  for (const id of KIE_FIELDS) document.getElementById(id).classList.remove("hidden");
+  for (const id of KIE_FIELDS)
+    document.getElementById(id).classList.remove("hidden");
   estimateEl.classList.remove("hidden");
 
   const seedream = isSeedream();
@@ -1390,23 +1543,31 @@ function applyModelUI() {
   const seedanceVideo = isSeedanceVideo();
   const framesMode = usesFrames();
   const refsHidden = !usesRefImages();
-  document.getElementById("imageSourceField").classList.toggle("hidden", !seedanceVideo);
+  document
+    .getElementById("imageSourceField")
+    .classList.toggle("hidden", !seedanceVideo);
   document.getElementById("imageField").classList.toggle("hidden", refsHidden);
   document.getElementById("qualityField").classList.toggle("hidden", !seedream);
   for (const id of ["firstFrameField", "lastFrameField"]) {
     document.getElementById(id).classList.toggle("hidden", !framesMode);
   }
-  document.getElementById("returnLastFrameField").classList.toggle("hidden", !frames);
+  document
+    .getElementById("returnLastFrameField")
+    .classList.toggle("hidden", !frames);
   // Output format applies to Seedream Pro (png/jpeg) and Seedance 2.5 (mp4/mov).
   const showFormat = isSeedreamPro() || frames;
-  document.getElementById("formatField").classList.toggle("hidden", !showFormat);
+  document
+    .getElementById("formatField")
+    .classList.toggle("hidden", !showFormat);
   if (frames) setFormatOptions(VIDEO_FORMATS, "mp4");
   else if (isSeedreamPro()) setFormatOptions(IMAGE_FORMATS, "png");
   if (seedream) setQualityLabels();
   setAspectOptions(
-    seedream ? IMAGE_ASPECTS : hasAdaptiveAspect() ? VIDEO_ASPECTS_ADAPTIVE : VIDEO_ASPECTS,
+    seedream ? IMAGE_ASPECTS
+    : hasAdaptiveAspect() ? VIDEO_ASPECTS_ADAPTIVE
+    : VIDEO_ASPECTS,
     // 2.5 and H3 reference-to-video are the ones that document adaptive as default
-    frames || isH3Ref() ? "adaptive" : "16:9"
+    frames || isH3Ref() ? "adaptive" : "16:9",
   );
   if (h3) {
     setResolutionOptions(H3_RESOLUTIONS, "2K");
@@ -1424,7 +1585,8 @@ function applyModelUI() {
   // Seedance 2.5 allows up to 30s; the other video models cap at 15s.
   const durInput = document.getElementById("duration");
   durInput.max = frames ? 30 : 15;
-  if (Number(durInput.value) > Number(durInput.max)) durInput.value = durInput.max;
+  if (Number(durInput.value) > Number(durInput.max))
+    durInput.value = durInput.max;
   updatePromptCount(); // the cap depends on the selected model
   updateEstimate();
   updateModelChrome();
@@ -1433,7 +1595,9 @@ function applyModelUI() {
 
 // Retitle the page and the Generate button for the selected model.
 function updateModelChrome() {
-  const label = modelSelect.options[modelSelect.selectedIndex].textContent.replace(/\s*\(.*\)$/, "").trim();
+  const label = modelSelect.options[modelSelect.selectedIndex].textContent
+    .replace(/\s*\(.*\)$/, "")
+    .trim();
   if (isComfy()) {
     setBreakableText(document.getElementById("pageTitle"), label);
     document.getElementById("pageSub").textContent =
@@ -1445,7 +1609,8 @@ function updateModelChrome() {
   const image = isSeedream();
   const medium = image ? "image" : "video";
   document.getElementById("pageTitle").textContent = label;
-  document.getElementById("pageSub").textContent = `Generate ${medium} with the ${label} model`;
+  document.getElementById("pageSub").textContent =
+    `Generate ${medium} with the ${label} model`;
   document.title = `GENie — ${label}`;
   submitBtn.textContent = image ? "Generate Image" : "Generate Video";
 }
@@ -1474,8 +1639,9 @@ let armedContinuation = null; // { parentId, from, into|null, file, label }
 
 function renderContinueBanner() {
   if (!armedContinuation) return hide(continueBanner);
-  continueBanner.textContent = armedContinuation.into
-    ? `↻ Redoing ${armedContinuation.label} in place — a new seed was rolled. `
+  continueBanner.textContent =
+    armedContinuation.into ?
+      `↻ Redoing ${armedContinuation.label} in place — a new seed was rolled. `
     : `⛓ Continuing from ${armedContinuation.label} — a new seed was rolled. `;
   const cancel = document.createElement("button");
   cancel.type = "button";
@@ -1499,7 +1665,8 @@ function disarmContinuation() {
 function armContinuation(state, parentValues) {
   armedContinuation = state;
   for (const f of comfyFields) {
-    if (typeof f.advance === "function" && typeof f.set === "function") f.set(randomSeed());
+    if (typeof f.advance === "function" && typeof f.set === "function")
+      f.set(randomSeed());
   }
   for (const f of comfyFields) {
     if (f.pin && f.name in (parentValues || {})) f.lock?.(true);
@@ -1532,8 +1699,9 @@ function paintCarryLock(btn) {
   btn.textContent = carryOnSwitch ? "🔒" : "🔓";
   btn.classList.toggle("on", carryOnSwitch);
   btn.setAttribute("aria-pressed", String(carryOnSwitch));
-  btn.title = carryOnSwitch
-    ? "Locked: the prompt and reference media come with you when you switch models. Click to unlock."
+  btn.title =
+    carryOnSwitch ?
+      "Locked: the prompt and reference media come with you when you switch models. Click to unlock."
     : "Unlocked: switching models leaves the prompt and reference media behind. Click to lock.";
 }
 
@@ -1563,7 +1731,11 @@ function snapshotCarry() {
   const media = {};
   if (!comfyControlsEl.classList.contains("hidden")) {
     for (const f of comfyFields) {
-      if (!CARRY_KINDS.includes(f.mediaKind) || typeof f.peekMedia !== "function") continue;
+      if (
+        !CARRY_KINDS.includes(f.mediaKind) ||
+        typeof f.peekMedia !== "function"
+      )
+        continue;
       const files = f.peekMedia();
       if (files.length) (media[f.mediaKind] ||= []).push(...files);
     }
@@ -1571,15 +1743,25 @@ function snapshotCarry() {
     return { prompt: p ? String(p.peek() ?? "") : null, media, urlOnly: 0 };
   }
   // A list this model hides (e.g. reference images in Seedance frames mode) isn't in use.
-  const fieldFor = { image: "imageField", video: "videoField", audio: "audioField" };
+  const fieldFor = {
+    image: "imageField",
+    video: "videoField",
+    audio: "audioField",
+  };
   let urlOnly = 0; // hosted-URL references with no saved file (a local run can't use them)
   for (const kind of CARRY_KINDS) {
-    if (document.getElementById(fieldFor[kind]).classList.contains("hidden")) continue;
+    if (document.getElementById(fieldFor[kind]).classList.contains("hidden"))
+      continue;
     const ready = lists[kind].items.filter((i) => i.status === "ready");
     urlOnly += ready.filter((i) => !i.localId).length;
     const files = ready
       .filter((i) => i.localId)
-      .map((i) => ({ id: i.localId, url: i.thumb, name: i.name, tail: i.tailSec || 0 }));
+      .map((i) => ({
+        id: i.localId,
+        url: i.thumb,
+        name: i.name,
+        tail: i.tailSec || 0,
+      }));
     if (files.length) media[kind] = files;
   }
   return { prompt: promptEl.value, media, urlOnly };
@@ -1606,7 +1788,7 @@ function applyCarry(snap) {
     if (snap.urlOnly) {
       setError(
         `${snap.urlOnly} URL reference${snap.urlOnly === 1 ? " wasn't" : "s weren't"} carried over — ` +
-          `local workflows need a saved file.`
+          `local workflows need a saved file.`,
       );
     }
     return;
@@ -1621,7 +1803,12 @@ function applyCarry(snap) {
     if (!snap.media[kind]) continue;
     lists[kind].items = [];
     for (const m of snap.media[kind]) {
-      lists[kind].addFromGallery({ id: m.id, localUrl: m.url, name: m.name, tail: m.tail });
+      lists[kind].addFromGallery({
+        id: m.id,
+        localUrl: m.url,
+        name: m.name,
+        tail: m.tail,
+      });
     }
     lists[kind].render();
   }
@@ -1632,7 +1819,8 @@ modelSelect.addEventListener("change", async () => {
   disarmContinuation(); // the controls it referred to are about to be rebuilt
   // kie.ai → kie.ai shares one form, so there's nothing to carry.
   const leavingComfy = !comfyControlsEl.classList.contains("hidden");
-  const snap = carryOnSwitch && (leavingComfy || isComfy()) ? snapshotCarry() : null;
+  const snap =
+    carryOnSwitch && (leavingComfy || isComfy()) ? snapshotCarry() : null;
   const seq = ++carrySeq;
   applyModelUI();
   if (snap) {
@@ -1669,7 +1857,10 @@ let comfyRenderPromise = null; // resolves when the active workflow's controls a
 const escapeHtmlJs = (s) =>
   String(s ?? "").replace(
     /[&<>"']/g,
-    (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]
+    (c) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[
+        c
+      ],
   );
 
 // Load the workflow list and (re)build the "Local · ComfyUI" dropdown group.
@@ -1680,13 +1871,16 @@ async function loadWorkflows() {
   } catch {
     comfyWorkflows = [];
   }
-  modelSelect.querySelector('optgroup[data-comfy]')?.remove();
+  modelSelect.querySelector("optgroup[data-comfy]")?.remove();
   if (comfyWorkflows.length) {
     const group = document.createElement("optgroup");
     group.label = "Local · ComfyUI";
     group.setAttribute("data-comfy", "");
     for (const w of comfyWorkflows) {
-      const opt = new Option(w.error ? `${w.name} (invalid JSON)` : w.name, `comfy:${w.file}`);
+      const opt = new Option(
+        w.error ? `${w.name} (invalid JSON)` : w.name,
+        `comfy:${w.file}`,
+      );
       opt.disabled = !!w.error;
       group.appendChild(opt);
     }
@@ -1711,7 +1905,9 @@ function restoreLastModel() {
     /* storage blocked */
   }
   if (!last || last === modelSelect.value) return;
-  const opt = [...modelSelect.options].find((o) => o.value === last && !o.disabled);
+  const opt = [...modelSelect.options].find(
+    (o) => o.value === last && !o.disabled,
+  );
   if (!opt) return;
   modelSelect.value = last;
   applyModelUI();
@@ -1749,14 +1945,18 @@ function comfyControlType(token) {
   // Offline / non-combo fallback by name. A model-file selector input (vae_name,
   // ckpt_name, unet_name, lora_name, clip_name, …) is never a media upload even if
   // its token name contains "video"/"audio" (e.g. `video_vae`).
-  const isModelField = /_name$/.test(key) || /^(ckpt|unet|vae|lora|clip|model|control_net|style_model|gligen)/.test(key);
+  const isModelField =
+    /_name$/.test(key) ||
+    /^(ckpt|unet|vae|lora|clip|model|control_net|style_model|gligen)/.test(key);
   if (!isModelField) {
     if (/audio/.test(n)) return "audio";
     if (/video/.test(n)) return "video";
     if (/(image|img|frame|photo|picture)/.test(n)) return "image";
   }
   if (
-    /(seed|steps|cfg|width|height|length|duration|fps|frames|count|denoise|strength|scale|megapixel|batch)/.test(n) ||
+    /(seed|steps|cfg|width|height|length|duration|fps|frames|count|denoise|strength|scale|megapixel|batch)/.test(
+      n,
+    ) ||
     (token.default !== "" && !Number.isNaN(Number(token.default)))
   )
     return "number";
@@ -1768,20 +1968,33 @@ const MEDIA_TYPES = new Set(["image", "video", "audio"]);
 
 // Token width hint → columns of a 12-col grid. Prompt always spans full; media and
 // scalars default to full unless the token declares a width (e.g. "; 1/4").
-const WIDTH_SPAN = { "1/2": 6, "1/3": 4, "1/4": 3, "2/3": 8, "3/4": 9, full: 12, "1": 12 };
+const WIDTH_SPAN = {
+  "1/2": 6,
+  "1/3": 4,
+  "1/4": 3,
+  "2/3": 8,
+  "3/4": 9,
+  full: 12,
+  1: 12,
+};
 function comfySpan(token, type) {
   if (type === "textarea") return 12;
   return WIDTH_SPAN[token.width] || 12;
 }
 
-const prettyLabel = (name) => name.replace(/[_-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+const prettyLabel = (name) =>
+  name.replace(/[_-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 const randomSeed = () => Math.floor(Math.random() * 2 ** 31);
 
 // A single-media (image/video/audio) control. Dropped files are saved to the
 // project gallery (same store the kie.ai side uses) so they're reusable and
 // included in exports; you can also pick an existing gallery item of that kind.
 // At generate time the chosen file is pushed into ComfyUI's input folder by id.
-const MEDIA_ARTICLE = { image: "an image", video: "a video", audio: "an audio file" };
+const MEDIA_ARTICLE = {
+  image: "an image",
+  video: "a video",
+  audio: "an audio file",
+};
 // --- reference labels --------------------------------------------------------
 // MiniMax H3 labels references by *presentation* order, not by field: images, then
 // for each reference video its soundtrack's <Audio j> (only when that loader's
@@ -1796,10 +2009,14 @@ let comfyRefLabelScheme = null;
 function comfyRefTags() {
   const counts = { picture: 0, video: 0, audio: 0 };
   const perField = new Map(); // field -> [tag, …] aligned with its filled slots
-  const fieldsOfKind = (kind) => comfyFields.filter((f) => f.mediaKind === kind && f.filledMedia);
+  const fieldsOfKind = (kind) =>
+    comfyFields.filter((f) => f.mediaKind === kind && f.filledMedia);
 
   for (const f of fieldsOfKind("image")) {
-    perField.set(f, f.filledMedia().map(() => `<Picture ${++counts.picture}>`));
+    perField.set(
+      f,
+      f.filledMedia().map(() => `<Picture ${++counts.picture}>`),
+    );
   }
   for (const f of fieldsOfKind("video")) {
     const tags = [];
@@ -1810,7 +2027,10 @@ function comfyRefTags() {
     perField.set(f, tags);
   }
   for (const f of fieldsOfKind("audio")) {
-    perField.set(f, f.filledMedia().map(() => `<Audio ${++counts.audio}>`));
+    perField.set(
+      f,
+      f.filledMedia().map(() => `<Audio ${++counts.audio}>`),
+    );
   }
   return perField;
 }
@@ -1822,7 +2042,9 @@ function refreshComfyRefTags() {
   if (comfyRefLabelScheme !== "minimax_h3") return;
   for (const [f, tags] of comfyRefTags()) {
     const labels = f.el.querySelectorAll(".dropzone .thumb.ready .img-label");
-    tags.forEach((t, i) => { if (labels[i]) labels[i].textContent = t; });
+    tags.forEach((t, i) => {
+      if (labels[i]) labels[i].textContent = t;
+    });
   }
 }
 
@@ -1865,8 +2087,12 @@ function tailHint(seconds, probe, grid) {
   if (!probe) return "length unknown — the whole clip will be used";
   const total = `of ${probe.duration.toFixed(1)}s`;
   if (!(seconds > 0)) return `${total} · whole clip (${probe.frames} frames)`;
-  const keep = snapTailFrames(Math.min(probe.frames, Math.max(1, Math.round(seconds * probe.fps))), grid);
-  if (keep >= probe.frames) return `${total} · whole clip (${probe.frames} frames)`;
+  const keep = snapTailFrames(
+    Math.min(probe.frames, Math.max(1, Math.round(seconds * probe.fps))),
+    grid,
+  );
+  if (keep >= probe.frames)
+    return `${total} · whole clip (${probe.frames} frames)`;
   return `${total} → last ${keep} frames (${(keep / probe.fps).toFixed(1)}s)`;
 }
 
@@ -1885,9 +2111,14 @@ function makeTailRow({ label, seconds, probe, grid, onInput }) {
   input.min = "0";
   input.step = "0.5";
   input.placeholder = "0";
-  input.title = "Seconds from the end of the clip to use as the reference. 0 or blank = the whole clip.";
+  input.title =
+    "Seconds from the end of the clip to use as the reference. 0 or blank = the whole clip.";
   if (seconds > 0) input.value = String(seconds);
-  wrap.append(document.createTextNode("use last "), input, document.createTextNode(" sec"));
+  wrap.append(
+    document.createTextNode("use last "),
+    input,
+    document.createTextNode(" sec"),
+  );
   const hint = document.createElement("span");
   hint.className = "hint";
   hint.textContent = tailHint(seconds, probe, grid);
@@ -1923,7 +2154,8 @@ function makeComfyMedia(token, mediaKind) {
 
   // source: { id, url, name } from a saved gallery item (dropped files get saved
   // there first). uploadedRef caches the ComfyUI filename after one upload.
-  let source = null, uploadedRef = null;
+  let source = null,
+    uploadedRef = null;
 
   const previewThumb = (url, name, withLabel = false) => {
     const div = document.createElement("div");
@@ -1939,13 +2171,17 @@ function makeComfyMedia(token, mediaKind) {
   };
   // Per-file "use last N sec", when this reference's loader can skip frames.
   const tailsEl = field.querySelector(".media-tails");
-  let tailSec = 0, probe;
+  let tailSec = 0,
+    probe;
   const renderTail = () => {
     tailsEl.innerHTML = "";
     if (!token.tail || !source) return;
     if (source.id && probe === undefined) {
       probe = null; // probe once per file; null until it lands
-      probeGalleryVideo(source.id).then((p) => { probe = p; renderTail(); });
+      probeGalleryVideo(source.id).then((p) => {
+        probe = p;
+        renderTail();
+      });
     }
     tailsEl.appendChild(
       makeTailRow({
@@ -1953,8 +2189,10 @@ function makeComfyMedia(token, mediaKind) {
         seconds: tailSec,
         probe: probe || null,
         grid: token.tail.grid || null,
-        onInput: (v) => { tailSec = v; },
-      })
+        onInput: (v) => {
+          tailSec = v;
+        },
+      }),
     );
   };
   const render = () => {
@@ -1964,7 +2202,12 @@ function makeComfyMedia(token, mediaKind) {
     renderTail();
     refreshComfyRefTags();
   };
-  const setSource = (s) => { source = s; uploadedRef = null; probe = undefined; render(); };
+  const setSource = (s) => {
+    source = s;
+    uploadedRef = null;
+    probe = undefined;
+    render();
+  };
 
   // Save a dropped/browsed file into the project gallery, then use it.
   const take = (file) => {
@@ -1975,11 +2218,20 @@ function makeComfyMedia(token, mediaKind) {
         const res = await fetch("/api/upload", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ base64Data: reader.result, fileName: file.name, projectId: activeProjectId }),
+          body: JSON.stringify({
+            base64Data: reader.result,
+            fileName: file.name,
+            projectId: activeProjectId,
+          }),
         });
         const data = await res.json();
-        if (!res.ok || !data.image?.id) throw new Error(data.msg || "Save failed");
-        setSource({ id: data.image.id, url: data.image.localUrl || reader.result, name: data.image.name });
+        if (!res.ok || !data.image?.id)
+          throw new Error(data.msg || "Save failed");
+        setSource({
+          id: data.image.id,
+          url: data.image.localUrl || reader.result,
+          name: data.image.name,
+        });
         loadGallery(); // refresh the shared + per-control galleries
       } catch (err) {
         console.error(err);
@@ -1993,7 +2245,9 @@ function makeComfyMedia(token, mediaKind) {
   const renderGalleryPicker = () => {
     galleryThumbs.innerHTML = "";
     const items = galleryItems.filter(
-      (i) => (i.kind || "image") === mediaKind && (i.projectId || "default") === activeProjectId
+      (i) =>
+        (i.kind || "image") === mediaKind &&
+        (i.projectId || "default") === activeProjectId,
     );
     galleryEmptyEl.classList.toggle("hidden", items.length > 0);
     for (const item of items) {
@@ -2005,22 +2259,35 @@ function makeComfyMedia(token, mediaKind) {
             galleryWrap.open = false;
           },
           refresh: renderGalleryPicker,
-        })
+        }),
       );
     }
   };
 
   dz.addEventListener("click", () => fileInput.click());
-  fileInput.addEventListener("change", () => { take(fileInput.files[0]); fileInput.value = ""; });
+  fileInput.addEventListener("change", () => {
+    take(fileInput.files[0]);
+    fileInput.value = "";
+  });
   ["dragenter", "dragover"].forEach((e) =>
-    dz.addEventListener(e, (ev) => { ev.preventDefault(); dz.classList.add("dragover"); })
+    dz.addEventListener(e, (ev) => {
+      ev.preventDefault();
+      dz.classList.add("dragover");
+    }),
   );
   ["dragleave", "drop"].forEach((e) =>
-    dz.addEventListener(e, (ev) => { ev.preventDefault(); dz.classList.remove("dragover"); })
+    dz.addEventListener(e, (ev) => {
+      ev.preventDefault();
+      dz.classList.remove("dragover");
+    }),
   );
-  dz.addEventListener("drop", (ev) => { if (ev.dataTransfer.files?.length) take(ev.dataTransfer.files[0]); });
+  dz.addEventListener("drop", (ev) => {
+    if (ev.dataTransfer.files?.length) take(ev.dataTransfer.files[0]);
+  });
   clearBtn.addEventListener("click", () => setSource(null));
-  galleryWrap.addEventListener("toggle", () => { if (galleryWrap.open) renderGalleryPicker(); });
+  galleryWrap.addEventListener("toggle", () => {
+    if (galleryWrap.open) renderGalleryPicker();
+  });
 
   return {
     el: field,
@@ -2042,7 +2309,10 @@ function makeComfyMedia(token, mediaKind) {
     },
     setTails(byToken) {
       const seconds = Number(byToken?.[token.name]?.seconds);
-      if (seconds > 0) { tailSec = seconds; renderTail(); }
+      if (seconds > 0) {
+        tailSec = seconds;
+        renderTail();
+      }
     },
     peekMedia: () => {
       if (!source) return [];
@@ -2050,7 +2320,10 @@ function makeComfyMedia(token, mediaKind) {
       if (tailSec > 0) m.tail = tailSec; // remembered per-file reference tail
       return [m];
     },
-    tailSpec: () => (tailSec > 0 && source?.id ? { [token.name]: { seconds: tailSec, id: source.id } } : {}),
+    tailSpec: () =>
+      tailSec > 0 && source?.id ?
+        { [token.name]: { seconds: tailSec, id: source.id } }
+      : {},
     localId: () => source?.id || null,
     async getValue() {
       if (!source) return token.default || "";
@@ -2061,7 +2334,8 @@ function makeComfyMedia(token, mediaKind) {
         body: JSON.stringify({ id: source.id }),
       });
       const data = await res.json();
-      if (!res.ok || !data.data?.filename) throw new Error(data.msg || `Failed to upload ${token.name}`);
+      if (!res.ok || !data.data?.filename)
+        throw new Error(data.msg || `Failed to upload ${token.name}`);
       uploadedRef = data.data.filename;
       return uploadedRef;
     },
@@ -2100,9 +2374,16 @@ async function renderComfyControls() {
   // Enriched tokens (combo file lists + numeric ranges) + installed LoRAs, from
   // ComfyUI's /object_info. Falls back to the raw tokens (offline) — the picker
   // controls then can't populate, and we show an offline notice.
-  let meta = { offline: true, tokens: wf.tokens, loraOptions: [], bypassable: [] };
+  let meta = {
+    offline: true,
+    tokens: wf.tokens,
+    loraOptions: [],
+    bypassable: [],
+  };
   try {
-    const r = await fetch(`/api/comfy/workflow-meta?file=${encodeURIComponent(wf.file)}`);
+    const r = await fetch(
+      `/api/comfy/workflow-meta?file=${encodeURIComponent(wf.file)}`,
+    );
     const d = await r.json().catch(() => ({}));
     if (r.ok && d.code === 200 && d.data) meta = d.data;
   } catch {
@@ -2113,7 +2394,8 @@ async function renderComfyControls() {
   if (meta.offline) {
     const note = document.createElement("p");
     note.className = "muted comfy-offline";
-    note.textContent = "⚠ ComfyUI is offline — start it to choose models / LoRAs / VAEs / samplers.";
+    note.textContent =
+      "⚠ ComfyUI is offline — start it to choose models / LoRAs / VAEs / samplers.";
     comfyControlsEl.appendChild(note);
   }
   const tokens = meta.tokens || wf.tokens;
@@ -2131,30 +2413,54 @@ async function renderComfyControls() {
         const key = `${type}:${m[1]}`;
         let it = seriesByKey.get(key);
         if (!it) {
-          it = { kind: "series", type, base: m[1], entries: [], order: undefined, scanIndex };
+          it = {
+            kind: "series",
+            type,
+            base: m[1],
+            entries: [],
+            order: undefined,
+            scanIndex,
+          };
           seriesByKey.set(key, it);
           items.push(it);
         }
         it.entries.push({ token, index: Number(m[2]) });
-        if (token.order != null && (it.order == null || token.order < it.order)) it.order = token.order;
+        if (token.order != null && (it.order == null || token.order < it.order))
+          it.order = token.order;
         return;
       }
-      items.push({ kind: "single-media", type, token, order: token.order, scanIndex });
+      items.push({
+        kind: "single-media",
+        type,
+        token,
+        order: token.order,
+        scanIndex,
+      });
       return;
     }
     items.push({ kind: "scalar", type, token, order: token.order, scanIndex });
   });
   // A one-entry "series" is just a single control.
   for (const it of items) {
-    if (it.kind === "series" && it.entries.length === 1) { it.kind = "single-media"; it.token = it.entries[0].token; }
+    if (it.kind === "series" && it.entries.length === 1) {
+      it.kind = "single-media";
+      it.token = it.entries[0].token;
+    }
   }
   // Dynamic reference collections (recognized nodes) render as multi-upload controls,
   // ordered in among the rest by their `order`.
   (meta.references || []).forEach((ref, i) => {
-    items.push({ kind: "reference", ref, order: ref.order, scanIndex: 900 + i });
+    items.push({
+      kind: "reference",
+      ref,
+      order: ref.order,
+      scanIndex: 900 + i,
+    });
   });
   // Order by the "; #N" hint; items without one keep scan order, after ordered ones.
-  items.sort((a, b) => (a.order ?? 1000 + a.scanIndex) - (b.order ?? 1000 + b.scanIndex));
+  items.sort(
+    (a, b) => (a.order ?? 1000 + a.scanIndex) - (b.order ?? 1000 + b.scanIndex),
+  );
 
   // The "ComfyUI Settings" drawer is for installed-model-file pickers (checkpoints,
   // VAEs, CLIPs — big `.safetensors` lists) and the toggles for optional patch nodes
@@ -2173,12 +2479,18 @@ async function renderComfyControls() {
   const groupResets = new Map(); // group key → its summary's Reset button
   // Mark a section's only control, whose label can defer to the section's summary.
   const groupSizes = new Map();
-  for (const t of tokens) if (t.group) groupSizes.set(t.group.key, (groupSizes.get(t.group.key) || 0) + 1);
-  for (const t of tokens) if (t.group && groupSizes.get(t.group.key) === 1) t.soleInGroup = true;
+  for (const t of tokens)
+    if (t.group)
+      groupSizes.set(t.group.key, (groupSizes.get(t.group.key) || 0) + 1);
+  for (const t of tokens)
+    if (t.group && groupSizes.get(t.group.key) === 1) t.soleInGroup = true;
   // Enable/disable toggles for optional patch nodes (e.g. Sage Attention). A
   // recognized node's toggle sits at the top of its own section, above the controls it
   // hides; the rest land in the Settings drawer below.
-  comfyBypassControl = (meta.bypassable || []).length ? makeComfyBypassControl(meta.bypassable) : null;
+  comfyBypassControl =
+    (meta.bypassable || []).length ?
+      makeComfyBypassControl(meta.bypassable)
+    : null;
   const mainContainer = (token) => {
     if (!grouped || !token.group) return comfyControlsEl;
     let body = groupBodies.get(token.group.key);
@@ -2227,8 +2539,8 @@ async function renderComfyControls() {
         (meta.workflowMedia || []).filter(
           (m) =>
             m.reference === (it.ref.label || it.ref.name) &&
-            (meta.mediaOptions?.[m.kind] || []).includes(m.file)
-        )
+            (meta.mediaOptions?.[m.kind] || []).includes(m.file),
+        ),
       );
       ctrl.el.style.gridColumn = "span 12";
       comfyControlsEl.appendChild(ctrl.el);
@@ -2238,7 +2550,10 @@ async function renderComfyControls() {
     if (it.kind === "series") {
       const entries = it.entries.sort((a, b) => a.index - b.index);
       const ctrl = makeComfyMediaMulti(
-        it.base, it.type, entries.map((e) => e.token.name), entries[0].token.tail,
+        it.base,
+        it.type,
+        entries.map((e) => e.token.name),
+        entries[0].token.tail,
         entries.map((e) => e.token.soundtrack),
       );
       ctrl.el.style.gridColumn = `span ${WIDTH_SPAN[entries[0].token.width] || 12}`;
@@ -2249,7 +2564,12 @@ async function renderComfyControls() {
       ctrl.el.style.gridColumn = `span ${comfySpan(it.token, it.type)}`;
       mainContainer(it.token).appendChild(ctrl.el);
       comfyFields.push(ctrl);
-    } else if (!it.token.group && it.token.combo && (isFilePickerCombo(it.token) || bypassIds.has(String(it.token.nodeId ?? "")))) {
+    } else if (
+      !it.token.group &&
+      it.token.combo &&
+      (isFilePickerCombo(it.token) ||
+        bypassIds.has(String(it.token.nodeId ?? "")))
+    ) {
       // Tokenized workflows funnel installed-file pickers + patch-node toggles into the
       // Settings drawer. Recognized controls carry a group and render in their own
       // (collapsed) node section instead, so they skip the drawer.
@@ -2282,7 +2602,11 @@ async function renderComfyControls() {
   for (const it of settingsScalars) {
     const nid = String(it.token.nodeId ?? "");
     if (comfyBypassControl && bypassIds.has(nid)) {
-      renderScalarControl(it.token, it.type, comfyBypassControl.mountGroup(body, nid));
+      renderScalarControl(
+        it.token,
+        it.type,
+        comfyBypassControl.mountGroup(body, nid),
+      );
     } else {
       renderScalarControl(it.token, it.type, body);
     }
@@ -2292,10 +2616,18 @@ async function renderComfyControls() {
   // "ComfyUI Settings" drawer). The drawer holds only installed-file pickers and
   // patch-node toggles now, and isn't rendered at all when it has neither.
   if ((meta.workflowMedia || []).length) {
-    comfyMediaControl = makeComfyMediaControl(meta.workflowMedia, meta.mediaOptions, !!meta.offline);
+    comfyMediaControl = makeComfyMediaControl(
+      meta.workflowMedia,
+      meta.mediaOptions,
+      !!meta.offline,
+    );
     comfyControlsEl.appendChild(comfyMediaControl.el);
   }
-  comfyLoraControl = makeComfyLoraControl(meta.loraOptions || [], !!meta.offline, meta.workflowLoras || []);
+  comfyLoraControl = makeComfyLoraControl(
+    meta.loraOptions || [],
+    !!meta.offline,
+    meta.workflowLoras || [],
+  );
   comfyLoraControl.setLoras([]); // the workflow's own LoRAs, before any saved loadout
   comfyControlsEl.appendChild(comfyLoraControl.el);
   if (body.childElementCount) comfyControlsEl.appendChild(details);
@@ -2329,14 +2661,19 @@ async function renderComfyControls() {
   // Overlay this workflow's saved config (server-side settings file) so the form
   // reopens with what you last ran — values, media, seed mode, and LoRAs.
   try {
-    const s = await fetch(`/api/comfy/settings?file=${encodeURIComponent(wf.file)}`).then((r) => r.json());
+    const s = await fetch(
+      `/api/comfy/settings?file=${encodeURIComponent(wf.file)}`,
+    ).then((r) => r.json());
     if (seq !== comfyRenderSeq) return;
     const settings = s?.data || {};
     prefillComfyControls(settings);
     refreshComfyRefTags();
-    if (comfyLoraControl && Array.isArray(settings.loras)) comfyLoraControl.setLoras(settings.loras);
-    if (comfyMediaControl && Array.isArray(settings.workflowMedia)) comfyMediaControl.setMedia(settings.workflowMedia);
-    if (comfyBypassControl && Array.isArray(settings.bypass)) comfyBypassControl.setDisabled(settings.bypass);
+    if (comfyLoraControl && Array.isArray(settings.loras))
+      comfyLoraControl.setLoras(settings.loras);
+    if (comfyMediaControl && Array.isArray(settings.workflowMedia))
+      comfyMediaControl.setMedia(settings.workflowMedia);
+    if (comfyBypassControl && Array.isArray(settings.bypass))
+      comfyBypassControl.setDisabled(settings.bypass);
   } catch {
     /* no saved settings — token defaults stand */
   }
@@ -2347,9 +2684,15 @@ async function renderComfyControls() {
 // controls (pinned for an armed continuation) are left alone, and so is the section's
 // enable/disable checkbox. Asks first if a typed prompt would be wiped.
 function resetComfyGroup(key, label) {
-  const fields = comfyFields.filter((f) => f.groupKey === key && f.reset && !f.locked);
+  const fields = comfyFields.filter(
+    (f) => f.groupKey === key && f.reset && !f.locked,
+  );
   if (!fields.length) return;
-  if (fields.some((f) => f.wouldClear?.()) && !confirm(`Reset "${label}"?\n\nThis clears the prompt text you've entered.`)) return;
+  if (
+    fields.some((f) => f.wouldClear?.()) &&
+    !confirm(`Reset "${label}"?\n\nThis clears the prompt text you've entered.`)
+  )
+    return;
   for (const f of fields) f.reset();
 }
 
@@ -2375,22 +2718,35 @@ function makeComfyBypassControl(bypassable) {
     const sync = () => controlsEl.classList.toggle("hidden", !cb.checked);
     cb.addEventListener("change", sync);
     sync();
-    nodes.set(String(b.id), { checkbox: cb, controlsEl, wrapper, mounted: false });
+    nodes.set(String(b.id), {
+      checkbox: cb,
+      controlsEl,
+      wrapper,
+      mounted: false,
+    });
   }
   return {
     // Append the node's group to `container` (once) and return its controls slot.
     mountGroup(container, id) {
       const n = nodes.get(String(id));
       if (!n) return container;
-      if (!n.mounted) { container.appendChild(n.wrapper); n.mounted = true; }
+      if (!n.mounted) {
+        container.appendChild(n.wrapper);
+        n.mounted = true;
+      }
       return n.controlsEl;
     },
     // Append any toggles that had no controls to render (bare enable/disable).
     mountRemaining(container) {
-      for (const n of nodes.values()) if (!n.mounted) { container.appendChild(n.wrapper); n.mounted = true; }
+      for (const n of nodes.values())
+        if (!n.mounted) {
+          container.appendChild(n.wrapper);
+          n.mounted = true;
+        }
     },
     // Ids of nodes to bypass (the unchecked ones).
-    getDisabled: () => [...nodes].filter(([, n]) => !n.checkbox.checked).map(([id]) => id),
+    getDisabled: () =>
+      [...nodes].filter(([, n]) => !n.checkbox.checked).map(([id]) => id),
     setDisabled: (ids) => {
       const off = new Set((ids || []).map(String));
       for (const [id, n] of nodes) {
@@ -2434,10 +2790,17 @@ function makeComfyMediaControl(workflowMedia, mediaOptions, offline) {
     chk.className = "lora-enabled";
     chk.checked = true;
     chk.title = `From the workflow (${m.title}) — unchecked takes it out of the graph for the run`;
-    const options = (mediaOptions?.[m.kind] || []).map((o) => ({ label: o, value: o }));
+    const options = (mediaOptions?.[m.kind] || []).map((o) => ({
+      label: o,
+      value: o,
+    }));
     let sel;
     if (options.length) {
-      if (!options.some((o) => o.value === m.file)) options.unshift({ label: `${m.file} (not in ComfyUI's input folder)`, value: m.file });
+      if (!options.some((o) => o.value === m.file))
+        options.unshift({
+          label: `${m.file} (not in ComfyUI's input folder)`,
+          value: m.file,
+        });
       sel = makeSearchableSelect(options, m.file, "Type to filter files…");
       sel.classList.add("lora-name");
     } else {
@@ -2451,13 +2814,17 @@ function makeComfyMediaControl(workflowMedia, mediaOptions, offline) {
     where.className = "lora-from";
     const syncWhere = () => {
       const differs = String(sel.value) !== String(m.file);
-      where.textContent = differs ? "overriding" : m.reference ? `${m.reference} reference` : m.kind;
+      where.textContent =
+        differs ? "overriding"
+        : m.reference ? `${m.reference} reference`
+        : m.kind;
       where.classList.toggle("lora-overridden", differs);
-      where.title = differs
-        ? `The workflow loads “${m.file}” here (${m.title}, node ${m.nodeId})`
-        : m.reference
-          ? `Wired into the ${m.reference} reference — your own files there replace it`
-          : `${m.title}, node ${m.nodeId}`;
+      where.title =
+        differs ?
+          `The workflow loads “${m.file}” here (${m.title}, node ${m.nodeId})`
+        : m.reference ?
+          `Wired into the ${m.reference} reference — your own files there replace it`
+        : `${m.title}, node ${m.nodeId}`;
     };
     syncWhere();
     sel.addEventListener?.("change", syncWhere);
@@ -2474,10 +2841,17 @@ function makeComfyMediaControl(workflowMedia, mediaOptions, offline) {
   return {
     el: field,
     // [{ nodeId, file, enabled }] — the server writes these onto the workflow's loaders.
-    getMedia: () => rows.map(({ m, chk, sel }) => ({ nodeId: m.nodeId, file: sel.value || m.file, enabled: chk.checked })),
+    getMedia: () =>
+      rows.map(({ m, chk, sel }) => ({
+        nodeId: m.nodeId,
+        file: sel.value || m.file,
+        enabled: chk.checked,
+      })),
     setMedia: (arr) => {
       for (const saved of Array.isArray(arr) ? arr : []) {
-        const row = rows.find((r) => String(r.m.nodeId) === String(saved.nodeId));
+        const row = rows.find(
+          (r) => String(r.m.nodeId) === String(saved.nodeId),
+        );
         if (!row) continue;
         if (saved.file) row.sel.value = saved.file;
         row.chk.checked = saved.enabled !== false;
@@ -2494,9 +2868,9 @@ function makeComfyLoraControl(loraOptions, offline, workflowLoras = []) {
   field.style.gridColumn = "span 12";
   field.innerHTML =
     `<div class="field-head"><span>LoRAs <span class="hint">` +
-    (workflowLoras.length
-      ? `(${workflowLoras.length} already in this workflow, listed first — uncheck to leave one out · strength −5 to 5)`
-      : `(added on top of the workflow · strength −5 to 5)`) +
+    (workflowLoras.length ?
+      `(${workflowLoras.length} already in this workflow, listed first — uncheck to leave one out · strength −5 to 5)`
+    : `(added on top of the workflow · strength −5 to 5)`) +
     `</span></span></div>` +
     `<div class="lora-rows"></div>`;
   const rowsEl = field.querySelector(".lora-rows");
@@ -2529,12 +2903,18 @@ function makeComfyLoraControl(loraOptions, offline, workflowLoras = []) {
     chk.type = "checkbox";
     chk.className = "lora-enabled";
     chk.checked = enabled !== false;
-    chk.title = from
-      ? `From the workflow (${from.title}) — unchecked takes it out of the graph for the run`
+    chk.title =
+      from ?
+        `From the workflow (${from.title}) — unchecked takes it out of the graph for the run`
       : "Enable this LoRA — unchecked keeps it in the loadout but doesn't apply it";
     const loraOpts = loraOptions.map((o) => ({ label: o, value: o }));
-    if (name && !loraOptions.includes(name)) loraOpts.push({ label: `${name} (not installed)`, value: name });
-    const sel = makeSearchableSelect(loraOpts, name || "", "Type to filter LoRAs…");
+    if (name && !loraOptions.includes(name))
+      loraOpts.push({ label: `${name} (not installed)`, value: name });
+    const sel = makeSearchableSelect(
+      loraOpts,
+      name || "",
+      "Type to filter LoRAs…",
+    );
     sel.classList.add("lora-name");
     const str = document.createElement("input");
     str.type = "number";
@@ -2568,8 +2948,9 @@ function makeComfyLoraControl(loraOptions, offline, workflowLoras = []) {
         const differs = String(sel.value) !== String(from.name);
         tag.textContent = differs ? "overriding" : "in workflow";
         tag.classList.toggle("lora-overridden", differs);
-        tag.title = differs
-          ? `The workflow loads “${from.name}” here (${from.title}, node ${from.nodeId})`
+        tag.title =
+          differs ?
+            `The workflow loads “${from.name}” here (${from.title}, node ${from.nodeId})`
           : `This LoRA is part of the workflow file (${from.title}, node ${from.nodeId})`;
       };
       syncTag();
@@ -2600,10 +2981,19 @@ function makeComfyLoraControl(loraOptions, offline, workflowLoras = []) {
       rowsEl.innerHTML = "";
       for (const w of workflowLoras) {
         const s = saved.find((x) => String(x.nodeId) === String(w.nodeId));
-        addRow(s?.name || w.name, typeof s?.strength === "number" ? s.strength : w.strength, s?.enabled !== false, w);
+        addRow(
+          s?.name || w.name,
+          typeof s?.strength === "number" ? s.strength : w.strength,
+          s?.enabled !== false,
+          w,
+        );
       }
       for (const l of saved.filter((x) => !x.nodeId && x.name))
-        addRow(l.name, typeof l.strength === "number" ? l.strength : 1, l.enabled !== false);
+        addRow(
+          l.name,
+          typeof l.strength === "number" ? l.strength : 1,
+          l.enabled !== false,
+        );
     },
   };
 }
@@ -2612,8 +3002,14 @@ function makeComfyLoraControl(loraOptions, offline, workflowLoras = []) {
 // Behaves like a <select> for callers: exposes a `.value` property (get/set) and
 // fires "change", so it drops in wherever a native select's `.value` was read.
 // `options` are strings or { label, value }.
-function makeSearchableSelect(options, initialValue = "", placeholder = "Type to filter…") {
-  const opts = (options || []).map((o) => (typeof o === "string" ? { label: o, value: o } : o));
+function makeSearchableSelect(
+  options,
+  initialValue = "",
+  placeholder = "Type to filter…",
+) {
+  const opts = (options || []).map((o) =>
+    typeof o === "string" ? { label: o, value: o } : o,
+  );
   const root = document.createElement("div");
   root.className = "combo-search";
   const input = document.createElement("input");
@@ -2654,12 +3050,14 @@ function makeSearchableSelect(options, initialValue = "", placeholder = "Type to
       });
       list.appendChild(item);
     });
-    if (highlight >= 0) list.children[highlight]?.scrollIntoView({ block: "nearest" });
+    if (highlight >= 0)
+      list.children[highlight]?.scrollIntoView({ block: "nearest" });
   }
 
   function filter(text) {
     const f = (text || "").trim().toLowerCase();
-    matches = f ? opts.filter((o) => o.label.toLowerCase().includes(f)) : opts.slice();
+    matches =
+      f ? opts.filter((o) => o.label.toLowerCase().includes(f)) : opts.slice();
     highlight = -1;
     paint();
   }
@@ -2680,9 +3078,15 @@ function makeSearchableSelect(options, initialValue = "", placeholder = "Type to
   }
 
   input.addEventListener("focus", open);
-  input.addEventListener("click", () => { if (!isOpen()) open(); });
+  input.addEventListener("click", () => {
+    if (!isOpen()) open();
+  });
   input.addEventListener("input", () => filter(input.value));
-  input.addEventListener("blur", () => setTimeout(() => { if (isOpen()) close(); }, 100));
+  input.addEventListener("blur", () =>
+    setTimeout(() => {
+      if (isOpen()) close();
+    }, 100),
+  );
   input.addEventListener("keydown", (e) => {
     if (e.key === "ArrowDown") {
       e.preventDefault();
@@ -2700,14 +3104,21 @@ function makeSearchableSelect(options, initialValue = "", placeholder = "Type to
         if (o) pick(o.value);
       }
     } else if (e.key === "Escape") {
-      if (isOpen()) { e.preventDefault(); close(); input.blur(); }
+      if (isOpen()) {
+        e.preventDefault();
+        close();
+        input.blur();
+      }
     }
   });
 
   input.value = labelFor(current);
   Object.defineProperty(root, "value", {
     get: () => current,
-    set: (v) => { current = v ?? ""; input.value = labelFor(current); },
+    set: (v) => {
+      current = v ?? "";
+      input.value = labelFor(current);
+    },
     configurable: true,
   });
   return root;
@@ -2719,7 +3130,10 @@ function makeSearchableSelect(options, initialValue = "", placeholder = "Type to
 // for a dropdown (ComfyUI's implicit default, e.g. the first installed model).
 // `undefined` means nothing to reset to — a number with no default keeps its value.
 function comfyResetValue(token, type, choices) {
-  const known = (v) => v !== undefined && v !== null && (type !== "select" || choices.some((o) => o.value === String(v)));
+  const known = (v) =>
+    v !== undefined &&
+    v !== null &&
+    (type !== "select" || choices.some((o) => o.value === String(v)));
   if (known(token.recommended)) return token.recommended;
   if (known(token.nodeDefault)) return token.nodeDefault;
   if (type === "select") return choices[0]?.value;
@@ -2752,7 +3166,8 @@ function renderScalarControl(token, type, container = comfyControlsEl) {
   // after-generate/dice controls; otherwise it's removed below.
   // Only for a section's sole control, so a multi-control section keeps every label.
   const echoesGroup =
-    !!token.soleInGroup && !!token.group?.label &&
+    !!token.soleInGroup &&
+    !!token.group?.label &&
     labelText.trim().toLowerCase() === token.group.label.trim().toLowerCase();
   if (!echoesGroup) head.innerHTML = `<span>${escapeHtmlJs(labelText)}</span>`;
   field.appendChild(head);
@@ -2762,19 +3177,27 @@ function renderScalarControl(token, type, container = comfyControlsEl) {
   // author's inline options are "value" or "Label=value" (e.g. Enabled=1|Disabled=0)
   // so the dropdown can show a friendly label while writing a different value.
   const parsedOptions =
-    type === "select"
-      ? (token.combo ? token.comboOptions || [] : token.options || []).map((o) => {
+    type === "select" ?
+      (token.combo ? token.comboOptions || [] : token.options || []).map(
+        (o) => {
           if (token.combo) return { label: String(o), value: String(o) };
           const i = String(o).indexOf("=");
-          return i >= 0 ? { label: o.slice(0, i).trim(), value: o.slice(i + 1).trim() } : { label: o, value: o };
-        })
-      : [];
+          return i >= 0 ?
+              { label: o.slice(0, i).trim(), value: o.slice(i + 1).trim() }
+            : { label: o, value: o };
+        },
+      )
+    : [];
   // A dropdown whose option values are all numbers should send a number (never for
   // a combo, whose values are filenames/choices).
   const numericSelect =
     token.type !== "str" &&
-    type === "select" && !token.combo && parsedOptions.length > 0 &&
-    parsedOptions.every((o) => o.value !== "" && !Number.isNaN(Number(o.value)));
+    type === "select" &&
+    !token.combo &&
+    parsedOptions.length > 0 &&
+    parsedOptions.every(
+      (o) => o.value !== "" && !Number.isNaN(Number(o.value)),
+    );
 
   let input;
   if (type === "toggle") {
@@ -2785,7 +3208,10 @@ function renderScalarControl(token, type, container = comfyControlsEl) {
     input.checked = asBool(token.default);
     const label = document.createElement("label");
     label.className = "inline";
-    label.append(input, document.createTextNode(` ${token.label || prettyLabel(token.name)}`));
+    label.append(
+      input,
+      document.createTextNode(` ${token.label || prettyLabel(token.name)}`),
+    );
     head.remove();
     field.classList.add("field-toggle");
     field.appendChild(label);
@@ -2795,11 +3221,22 @@ function renderScalarControl(token, type, container = comfyControlsEl) {
       name: token.name,
       getValue: async () => input.checked,
       peek: () => input.checked,
-      set: (v) => { input.checked = asBool(v); },
+      set: (v) => {
+        input.checked = asBool(v);
+      },
       pin: !!token.pin,
-      lock: (on) => { input.disabled = !!on; toggleCtrl.locked = !!on; field.classList.toggle("locked", !!on); },
+      lock: (on) => {
+        input.disabled = !!on;
+        toggleCtrl.locked = !!on;
+        field.classList.toggle("locked", !!on);
+      },
       groupKey: token.group?.key ?? null,
-      reset: resetTo === undefined ? null : () => { input.checked = asBool(resetTo); },
+      reset:
+        resetTo === undefined ? null : (
+          () => {
+            input.checked = asBool(resetTo);
+          }
+        ),
     };
     comfyFields.push(toggleCtrl);
     return;
@@ -2808,22 +3245,28 @@ function renderScalarControl(token, type, container = comfyControlsEl) {
   // workflow that names the bare file (or was exported with it in another subfolder)
   // matches nothing. The same filename elsewhere in the tree is the file it meant —
   // taken when it's unambiguous, rather than silently falling back to the first entry.
-  const baseName = (v) => String(v ?? "").split(/[\\/]/).pop().toLowerCase();
+  const baseName = (v) =>
+    String(v ?? "")
+      .split(/[\\/]/)
+      .pop()
+      .toLowerCase();
   const sameFileElsewhere = (v) => {
     if (!token.combo || !v) return null;
     const hits = parsedOptions.filter((o) => baseName(o.value) === baseName(v));
     return hits.length === 1 ? hits[0].value : null;
   };
   if (type === "select") {
-    const initial = parsedOptions.some((o) => o.value === token.default)
-      ? token.default
-      : sameFileElsewhere(token.default) ?? parsedOptions[0]?.value ?? "";
+    const initial =
+      parsedOptions.some((o) => o.value === token.default) ?
+        token.default
+      : (sameFileElsewhere(token.default) ?? parsedOptions[0]?.value ?? "");
     if (parsedOptions.length > 10) {
       // Long lists (models, samplers, …) get a type-to-filter dropdown.
       input = makeSearchableSelect(parsedOptions, initial);
     } else {
       input = document.createElement("select");
-      for (const o of parsedOptions) input.appendChild(new Option(o.label, o.value));
+      for (const o of parsedOptions)
+        input.appendChild(new Option(o.label, o.value));
       input.value = initial;
     }
   } else if (type === "textarea") {
@@ -2848,14 +3291,17 @@ function renderScalarControl(token, type, container = comfyControlsEl) {
       afterMode = document.createElement("select");
       afterMode.className = "seed-after";
       afterMode.title = "Control after generate";
-      for (const m of ["fixed", "increment", "decrement", "randomize"]) afterMode.appendChild(new Option(m, m));
+      for (const m of ["fixed", "increment", "decrement", "randomize"])
+        afterMode.appendChild(new Option(m, m));
       afterMode.value = "fixed";
       const dice = document.createElement("button");
       dice.type = "button";
       dice.className = "link-btn";
       dice.textContent = "🎲";
       dice.title = "Randomize now";
-      dice.addEventListener("click", () => { input.value = randomSeed(); });
+      dice.addEventListener("click", () => {
+        input.value = randomSeed();
+      });
       head.appendChild(afterMode);
       head.appendChild(dice);
     }
@@ -2863,7 +3309,9 @@ function renderScalarControl(token, type, container = comfyControlsEl) {
   // The workflow's main prompt (the first one, if a workflow tokenizes several) is
   // what a model switch carries over, so it wears the lock — see carryOnSwitch.
   const isPrompt =
-    type === "textarea" && isCarryPromptName(token.name) && !comfyFields.some((f) => f.isPrompt);
+    type === "textarea" &&
+    isCarryPromptName(token.name) &&
+    !comfyFields.some((f) => f.isPrompt);
   if (isPrompt) {
     const tools = document.createElement("span");
     tools.className = "field-head-tools";
@@ -2883,23 +3331,38 @@ function renderScalarControl(token, type, container = comfyControlsEl) {
       labelText: echoesGroup ? "Prompt" : labelText,
     });
   }
-  const readValue = () => (type === "number" || numericSelect ? Number(input.value) : input.value);
+  const readValue = () =>
+    type === "number" || numericSelect ? Number(input.value) : input.value;
   const resetTo = comfyResetValue(token, type, parsedOptions);
   const ctrl = {
     name: token.name,
     isPrompt,
     getValue: async () => readValue(),
     peek: readValue, // sync read, for saving last-used defaults
-    set: (v) => { input.value = v; },
+    set: (v) => {
+      input.value = v;
+    },
     // Declared "; pin": must not drift between a run and its continuation, so the
     // form locks it while one is armed.
     pin: !!token.pin,
-    lock: (on) => { input.disabled = !!on; ctrl.locked = !!on; field.classList.toggle("locked", !!on); },
+    lock: (on) => {
+      input.disabled = !!on;
+      ctrl.locked = !!on;
+      field.classList.toggle("locked", !!on);
+    },
     // The node section's Reset (see resetComfyGroup).
     groupKey: token.group?.key ?? null,
-    reset: resetTo === undefined ? null : () => { input.value = type === "select" ? String(resetTo) : resetTo; },
+    reset:
+      resetTo === undefined ? null : (
+        () => {
+          input.value = type === "select" ? String(resetTo) : resetTo;
+        }
+      ),
     // True when Reset would blank a typed multi-line text (a prompt), so it asks first.
-    wouldClear: () => type === "textarea" && resetTo === "" && String(input.value).trim() !== "",
+    wouldClear: () =>
+      type === "textarea" &&
+      resetTo === "" &&
+      String(input.value).trim() !== "",
   };
   if (afterMode) {
     ctrl.advance = () => {
@@ -2910,7 +3373,9 @@ function renderScalarControl(token, type, container = comfyControlsEl) {
     };
     // Remember the fixed/increment/decrement/randomize choice in last-used settings.
     ctrl.peekAfter = () => afterMode.value;
-    ctrl.setAfter = (v) => { if (v) afterMode.value = v; };
+    ctrl.setAfter = (v) => {
+      if (v) afterMode.value = v;
+    };
   }
   comfyFields.push(ctrl);
 }
@@ -2921,7 +3386,14 @@ function renderScalarControl(token, type, container = comfyControlsEl) {
 // badges ("Picture 1, 2…"). The Nth file fills the Nth token; unfilled tokens are
 // pruned at submit.
 let comfyListSeq = 0;
-function makeComfyMediaMulti(base, mediaKind, tokenNames, tail = null, soundtracks = [], labelText = null) {
+function makeComfyMediaMulti(
+  base,
+  mediaKind,
+  tokenNames,
+  tail = null,
+  soundtracks = [],
+  labelText = null,
+) {
   const label = labelText || prettyLabel(base);
   const max = tokenNames.length;
   const list = makeMediaList(`comfy-${base}-${comfyListSeq++}`, {
@@ -2955,7 +3427,13 @@ function makeComfyMediaMulti(base, mediaKind, tokenNames, tail = null, soundtrac
     setMedia(arr) {
       list.items = [];
       for (const it of (arr || []).slice(0, max)) {
-        if (it?.id) list.addFromGallery({ id: it.id, localUrl: it.url, name: it.name, tail: it.tail });
+        if (it?.id)
+          list.addFromGallery({
+            id: it.id,
+            localUrl: it.url,
+            name: it.name,
+            tail: it.tail,
+          });
       }
       list.render();
     },
@@ -3001,8 +3479,14 @@ function makeComfyMediaMulti(base, mediaKind, tokenNames, tail = null, soundtrac
       const filled = ready();
       for (let i = 0; i < tokenNames.length; i++) {
         const it = filled[i];
-        if (!it) { prune.push(tokenNames[i]); continue; }
-        if (!it.localId) throw new Error(`${label}: drop a file (URL inputs aren't supported for local workflows).`);
+        if (!it) {
+          prune.push(tokenNames[i]);
+          continue;
+        }
+        if (!it.localId)
+          throw new Error(
+            `${label}: drop a file (URL inputs aren't supported for local workflows).`,
+          );
         if (!it.comfyRef) {
           const res = await fetch("/api/comfy/upload", {
             method: "POST",
@@ -3010,7 +3494,8 @@ function makeComfyMediaMulti(base, mediaKind, tokenNames, tail = null, soundtrac
             body: JSON.stringify({ id: it.localId }),
           });
           const data = await res.json();
-          if (!res.ok || !data.data?.filename) throw new Error(data.msg || `Failed to upload ${tokenNames[i]}`);
+          if (!res.ok || !data.data?.filename)
+            throw new Error(data.msg || `Failed to upload ${tokenNames[i]}`);
           it.comfyRef = data.data.filename;
         }
         values[tokenNames[i]] = it.comfyRef;
@@ -3027,8 +3512,18 @@ function makeComfyMediaMulti(base, mediaKind, tokenNames, tail = null, soundtrac
 // slots to prune). `ref` is a descriptor from workflow-meta's `references`.
 function makeComfyReference(ref, baked = []) {
   const max = ref.max || 9;
-  const slotNames = Array.from({ length: max }, (_, i) => `${ref.name}_${i + 1}`);
-  const ctrl = makeComfyMediaMulti(ref.name, ref.kind, slotNames, null, [], ref.label);
+  const slotNames = Array.from(
+    { length: max },
+    (_, i) => `${ref.name}_${i + 1}`,
+  );
+  const ctrl = makeComfyMediaMulti(
+    ref.name,
+    ref.kind,
+    slotNames,
+    null,
+    [],
+    ref.label,
+  );
   ctrl.isMultiMedia = false; // not a token series — don't route through values/prune
   ctrl.isReferenceCollection = true;
   ctrl.collectionName = ref.name;
@@ -3040,8 +3535,15 @@ function makeComfyReference(ref, baked = []) {
     note.className = "comfy-missing hidden";
     ctrl.el.appendChild(note);
     const sync = () => {
-      const live = comfyMediaControl
-        ? comfyMediaControl.getMedia().filter((m) => baked.some((b) => String(b.nodeId) === String(m.nodeId)) && m.enabled !== false)
+      const live =
+        comfyMediaControl ?
+          comfyMediaControl
+            .getMedia()
+            .filter(
+              (m) =>
+                baked.some((b) => String(b.nodeId) === String(m.nodeId)) &&
+                m.enabled !== false,
+            )
         : baked.map((b) => ({ file: b.file }));
       const show = live.length > 0 && ctrl.filledMedia().length === 0;
       note.classList.toggle("hidden", !show);
@@ -3075,7 +3577,8 @@ function prefillComfyControls(values) {
     } else if (f.name in values && typeof f.set === "function") {
       f.set(values[f.name]);
     }
-    if (after && typeof f.setAfter === "function" && f.name in after) f.setAfter(after[f.name]);
+    if (after && typeof f.setAfter === "function" && f.name in after)
+      f.setAfter(after[f.name]);
   }
 }
 
@@ -3088,7 +3591,9 @@ async function restoreComfyMedia(entry) {
   if (!kinds.some((k) => (localIds[k] || []).length)) return;
   let saved = [];
   try {
-    saved = await fetch("/api/images").then((r) => r.json()).then((d) => d.data || []);
+    saved = await fetch("/api/images")
+      .then((r) => r.json())
+      .then((d) => d.data || []);
   } catch {
     return;
   }
@@ -3108,7 +3613,8 @@ async function restoreComfyMedia(entry) {
   // Re-apply the run's per-reference tails (absent on entries from before the
   // feature, and on runs that used whole clips).
   if (entry.input?.tails) {
-    for (const f of comfyFields) if (typeof f.setTails === "function") f.setTails(entry.input.tails);
+    for (const f of comfyFields)
+      if (typeof f.setTails === "function") f.setTails(entry.input.tails);
   }
 }
 
@@ -3119,7 +3625,8 @@ async function restoreComfyMedia(entry) {
 async function saveComfySettings(file) {
   const data = { __media: {}, __after: {} };
   for (const f of comfyFields) {
-    if (typeof f.peekMedia === "function") data.__media[f.mediaKey] = f.peekMedia();
+    if (typeof f.peekMedia === "function")
+      data.__media[f.mediaKey] = f.peekMedia();
     else if (typeof f.peek === "function") data[f.name] = f.peek();
     if (typeof f.peekAfter === "function") data.__after[f.name] = f.peekAfter();
   }
@@ -3161,7 +3668,10 @@ async function collectComfyValues(promptOverride = null) {
       prune.push(f.name); // nothing selected — prune this reference loader
       continue;
     }
-    values[f.name] = f.isPrompt && promptOverride != null ? promptOverride : await f.getValue();
+    values[f.name] =
+      f.isPrompt && promptOverride != null ?
+        promptOverride
+      : await f.getValue();
   }
   // Wildcards: fresh picks per call (each queued run), one memo across the fields so a
   // :1 pick in the prompt carries into, say, the negative prompt. `templates` keeps the
@@ -3179,7 +3689,9 @@ async function collectComfyValues(promptOverride = null) {
 // How many generations to queue (the ×N counter beside Generate). Capped at 20, which
 // is also kie.ai's limit on new requests per 10 seconds.
 function queueCount() {
-  const n = Math.floor(Number(document.getElementById("queueCount").value) || 1);
+  const n = Math.floor(
+    Number(document.getElementById("queueCount").value) || 1,
+  );
   return Math.min(20, Math.max(1, n));
 }
 
@@ -3191,7 +3703,8 @@ async function submitComfy() {
   if (!wf) return setError("Workflow not found — try reloading.");
   hide(errorEl);
   submitBtn.disabled = true;
-  if (armedContinuation && armedContinuation.file !== wf.file) disarmContinuation();
+  if (armedContinuation && armedContinuation.file !== wf.file)
+    disarmContinuation();
   const cont = armedContinuation;
   // Redoing a run in place writes one fixed slot; queueing several would stamp the
   // same one N times.
@@ -3201,16 +3714,19 @@ async function submitComfy() {
   const allLoras = comfyLoraControl ? comfyLoraControl.getLoras() : [];
   const wfMedia = comfyMediaControl ? comfyMediaControl.getMedia() : [];
   const bypass = comfyBypassControl ? comfyBypassControl.getDisabled() : [];
-  const fromSaved = comfyFields.some((f) => f.isPrompt) ? runSavedPrompt() : null;
+  const fromSaved =
+    comfyFields.some((f) => f.isPrompt) ? runSavedPrompt() : null;
   const promptOverride = fromSaved ? exportSavedPromptText(fromSaved) : null;
   const mediaNotes = loadRunMedia(fromSaved); // before the fields are read below
   if (mediaNotes.length) setError(mediaNotes.join("\n"));
   try {
     for (let i = 0; i < count; i++) {
-      const { values, prune, tails, references, templates } = await collectComfyValues(promptOverride);
+      const { values, prune, tails, references, templates } =
+        await collectComfyValues(promptOverride);
       const mediaIds = { image: [], video: [], audio: [] };
       for (const f of comfyFields) {
-        if (f.isMultiMedia || f.isReferenceCollection) mediaIds[f.mediaKind]?.push(...f.localIds());
+        if (f.isMultiMedia || f.isReferenceCollection)
+          mediaIds[f.mediaKind]?.push(...f.localIds());
         else if (f.isMedia) {
           const localId = f.localId();
           if (localId) mediaIds[f.mediaKind]?.push(localId);
@@ -3221,14 +3737,29 @@ async function submitComfy() {
       if (wfMedia.length) input.workflowMedia = wfMedia; // the workflow's own media, as this run had it
       if (bypass.length) input.bypass = bypass;
       if (Object.keys(templates).length) input.valueTemplates = templates; // Re-import restores the %tokens%
-      if (typeof values.prompt === "string" && values.prompt.trim()) input.prompt = values.prompt.trim();
+      if (typeof values.prompt === "string" && values.prompt.trim())
+        input.prompt = values.prompt.trim();
       if (fromSaved) {
-        if (!input.prompt && promptOverride.trim()) input.prompt = resolveWildcards(promptOverride).trim();
+        if (!input.prompt && promptOverride.trim())
+          input.prompt = resolveWildcards(promptOverride).trim();
         input.savedPrompt = savedPromptStamp(fromSaved); // History only, not sent to ComfyUI
       }
-      await queueComfyRun(wf, values, prune, mediaIds, input, allLoras, bypass, tails, cont, references, wfMedia);
+      await queueComfyRun(
+        wf,
+        values,
+        prune,
+        mediaIds,
+        input,
+        allLoras,
+        bypass,
+        tails,
+        cont,
+        references,
+        wfMedia,
+      );
       // Advance seeds for the next queued run (no-op when the mode is "fixed").
-      for (const f of comfyFields) if (typeof f.advance === "function") f.advance();
+      for (const f of comfyFields)
+        if (typeof f.advance === "function") f.advance();
     }
     saveComfySettings(wf.file); // remember the final values + LoRAs (server-side)
     disarmContinuation(); // one arm, one submit
@@ -3242,7 +3773,19 @@ async function submitComfy() {
 // Queue one ComfyUI run: one request queues it AND creates the pending History
 // entry server-side (so a dropped connection can't orphan it — the sweep finishes
 // it). Then attach a live status to that pending card, wire Cancel, and poll.
-async function queueComfyRun(wf, values, prune, mediaIds, input, loras, bypass, tails, cont, references, workflowMedia = []) {
+async function queueComfyRun(
+  wf,
+  values,
+  prune,
+  mediaIds,
+  input,
+  loras,
+  bypass,
+  tails,
+  cont,
+  references,
+  workflowMedia = [],
+) {
   const job = {
     jobId: nextJobId++,
     taskId: null,
@@ -3269,7 +3812,15 @@ async function queueComfyRun(wf, values, prune, mediaIds, input, loras, bypass, 
         projectId: job.projectId,
         refVideoSeconds: 0,
         previewMethod,
-        ...(cont ? { continueFrom: { parentId: cont.parentId, from: cont.from, slot: cont.into } } : {}),
+        ...(cont ?
+          {
+            continueFrom: {
+              parentId: cont.parentId,
+              from: cont.from,
+              slot: cont.into,
+            },
+          }
+        : {}),
       }),
     });
     const data = await res.json();
@@ -3280,7 +3831,8 @@ async function queueComfyRun(wf, values, prune, mediaIds, input, loras, bypass, 
     job.historyId = data.data.historyId || null;
     // Queued, but something the run asked for couldn't be honored (e.g. a reference
     // tail the server couldn't measure) — say so rather than silently ignoring it.
-    if (data.data.warnings?.length) setError(`Queued, but: ${data.data.warnings.join(" ")}`);
+    if (data.data.warnings?.length)
+      setError(`Queued, but: ${data.data.warnings.join(" ")}`);
     const live = createLiveStatus(job);
     live.setStatus("Generating on ComfyUI… this can take a while.");
     if (job.historyId) liveStatus.set(job.historyId, live);
@@ -3300,7 +3852,9 @@ async function pollComfyJob(job) {
   const live = liveOf(job);
   let data;
   try {
-    const res = await fetch(`/api/comfy/status?promptId=${encodeURIComponent(job.taskId)}`);
+    const res = await fetch(
+      `/api/comfy/status?promptId=${encodeURIComponent(job.taskId)}`,
+    );
     if (job.cancelled) return; // cancelled while this poll was in flight
     data = await res.json();
     if (res.status >= 400 && res.status < 500) {
@@ -3308,7 +3862,8 @@ async function pollComfyJob(job) {
       await failJob(job, data.msg || `Status check failed (${res.status})`);
       return;
     }
-    if (!res.ok || data.code !== 200) throw new Error(data.msg || `Status check failed (${res.status})`);
+    if (!res.ok || data.code !== 200)
+      throw new Error(data.msg || `Status check failed (${res.status})`);
   } catch {
     // Transient (network / 5xx) — leave the entry pending and retry.
     if (job.cancelled) return;
@@ -3345,13 +3900,14 @@ async function pollComfyJob(job) {
     await failJob(
       job,
       "ComfyUI has no record of this run — it was likely restarted. If its output is in " +
-        "ComfyUI's output folder it couldn't be copied automatically; re-run to regenerate."
+        "ComfyUI's output folder it couldn't be copied automatically; re-run to regenerate.",
     );
     return;
   }
   // Still running — surface live step progress (drives the elapsed/ETA clock).
   const prog = data.data?.progress;
-  if (live && prog && prog.max > 0) live.setProgress(prog.value, prog.max, prog.passes);
+  if (live && prog && prog.max > 0)
+    live.setProgress(prog.value, prog.max, prog.passes);
   setTimeout(() => pollComfyJob(job), POLL_INTERVAL_MS);
 }
 
@@ -3397,7 +3953,13 @@ let promptSource = "prompt";
 try {
   const t = localStorage.getItem(PROMPT_TAB_KEY);
   if (t === "saved" || t === "wildcards") promptTab = t;
-  promptSource = t === "saved" || (t === "wildcards" && localStorage.getItem(PROMPT_SOURCE_KEY) === "saved") ? "saved" : "prompt";
+  promptSource =
+    (
+      t === "saved" ||
+      (t === "wildcards" && localStorage.getItem(PROMPT_SOURCE_KEY) === "saved")
+    ) ?
+      "saved"
+    : "prompt";
 } catch {
   /* storage blocked — start on the Prompt tab */
 }
@@ -3413,7 +3975,8 @@ const promptHosts = []; // [{ field, textarea, tabs: { prompt, saved } }]
 const ACTIVE_PROMPT_KEY = "genie_active_saved_prompt";
 let activeSavedPromptIds = {}; // projectId → saved prompt id
 try {
-  activeSavedPromptIds = JSON.parse(localStorage.getItem(ACTIVE_PROMPT_KEY) || "{}") || {};
+  activeSavedPromptIds =
+    JSON.parse(localStorage.getItem(ACTIVE_PROMPT_KEY) || "{}") || {};
 } catch {
   /* storage blocked or corrupt — start empty */
 }
@@ -3422,7 +3985,10 @@ function setActiveSavedPrompt(id) {
   if (id) activeSavedPromptIds[activeProjectId] = id;
   else delete activeSavedPromptIds[activeProjectId];
   try {
-    localStorage.setItem(ACTIVE_PROMPT_KEY, JSON.stringify(activeSavedPromptIds));
+    localStorage.setItem(
+      ACTIVE_PROMPT_KEY,
+      JSON.stringify(activeSavedPromptIds),
+    );
   } catch {
     /* non-fatal */
   }
@@ -3467,8 +4033,13 @@ const MM_TYPE_LABEL = { minimax: "MiniMax H3", minimax_t2v: "MiniMax T2V" };
 //     subjects: [{ key, definition }], retention: { "<label>": "fully_preserved - …" },
 //     soundscape, music }
 const MM_SECTIONS = [
-  "subject_definitions", "summary", "retention_analysis",
-  "detailed_description", "integrated_multimodal_description", "overall_soundscape", "non_diegetic_music",
+  "subject_definitions",
+  "summary",
+  "retention_analysis",
+  "detailed_description",
+  "integrated_multimodal_description",
+  "overall_soundscape",
+  "non_diegetic_music",
 ];
 const MM_REF_LABEL = { image: "Picture", video: "Video", audio: "Audio" };
 
@@ -3488,22 +4059,30 @@ function blankMinimax() {
 // checkboxes (summaryTypes) and retention as { marker, note }; both fold into text.
 function normalizeMinimax(mmIn) {
   const mm = { ...blankMinimax(), ...(mmIn || {}) };
-  const types = Array.isArray(mm.summaryTypes) ? mm.summaryTypes.filter(Boolean) : [];
-  if (types.length && !String(mm.summary || "").trimStart().startsWith("[")) {
+  const types =
+    Array.isArray(mm.summaryTypes) ? mm.summaryTypes.filter(Boolean) : [];
+  if (
+    types.length &&
+    !String(mm.summary || "")
+      .trimStart()
+      .startsWith("[")
+  ) {
     mm.summary = `[${types.join(" + ")}] ${mm.summary || ""}`.trim();
   }
   delete mm.summaryTypes;
   mm.retention = Object.fromEntries(
     Object.entries(mm.retention || {}).map(([k, v]) => [
       k,
-      typeof v === "string" ? v : `${v?.marker || ""}${v?.note ? ` - ${v.note}` : ""}`.trim(),
-    ])
+      typeof v === "string" ? v : (
+        `${v?.marker || ""}${v?.note ? ` - ${v.note}` : ""}`.trim()
+      ),
+    ]),
   );
   return mm;
 }
 
 // A subject key as the server stores it (see normalizeMediaKey): one lowercase word, no
-// @ or <>. Lowercase so "Sibella" on an image and "sibella" in a prompt are one subject.
+// @ or <>. Lowercase so "GENie" on an image and "genie" in a prompt are one subject.
 function normKey(k) {
   return String(k ?? "")
     .trim()
@@ -3538,11 +4117,17 @@ function sortedShots(shots) {
   const [first, ...cuts] = shots || [];
   if (!first) return [];
   const key = (s) => (s.at == null ? Infinity : s.at);
-  const sorted = cuts.map((s, i) => [s, i]).sort((a, b) => key(a[0]) - key(b[0]) || a[1] - b[1]).map((x) => x[0]);
+  const sorted = cuts
+    .map((s, i) => [s, i])
+    .sort((a, b) => key(a[0]) - key(b[0]) || a[1] - b[1])
+    .map((x) => x[0]);
   return sorted.every((s, i) => s === cuts[i]) ? shots : [first, ...sorted];
 }
 
-const joinList = (a) => (a.length < 2 ? a.join("") : `${a.slice(0, -1).join(", ")} and ${a[a.length - 1]}`);
+const joinList = (a) =>
+  a.length < 2 ?
+    a.join("")
+  : `${a.slice(0, -1).join(", ")} and ${a[a.length - 1]}`;
 
 // The subjects the prompt defines, in order: references first (grouped by key, so one
 // subject can come from several files), then the extra subjects typed on the prompt.
@@ -3560,7 +4145,13 @@ function minimaxSubjects(mm, refs) {
     const def = String(r.definition || "").trim();
     if (!key && !def) continue;
     if (!key && r.kind === "audio") {
-      out.push({ label: src, sources: [], definition: def, audio: true, fromRefs: true });
+      out.push({
+        label: src,
+        sources: [],
+        definition: def,
+        audio: true,
+        fromRefs: true,
+      });
       continue;
     }
     const label = key ? `<${key}>` : `<Subject ${++anon}>`;
@@ -3587,7 +4178,13 @@ function minimaxSubjects(mm, refs) {
       existing.typed = true;
       continue;
     }
-    const s = { label, sources: [], definition: def, audio: false, fromRefs: false };
+    const s = {
+      label,
+      sources: [],
+      definition: def,
+      audio: false,
+      fromRefs: false,
+    };
     if (label) byLabel.set(label, s);
     out.push(s);
   }
@@ -3600,7 +4197,7 @@ function minimaxSubjects(mm, refs) {
 // A definition as the end of a sentence: closed with a full stop unless it already is.
 const endSentence = (t) => (/[.!?…"”')\]]$/.test(t) ? t : `${t}.`);
 
-// @key tokens: writing @sibella anywhere in a MiniMax prompt refers to the reference
+// @key tokens: writing @genie anywhere in a MiniMax prompt refers to the reference
 // file(s) with that key, and compiles to their current labels ("<Picture 1>", or
 // "<Picture 1> and <Picture 2>" for a key on several files). Numbered like
 // minimaxSubjects, so re-ordering the references keeps every @key on the right file.
@@ -3631,7 +4228,10 @@ function definitionBody(label, def) {
   let d = String(def || "").trim();
   if (label) {
     const esc = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    d = d.replace(new RegExp(`^${esc}\\s*(?:,[^,]*,\\s*)?(?:is\\b)?\\s*`, "i"), "");
+    d = d.replace(
+      new RegExp(`^${esc}\\s*(?:,[^,]*,\\s*)?(?:is\\b)?\\s*`, "i"),
+      "",
+    );
   }
   return d.replace(/^is\s+/i, "").trim();
 }
@@ -3641,19 +4241,26 @@ function minimaxSubjectLine(s, tokens = null) {
   const def = resolveMediaTokens(definitionBody(s.label, s.definition), tokens);
   if (!s.sources.length) return `${s.label} is ${endSentence(def)}`;
   // A definition that already names its files ("… seen in <Picture 1> …") is used as written.
-  if (def && s.sources.every((x) => def.includes(x))) return `${s.label} is ${endSentence(def)}`;
-  const verb = s.audio ? "heard in" : s.sources.some((x) => x.startsWith("<Audio")) ? "from" : "seen in";
-  return def
-    ? `${s.label}, ${verb} ${joinList(s.sources)}, is ${endSentence(def)}`
+  if (def && s.sources.every((x) => def.includes(x)))
+    return `${s.label} is ${endSentence(def)}`;
+  const verb =
+    s.audio ? "heard in"
+    : s.sources.some((x) => x.startsWith("<Audio")) ? "from"
+    : "seen in";
+  return def ?
+      `${s.label}, ${verb} ${joinList(s.sources)}, is ${endSentence(def)}`
     : `${s.label} is ${verb} ${joinList(s.sources)}.`;
 }
 
 // The shots (1-based) that mention a subject — by its <label>, or by @key for a keyed
-// subject (the reference token) — in any case: <Sibella> is <sibella>.
+// subject (the reference token) — in any case: <GENie> is <genie>.
 function minimaxAppearances(mm, label) {
   const l = label.toLowerCase();
   const key = /^<([\p{L}\p{N}_-]+)>$/u.exec(l)?.[1];
-  const at = key ? new RegExp(`(?<![\\p{L}\\p{N}_@])@${key}(?![\\p{L}\\p{N}_-])`, "u") : null;
+  const at =
+    key ?
+      new RegExp(`(?<![\\p{L}\\p{N}_@])@${key}(?![\\p{L}\\p{N}_-])`, "u")
+    : null;
   return (mm.shots || []).flatMap((s, i) => {
     const t = String(s.text || "").toLowerCase();
     return t.includes(l) || (at && at.test(t)) ? [i + 1] : [];
@@ -3671,17 +4278,27 @@ function minimaxRetention(mm, subjects, tokens = null) {
     .map((s) => {
       const shots = s.audio ? [] : minimaxAppearances(mm, s.label);
       const list = shots.map((i) => `[Shot ${i}]`).join(", ");
-      const raw = String(mm.retention?.[s.label] || "").trim().replace(SHOTS_TOKEN_RE, list || "no shots yet");
+      const raw = String(mm.retention?.[s.label] || "")
+        .trim()
+        .replace(SHOTS_TOKEN_RE, list || "no shots yet");
       const text = resolveMediaTokens(raw, tokens);
       const where = list ? ` (appears in ${list})` : "";
-      return { label: s.label, audio: s.audio, shots, text, line: text ? `${s.label}${where}: ${text}` : null };
+      return {
+        label: s.label,
+        audio: s.audio,
+        shots,
+        text,
+        line: text ? `${s.label}${where}: ${text}` : null,
+      };
     });
 }
 
 // "appears in [Shot 1], [Shot 3]" for the form.
 function appearsText(r) {
   if (r.audio) return "audio";
-  return r.shots.length ? `appears in ${r.shots.map((i) => `[Shot ${i}]`).join(", ")}` : "not in any shot yet";
+  return r.shots.length ?
+      `appears in ${r.shots.map((i) => `[Shot ${i}]`).join(", ")}`
+    : "not in any shot yet";
 }
 
 function compileMinimax(mmIn, refs) {
@@ -3692,14 +4309,29 @@ function compileMinimax(mmIn, refs) {
   mm.shots = sortedShots(mm.shots);
   const shots = mm.shots.map((s, i) => {
     const text = tok(s.text);
-    return i === 0 ? `[Shot 1] ${text}` : `[Shot ${i + 1}] At ${fmtShotTime(s.at)}, ${text}`;
+    return i === 0 ?
+        `[Shot 1] ${text}`
+      : `[Shot ${i + 1}] At ${fmtShotTime(s.at)}, ${text}`;
   });
-  const section = (name, body) => `${name}:\n${String(body || "").trim() || "N/A"}`;
+  const section = (name, body) =>
+    `${name}:\n${String(body || "").trim() || "N/A"}`;
   return [
-    section("subject_definitions", subjects.map((s) => minimaxSubjectLine(s, tokens)).join("\n")),
+    section(
+      "subject_definitions",
+      subjects.map((s) => minimaxSubjectLine(s, tokens)).join("\n"),
+    ),
     section("summary", tok(mm.summary)),
-    section("retention_analysis", minimaxRetention(mm, subjects, tokens).filter((r) => r.line).map((r) => r.line).join("\n")),
-    section("detailed_description", [tok(mm.style), ...shots].filter(Boolean).join("\n")),
+    section(
+      "retention_analysis",
+      minimaxRetention(mm, subjects, tokens)
+        .filter((r) => r.line)
+        .map((r) => r.line)
+        .join("\n"),
+    ),
+    section(
+      "detailed_description",
+      [tok(mm.style), ...shots].filter(Boolean).join("\n"),
+    ),
     section("overall_soundscape", tok(mm.soundscape)),
     section("non_diegetic_music", tok(mm.music)),
   ].join("\n\n");
@@ -3715,9 +4347,9 @@ function compileMinimaxT2V(mmIn) {
   const mm = normalizeMinimax(mmIn);
   const t = (x) => String(x || "").trim();
   const shots = sortedShots(mm.shots).map((s, i) =>
-    i === 0
-      ? ["[Shot 1]", t(mm.style), t(s.text)].filter(Boolean).join(" ")
-      : `[Shot ${i + 1}] At ${fmtShotTime(s.at)}, ${t(s.text)}`
+    i === 0 ?
+      ["[Shot 1]", t(mm.style), t(s.text)].filter(Boolean).join(" ")
+    : `[Shot ${i + 1}] At ${fmtShotTime(s.at)}, ${t(s.text)}`,
   );
   const field = (name, body) => `${name}: ${t(body) || "N/A"}`;
   return [
@@ -3734,21 +4366,40 @@ function compileMinimaxT2V(mmIn) {
 function parseMinimax(text, refs = []) {
   const mm = blankMinimax();
   text = String(text || "").replace(/\r\n/g, "\n");
-  const na = (s) => (/^n\/?a$/i.test(String(s || "").trim()) ? "" : String(s || "").trim());
+  const na = (s) =>
+    /^n\/?a$/i.test(String(s || "").trim()) ? "" : String(s || "").trim();
 
   const re = new RegExp(`^(${MM_SECTIONS.join("|")}):[ \\t]*`, "gm");
   const marks = [];
   let m;
-  while ((m = re.exec(text))) marks.push({ name: m[1], start: m.index, body: re.lastIndex });
+  while ((m = re.exec(text)))
+    marks.push({ name: m[1], start: m.index, body: re.lastIndex });
   const parts = {};
-  marks.forEach((x, i) => { parts[x.name] = text.slice(x.body, i + 1 < marks.length ? marks[i + 1].start : text.length).trim(); });
+  marks.forEach((x, i) => {
+    parts[x.name] = text
+      .slice(x.body, i + 1 < marks.length ? marks[i + 1].start : text.length)
+      .trim();
+  });
   if (!marks.length) parts.detailed_description = text.trim();
 
-  const refKeys = new Set(refs.filter((r) => normKey(r.key) && String(r.definition || "").trim()).map((r) => normKey(r.key)));
-  for (const line of na(parts.subject_definitions).split("\n").map((l) => l.trim()).filter(Boolean)) {
+  const refKeys = new Set(
+    refs
+      .filter((r) => normKey(r.key) && String(r.definition || "").trim())
+      .map((r) => normKey(r.key)),
+  );
+  for (const line of na(parts.subject_definitions)
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean)) {
     const lm = /^<([^>]+)>\s*(?:,[^,]*,\s*)?is\s+([\s\S]*)$/i.exec(line);
-    if (!lm) { mm.subjects.push({ key: "", definition: line }); continue; }
-    if (/^(Picture|Video|Audio) \d+$/i.test(lm[1])) { mm.subjects.push({ key: "", definition: line }); continue; }
+    if (!lm) {
+      mm.subjects.push({ key: "", definition: line });
+      continue;
+    }
+    if (/^(Picture|Video|Audio) \d+$/i.test(lm[1])) {
+      mm.subjects.push({ key: "", definition: line });
+      continue;
+    }
     const key = normKey(lm[1]);
     if (!refKeys.has(key)) mm.subjects.push({ key, definition: lm[2].trim() });
   }
@@ -3756,34 +4407,51 @@ function parseMinimax(text, refs = []) {
   mm.summary = na(parts.summary);
 
   // "<label> (appears in …): text" — the "appears in" part is regenerated, so it's dropped.
-  for (const line of na(parts.retention_analysis).split("\n").map((l) => l.trim()).filter(Boolean)) {
+  for (const line of na(parts.retention_analysis)
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean)) {
     const rm = /^(<[^>]+>)\s*(?:\([^)]*\))?\s*:\s*([\s\S]*)$/.exec(line);
     if (rm) mm.retention[rm[1]] = rm[2].trim();
   }
 
-  const desc = na(parts.detailed_description || parts.integrated_multimodal_description);
+  const desc = na(
+    parts.detailed_description || parts.integrated_multimodal_description,
+  );
   const shotRe = /\[Shot (\d+)\]/g;
   const hits = [];
-  while ((m = shotRe.exec(desc))) hits.push({ start: m.index, body: shotRe.lastIndex });
+  while ((m = shotRe.exec(desc)))
+    hits.push({ start: m.index, body: shotRe.lastIndex });
   if (hits.length) {
     mm.style = desc.slice(0, hits[0].start).trim();
     mm.shots = hits.map((h, i) => {
-      let body = desc.slice(h.body, i + 1 < hits.length ? hits[i + 1].start : desc.length).trim();
+      let body = desc
+        .slice(h.body, i + 1 < hits.length ? hits[i + 1].start : desc.length)
+        .trim();
       let at = null;
       const tm = /^At\s+(\d+:\d+(?:\.\d+)?|\d+(?:\.\d+)?)\s*,\s*/i.exec(body);
-      if (tm) { at = parseShotTime(tm[1]); body = body.slice(tm[0].length); }
-      return { at: i === 0 ? null : at ?? 0, text: body.trim() };
+      if (tm) {
+        at = parseShotTime(tm[1]);
+        body = body.slice(tm[0].length);
+      }
+      return { at: i === 0 ? null : (at ?? 0), text: body.trim() };
     });
   } else {
     // No shot markers: a first paragraph is the style opening, the rest is Shot 1 —
     // except that a paragraph opening "At MM:SS.mmm" starts a new shot (a cut).
-    const paras = desc.split(/\n\s*\n/).map((x) => x.trim()).filter(Boolean);
+    const paras = desc
+      .split(/\n\s*\n/)
+      .map((x) => x.trim())
+      .filter(Boolean);
     if (paras.length > 1) mm.style = paras.shift();
     mm.shots = [{ at: null, text: "" }];
     for (const para of paras) {
       const tm = /^At\s+(\d+:\d+(?:\.\d+)?)\s*,?\s*/i.exec(para);
       if (tm) {
-        mm.shots.push({ at: parseShotTime(tm[1]), text: para.slice(tm[0].length).trim() });
+        mm.shots.push({
+          at: parseShotTime(tm[1]),
+          text: para.slice(tm[0].length).trim(),
+        });
       } else {
         const cur = mm.shots[mm.shots.length - 1];
         cur.text = cur.text ? `${cur.text}\n\n${para}` : para;
@@ -3877,7 +4545,8 @@ savedFilterEl.addEventListener("input", () => {
 // Managed on the prompt field's third tab.
 let wildcards = [];
 let wildcardsFilter = "";
-const WILDCARD_RE = /%([\p{L}\p{N}_-]+):([\p{L}\p{N}_-]+)(?::(1|0|true|false))?%/gu;
+const WILDCARD_RE =
+  /%([\p{L}\p{N}_-]+):([\p{L}\p{N}_-]+)(?::(1|0|true|false))?%/gu;
 const wildcardToken = (w) => `%${w.category}:${w.key}%`;
 
 // As the server stores a category or key (normalizeWildcardName).
@@ -3897,7 +4566,8 @@ function findWildcard(category, key) {
   return wildcards.find((w) => w.category === c && w.key === k) || null;
 }
 
-const hasWildcards = (text) => [...String(text ?? "").matchAll(WILDCARD_RE)].length > 0;
+const hasWildcards = (text) =>
+  [...String(text ?? "").matchAll(WILDCARD_RE)].length > 0;
 // Whether any of a list's values holds a token of its own.
 const wildcardNests = (w) => (w.values || []).some(hasWildcards);
 
@@ -3939,7 +4609,7 @@ function resolveWildcards(text, memo = new Map(), parent = null) {
     // Every value checked, not just the pick, so the error doesn't come and go at random.
     if (parent && wildcardNests(w)) {
       throw new Error(
-        `${parent} uses ${m}, which holds wildcards of its own — wildcards can only be nested one level deep.`
+        `${parent} uses ${m}, which holds wildcards of its own — wildcards can only be nested one level deep.`,
       );
     }
     const id = `${w.category}:${w.key}`;
@@ -3952,7 +4622,7 @@ function resolveWildcards(text, memo = new Map(), parent = null) {
   if (missing.size) {
     const list = [...missing].join(", ");
     throw new Error(
-      `Unknown or empty wildcard${missing.size > 1 ? "s" : ""}: ${list} — add ${missing.size > 1 ? "them" : "it"} on the Wildcards tab.`
+      `Unknown or empty wildcard${missing.size > 1 ? "s" : ""}: ${list} — add ${missing.size > 1 ? "them" : "it"} on the Wildcards tab.`,
     );
   }
   return out;
@@ -3989,7 +4659,9 @@ wcFilterEl.addEventListener("input", () => {
   wildcardsFilter = wcFilterEl.value.trim().toLowerCase();
   renderWildcards();
 });
-wildcardsPanel.querySelector(".wc-new").addEventListener("click", () => openWildcardEditor(null));
+wildcardsPanel
+  .querySelector(".wc-new")
+  .addEventListener("click", () => openWildcardEditor(null));
 
 // Briefly swap a button's text (Copied / Inserted).
 function flashText(el, text) {
@@ -3997,7 +4669,9 @@ function flashText(el, text) {
   el.dataset.label = was;
   el.textContent = text;
   clearTimeout(el._flash);
-  el._flash = setTimeout(() => { el.textContent = was; }, 1200);
+  el._flash = setTimeout(() => {
+    el.textContent = was;
+  }, 1200);
 }
 
 // Put text into the Prompt tab's textarea at its caret (the textarea keeps its caret
@@ -4021,14 +4695,29 @@ function renderWildcards() {
   syncPromptTabs(); // the tab's count
   const q = wildcardsFilter;
   const shown = wildcards
-    .filter((w) => !q || `${w.category}:${w.key}\n${(w.values || []).join("\n")}`.toLowerCase().includes(q))
-    .sort((a, b) => a.category.localeCompare(b.category) || a.key.localeCompare(b.key));
+    .filter(
+      (w) =>
+        !q ||
+        `${w.category}:${w.key}\n${(w.values || []).join("\n")}`
+          .toLowerCase()
+          .includes(q),
+    )
+    .sort(
+      (a, b) =>
+        a.category.localeCompare(b.category) || a.key.localeCompare(b.key),
+    );
   wcFilterEl.classList.toggle("hidden", wildcards.length < 2 && !q);
-  wcEmptyEl.textContent = wildcards.length ? "No wildcards match." : "No wildcards yet — ＋ New wildcard to make a list.";
+  wcEmptyEl.textContent =
+    wildcards.length ?
+      "No wildcards match."
+    : "No wildcards yet — ＋ New wildcard to make a list.";
   wcEmptyEl.classList.toggle("hidden", shown.length > 0);
   wcListEl.innerHTML = "";
   const groups = new Map();
-  for (const w of shown) (groups.get(w.category) || groups.set(w.category, []).get(w.category)).push(w);
+  for (const w of shown)
+    (groups.get(w.category) || groups.set(w.category, []).get(w.category)).push(
+      w,
+    );
   for (const [category, list] of groups) {
     const sec = document.createElement("section");
     sec.className = "wc-cat";
@@ -4093,12 +4782,16 @@ function makeWildcardRow(w) {
   ins.title = "Put the token in the Prompt tab's text, at the cursor";
   ins.addEventListener("click", (e) => {
     e.stopPropagation();
-    flashText(ins, insertIntoPrompt(wildcardToken(w)) ? "✓ Inserted" : "No prompt field");
+    flashText(
+      ins,
+      insertIntoPrompt(wildcardToken(w)) ? "✓ Inserted" : "No prompt field",
+    );
   });
   head.append(token, count, ins);
   const vals = document.createElement("div");
   vals.className = "sp-snippet wc-values";
-  vals.textContent = (w.values || []).slice(0, 30).join(" · ") || "(empty — add values)";
+  vals.textContent =
+    (w.values || []).slice(0, 30).join(" · ") || "(empty — add values)";
   row.append(head, vals);
   return row;
 }
@@ -4109,9 +4802,9 @@ function syncWildcardSource() {
   const el = wildcardsPanel.querySelector(".wc-source");
   const p = activeSavedPrompt();
   el.textContent =
-    promptSource === "saved" && p
-      ? `▶ Generate uses the saved prompt “${p.title}”.`
-      : "▶ Generate uses the Prompt tab's text.";
+    promptSource === "saved" && p ?
+      `▶ Generate uses the saved prompt “${p.title}”.`
+    : "▶ Generate uses the Prompt tab's text.";
 }
 
 // --- wildcard editor ---
@@ -4124,16 +4817,24 @@ const wcError = document.getElementById("wcError");
 const wcTryOut = document.getElementById("wcTryOut");
 let wcEditing = null; // { w: wildcard|null (new), start: "category|key|values" }
 
-const wcFormState = () => `${wcCategory.value}\n${wcKey.value}\n${wcValues.value}`;
-const wcLines = () => wcValues.value.split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
+const wcFormState = () =>
+  `${wcCategory.value}\n${wcKey.value}\n${wcValues.value}`;
+const wcLines = () =>
+  wcValues.value
+    .split(/\r?\n/)
+    .map((x) => x.trim())
+    .filter(Boolean);
 
 function openWildcardEditor(w, category = "") {
   wcCategory.value = w?.category || category;
   wcKey.value = w?.key || "";
   wcValues.value = (w?.values || []).join("\n");
-  document.getElementById("wcHeading").textContent = w ? "Edit wildcard" : "New wildcard";
+  document.getElementById("wcHeading").textContent =
+    w ? "Edit wildcard" : "New wildcard";
   document.getElementById("wcDelete").classList.toggle("hidden", !w);
-  document.getElementById("wcCategoryList").innerHTML = [...new Set(wildcards.map((x) => x.category))]
+  document.getElementById("wcCategoryList").innerHTML = [
+    ...new Set(wildcards.map((x) => x.category)),
+  ]
     .sort()
     .map((c) => `<option value="${escapeHtmlJs(c)}"></option>`)
     .join("");
@@ -4142,7 +4843,10 @@ function openWildcardEditor(w, category = "") {
   wcTryOut.textContent = "";
   syncWildcardPreview();
   show(wildcardModal);
-  (w ? wcValues : category ? wcKey : wcCategory).focus();
+  (w ? wcValues
+  : category ? wcKey
+  : wcCategory
+  ).focus();
 }
 
 function syncWildcardPreview() {
@@ -4150,11 +4854,18 @@ function syncWildcardPreview() {
   const k = wildcardName(wcKey.value) || "key";
   wcTokenPreview.innerHTML = `<code>%${escapeHtmlJs(c)}:${escapeHtmlJs(k)}%</code> · ${plural(wcLines().length, "value")}`;
 }
-[wcCategory, wcKey, wcValues].forEach((el) => el.addEventListener("input", syncWildcardPreview));
+[wcCategory, wcKey, wcValues].forEach((el) =>
+  el.addEventListener("input", syncWildcardPreview),
+);
 
 function closeWildcardEditor({ force = false } = {}) {
   if (!wcEditing) return;
-  if (!force && wcFormState() !== wcEditing.start && !confirm("Discard your changes to this wildcard?")) return;
+  if (
+    !force &&
+    wcFormState() !== wcEditing.start &&
+    !confirm("Discard your changes to this wildcard?")
+  )
+    return;
   wcEditing = null;
   hide(wildcardModal);
 }
@@ -4174,16 +4885,28 @@ function wildcardNestProblem(category, key, values) {
   }
   if (!tokens.length) return "";
   // This list now holds tokens, so no other list may use it.
-  const user = wildcards.find((w) => w.id !== wcEditing?.w?.id && refs(w.values || []).some((t) => refName(t) === self));
-  return user
-    ? `${wildcardToken(user)} uses ${self}, so ${self} can't hold wildcards — they can only be nested one level deep.`
+  const user = wildcards.find(
+    (w) =>
+      w.id !== wcEditing?.w?.id &&
+      refs(w.values || []).some((t) => refName(t) === self),
+  );
+  return user ?
+      `${wildcardToken(user)} uses ${self}, so ${self} can't hold wildcards — they can only be nested one level deep.`
     : "";
 }
 
 async function saveWildcard() {
   if (!wcEditing) return;
-  const body = { category: wcCategory.value, key: wcKey.value, values: wcLines() };
-  const problem = wildcardNestProblem(wildcardName(body.category), wildcardName(body.key), body.values);
+  const body = {
+    category: wcCategory.value,
+    key: wcKey.value,
+    values: wcLines(),
+  };
+  const problem = wildcardNestProblem(
+    wildcardName(body.category),
+    wildcardName(body.key),
+    body.values,
+  );
   if (problem) {
     wcError.textContent = problem;
     show(wcError);
@@ -4193,7 +4916,11 @@ async function saveWildcard() {
   btn.disabled = true;
   try {
     const w = wcEditing.w;
-    await promptsApi(w ? `/api/wildcards/${encodeURIComponent(w.id)}` : "/api/wildcards", w ? "PUT" : "POST", body);
+    await promptsApi(
+      w ? `/api/wildcards/${encodeURIComponent(w.id)}` : "/api/wildcards",
+      w ? "PUT" : "POST",
+      body,
+    );
     closeWildcardEditor({ force: true });
     await loadWildcards();
   } catch (err) {
@@ -4205,10 +4932,18 @@ async function saveWildcard() {
 }
 
 document.getElementById("wcSave").addEventListener("click", saveWildcard);
-document.getElementById("wcCancel").addEventListener("click", () => closeWildcardEditor());
+document
+  .getElementById("wcCancel")
+  .addEventListener("click", () => closeWildcardEditor());
 document.getElementById("wcDelete").addEventListener("click", async () => {
   const w = wcEditing?.w;
-  if (!w || !confirm(`Delete ${wildcardToken(w)}?\n\nPrompts that use it will stop at Generate until it's back.`)) return;
+  if (
+    !w ||
+    !confirm(
+      `Delete ${wildcardToken(w)}?\n\nPrompts that use it will stop at Generate until it's back.`,
+    )
+  )
+    return;
   try {
     await promptsApi(`/api/wildcards/${encodeURIComponent(w.id)}`, "DELETE");
     closeWildcardEditor({ force: true });
@@ -4232,11 +4967,19 @@ document.getElementById("wcTry").addEventListener("click", () => {
     wcTryOut.textContent = err.message;
   }
 });
-wildcardModal.addEventListener("click", (e) => { if (e.target === wildcardModal) closeWildcardEditor(); });
+wildcardModal.addEventListener("click", (e) => {
+  if (e.target === wildcardModal) closeWildcardEditor();
+});
 wildcardModal.addEventListener("keydown", (e) => {
   if (e.key === "Escape") closeWildcardEditor();
-  if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); saveWildcard(); }
-  if (e.key === "Enter" && e.target.tagName === "INPUT") { e.preventDefault(); saveWildcard(); }
+  if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+    e.preventDefault();
+    saveWildcard();
+  }
+  if (e.key === "Enter" && e.target.tagName === "INPUT") {
+    e.preventDefault();
+    saveWildcard();
+  }
 });
 
 // --- wildcard autocomplete ---
@@ -4246,7 +4989,8 @@ wildcardModal.addEventListener("keydown", (e) => {
 // matches first. ↑/↓ move, Enter or Tab takes one, Esc closes. Taking a list writes
 // the whole %category:key%, replacing what was typed of it.
 const wcAc = { el: null, ta: null, start: 0, items: [], index: 0 };
-const WC_AC_FRAGMENT = /(^|[^\p{L}\p{N}_%])%([\p{L}\p{N}_-]*)(?::([\p{L}\p{N}_-]*))?$/u;
+const WC_AC_FRAGMENT =
+  /(^|[^\p{L}\p{N}_%])%([\p{L}\p{N}_-]*)(?::([\p{L}\p{N}_-]*))?$/u;
 
 function wcAcEl() {
   if (!wcAc.el) {
@@ -4273,7 +5017,11 @@ function wcAcClose() {
 
 // What to offer for the fragment before the caret, or [] for nothing.
 function wcAcItems(cat, key) {
-  const rank = (name, q) => (!q ? 0 : name.startsWith(q) ? 0 : name.includes(q) ? 1 : -1);
+  const rank = (name, q) =>
+    !q ? 0
+    : name.startsWith(q) ? 0
+    : name.includes(q) ? 1
+    : -1;
   const byRank = (a, b) => a.r - b.r || a.label.localeCompare(b.label);
   const lists = (w) => ({
     label: wildcardToken(w),
@@ -4290,13 +5038,24 @@ function wcAcItems(cat, key) {
         r: x.r,
         label: `%${x.c}:`,
         insert: `%${x.c}:`,
-        hint: plural(wildcards.filter((w) => w.category === x.c).length, "list"),
+        hint: plural(
+          wildcards.filter((w) => w.category === x.c).length,
+          "list",
+        ),
         more: true,
       }))
       .sort(byRank);
-    const keys = q
-      ? wildcards
-          .map((w) => ({ w, r: Math.min(...[rank(w.key, q), rank(w.category, q)].map((r) => (r < 0 ? 9 : r))) }))
+    const keys =
+      q ?
+        wildcards
+          .map((w) => ({
+            w,
+            r: Math.min(
+              ...[rank(w.key, q), rank(w.category, q)].map((r) =>
+                r < 0 ? 9 : r,
+              ),
+            ),
+          }))
           .filter((x) => x.r < 9)
           .map((x) => ({ r: x.r, ...lists(x.w) }))
           .sort(byRank)
@@ -4315,13 +5074,16 @@ function wcAcItems(cat, key) {
 }
 
 function wcAcUpdate(ta) {
-  if (ta.selectionStart !== ta.selectionEnd || !wildcards.length) return wcAcClose();
+  if (ta.selectionStart !== ta.selectionEnd || !wildcards.length)
+    return wcAcClose();
   const before = ta.value.slice(0, ta.selectionStart);
   const m = WC_AC_FRAGMENT.exec(before);
   if (!m) return wcAcClose();
   const items = wcAcItems(m[2], m[3]);
   if (!items.length) return wcAcClose();
-  const same = wcAc.ta === ta && wcAc.items.map((x) => x.label).join() === items.map((x) => x.label).join();
+  const same =
+    wcAc.ta === ta &&
+    wcAc.items.map((x) => x.label).join() === items.map((x) => x.label).join();
   wcAc.ta = ta;
   wcAc.start = before.length - m[0].length + m[1].length; // the % itself
   wcAc.items = items;
@@ -4363,14 +5125,20 @@ function wcAcAccept(i) {
   const it = wcAc.items[i];
   const ta = wcAc.ta;
   if (!it || !ta) return;
-  const rest = /^[\p{L}\p{N}_:-]*%?/u.exec(ta.value.slice(ta.selectionStart))[0];
+  const rest = /^[\p{L}\p{N}_:-]*%?/u.exec(
+    ta.value.slice(ta.selectionStart),
+  )[0];
   ta.focus();
-  ta.setSelectionRange(wcAc.start, ta.selectionStart + (it.more ? 0 : rest.length));
+  ta.setSelectionRange(
+    wcAc.start,
+    ta.selectionStart + (it.more ? 0 : rest.length),
+  );
   if (!document.execCommand("insertText", false, it.insert)) {
     ta.setRangeText(it.insert, ta.selectionStart, ta.selectionEnd, "end");
     ta.dispatchEvent(new Event("input", { bubbles: true }));
   }
-  if (it.more) wcAcUpdate(ta); // a category: go on to its lists
+  if (it.more)
+    wcAcUpdate(ta); // a category: go on to its lists
   else wcAcClose();
 }
 
@@ -4379,19 +5147,41 @@ function caretRect(ta, pos) {
   const cs = getComputedStyle(ta);
   const div = document.createElement("div");
   for (const p of [
-    "boxSizing", "width", "paddingTop", "paddingRight", "paddingBottom", "paddingLeft",
-    "borderTopWidth", "borderRightWidth", "borderBottomWidth", "borderLeftWidth",
-    "fontFamily", "fontSize", "fontWeight", "fontStyle", "letterSpacing", "lineHeight",
-    "textTransform", "wordSpacing", "tabSize",
-  ]) div.style[p] = cs[p];
+    "boxSizing",
+    "width",
+    "paddingTop",
+    "paddingRight",
+    "paddingBottom",
+    "paddingLeft",
+    "borderTopWidth",
+    "borderRightWidth",
+    "borderBottomWidth",
+    "borderLeftWidth",
+    "fontFamily",
+    "fontSize",
+    "fontWeight",
+    "fontStyle",
+    "letterSpacing",
+    "lineHeight",
+    "textTransform",
+    "wordSpacing",
+    "tabSize",
+  ])
+    div.style[p] = cs[p];
   Object.assign(div.style, {
-    position: "absolute", visibility: "hidden", top: "0", left: "-9999px",
-    whiteSpace: "pre-wrap", overflowWrap: "break-word", borderStyle: "solid",
+    position: "absolute",
+    visibility: "hidden",
+    top: "0",
+    left: "-9999px",
+    whiteSpace: "pre-wrap",
+    overflowWrap: "break-word",
+    borderStyle: "solid",
   });
   // As wide as the text area really is — fractional, and without a scrollbar's width —
   // or long text wraps differently from the textarea.
   div.style.boxSizing = "border-box";
-  const borders = parseFloat(cs.borderLeftWidth) + parseFloat(cs.borderRightWidth);
+  const borders =
+    parseFloat(cs.borderLeftWidth) + parseFloat(cs.borderRightWidth);
   div.style.width = `${ta.getBoundingClientRect().width - (ta.offsetWidth - ta.clientWidth) + borders}px`;
   div.textContent = ta.value.slice(0, pos);
   const mark = document.createElement("span");
@@ -4419,7 +5209,10 @@ document.addEventListener(
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       wcAc.index = (wcAc.index + (e.key === "ArrowDown" ? 1 : n - 1)) % n;
       wcAcRender();
-    } else if ((e.key === "Enter" && !e.ctrlKey && !e.metaKey && !e.shiftKey) || e.key === "Tab") {
+    } else if (
+      (e.key === "Enter" && !e.ctrlKey && !e.metaKey && !e.shiftKey) ||
+      e.key === "Tab"
+    ) {
       wcAcAccept(wcAc.index);
     } else if (e.key === "Escape") {
       wcAcClose();
@@ -4430,13 +5223,22 @@ document.addEventListener(
     e.preventDefault();
     e.stopPropagation();
   },
-  true
+  true,
 );
-document.addEventListener("focusout", (e) => { if (e.target === wcAc.ta) wcAcClose(); });
-document.addEventListener("click", (e) => {
-  if (wcAc.ta && e.target !== wcAc.ta && !wcAc.el?.contains(e.target)) wcAcClose();
+document.addEventListener("focusout", (e) => {
+  if (e.target === wcAc.ta) wcAcClose();
 });
-window.addEventListener("scroll", (e) => { if (!wcAc.el?.contains(e.target)) wcAcClose(); }, true);
+document.addEventListener("click", (e) => {
+  if (wcAc.ta && e.target !== wcAc.ta && !wcAc.el?.contains(e.target))
+    wcAcClose();
+});
+window.addEventListener(
+  "scroll",
+  (e) => {
+    if (!wcAc.el?.contains(e.target)) wcAcClose();
+  },
+  true,
+);
 window.addEventListener("resize", () => wcAcClose());
 
 // --- wildcard highlighting ---
@@ -4450,14 +5252,20 @@ window.addEventListener("resize", () => wcAcClose());
 const wcHl = new Map(); // textarea → { back, inner, text, geo }
 // iOS Safari insets a textarea's text 3px each side, beyond its padding (and it can't
 // be styled away), so the backdrop adds the same or its lines wrap differently.
-const IS_IOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+const IS_IOS =
+  /iP(hone|ad|od)/.test(navigator.userAgent) ||
+  (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
 const WC_HL_IOS_INSET = IS_IOS ? 3 : 0;
 
 // iOS zooms in on any field whose text is under 16px when it's tapped, and stays zoomed.
 // maximum-scale stops that; iOS still lets the user pinch-zoom regardless.
 if (IS_IOS) {
-  document.querySelector('meta[name="viewport"]')
-    ?.setAttribute("content", "width=device-width, initial-scale=1.0, maximum-scale=1.0");
+  document
+    .querySelector('meta[name="viewport"]')
+    ?.setAttribute(
+      "content",
+      "width=device-width, initial-scale=1.0, maximum-scale=1.0",
+    );
 }
 
 function wcHlAttach(ta) {
@@ -4525,10 +5333,23 @@ function wcHlSync(ta, force = false) {
     s.top = `${ta.clientTop}px`;
     s.width = `${exactW - (ta.offsetWidth - ta.clientWidth)}px`; // less borders and scrollbar
     for (const p of [
-      "paddingTop", "paddingRight", "paddingBottom", "paddingLeft",
-      "fontFamily", "fontSize", "fontWeight", "fontStyle", "letterSpacing", "lineHeight",
-      "textTransform", "textIndent", "wordSpacing", "tabSize", "wordBreak",
-    ]) s[p] = cs[p];
+      "paddingTop",
+      "paddingRight",
+      "paddingBottom",
+      "paddingLeft",
+      "fontFamily",
+      "fontSize",
+      "fontWeight",
+      "fontStyle",
+      "letterSpacing",
+      "lineHeight",
+      "textTransform",
+      "textIndent",
+      "wordSpacing",
+      "tabSize",
+      "wordBreak",
+    ])
+      s[p] = cs[p];
     if (WC_HL_IOS_INSET) {
       s.paddingLeft = `${parseFloat(cs.paddingLeft) + WC_HL_IOS_INSET}px`;
       s.paddingRight = `${parseFloat(cs.paddingRight) + WC_HL_IOS_INSET}px`;
@@ -4549,7 +5370,8 @@ function wcHlSync(ta, force = false) {
 
 function wcHlScroll(ta) {
   const st = wcHl.get(ta);
-  if (st) st.inner.style.transform = `translate(${-ta.scrollLeft}px, ${-ta.scrollTop}px)`;
+  if (st)
+    st.inner.style.transform = `translate(${-ta.scrollLeft}px, ${-ta.scrollTop}px)`;
 }
 
 // Remember each textarea's own background before it's made see-through.
@@ -4565,11 +5387,16 @@ function wcHlScan(root) {
   if (root instanceof HTMLTextAreaElement) {
     wcHlRemember(root);
     wcHlAttach(root);
-  } else root.querySelectorAll?.("textarea").forEach((ta) => { wcHlRemember(ta); wcHlAttach(ta); });
+  } else
+    root.querySelectorAll?.("textarea").forEach((ta) => {
+      wcHlRemember(ta);
+      wcHlAttach(ta);
+    });
 }
 wcHlScan(document.body);
 new MutationObserver((muts) => {
-  for (const m of muts) for (const n of m.addedNodes) if (n.nodeType === 1) wcHlScan(n);
+  for (const m of muts)
+    for (const n of m.addedNodes) if (n.nodeType === 1) wcHlScan(n);
 }).observe(document.body, { childList: true, subtree: true });
 new ResizeObserver(() => wcHlSyncAll()).observe(document.body);
 window.addEventListener("resize", () => wcHlSyncAll());
@@ -4578,16 +5405,27 @@ let wcHlFrame = 0;
 window.addEventListener(
   "scroll",
   () => {
-    if (!wcHlFrame) wcHlFrame = requestAnimationFrame(() => { wcHlFrame = 0; wcHlSyncAll(); });
+    if (!wcHlFrame)
+      wcHlFrame = requestAnimationFrame(() => {
+        wcHlFrame = 0;
+        wcHlSyncAll();
+      });
   },
-  true
+  true,
 );
 setInterval(() => wcHlSyncAll(), 400);
 
 // Turn a prompt field's head into Prompt / Saved Prompts / Wildcards tabs and add the Save button.
 // `labelEl` (the field's label, if it has one) becomes the first tab; `keep` are nodes
 // from the old label that stay beside the tabs (the kie.ai character-cap hint).
-function installPromptTools({ field, head, textarea, labelEl = null, labelText = "Prompt", keep = [] }) {
+function installPromptTools({
+  field,
+  head,
+  textarea,
+  labelEl = null,
+  labelText = "Prompt",
+  keep = [],
+}) {
   const tabsEl = document.createElement("span");
   tabsEl.className = "prompt-tabs";
   tabsEl.setAttribute("role", "tablist");
@@ -4621,7 +5459,8 @@ function installPromptTools({ field, head, textarea, labelEl = null, labelText =
   save.type = "button";
   save.className = "link-btn save-prompt-btn";
   save.textContent = "💾 Save prompt";
-  save.title = "Save this prompt, its reference media and duration to the project's Saved Prompts";
+  save.title =
+    "Save this prompt, its reference media and duration to the project's Saved Prompts";
   save.addEventListener("click", openSavePrompt);
   tools.prepend(save);
 
@@ -4635,7 +5474,11 @@ function installPromptTools({ field, head, textarea, labelEl = null, labelText =
 
 // The prompt field on screen: the kie.ai one, or the active workflow's main prompt.
 function activePromptHost() {
-  return promptHosts.find((h) => h.field.isConnected && !h.field.closest(".hidden")) || null;
+  return (
+    promptHosts.find(
+      (h) => h.field.isConnected && !h.field.closest(".hidden"),
+    ) || null
+  );
 }
 
 function setPromptTab(tab) {
@@ -4665,8 +5508,10 @@ function syncPromptTabs() {
     h.textarea.classList.toggle("hidden", promptTab !== "prompt");
   }
   const host = activePromptHost();
-  if (host && savedPanel.parentElement !== host.field) host.field.appendChild(savedPanel);
-  if (host && wildcardsPanel.parentElement !== host.field) host.field.appendChild(wildcardsPanel);
+  if (host && savedPanel.parentElement !== host.field)
+    host.field.appendChild(savedPanel);
+  if (host && wildcardsPanel.parentElement !== host.field)
+    host.field.appendChild(wildcardsPanel);
   savedPanel.classList.toggle("hidden", promptTab !== "saved" || !host);
   wildcardsPanel.classList.toggle("hidden", promptTab !== "wildcards" || !host);
   syncGenerateLabel();
@@ -4686,7 +5531,9 @@ async function loadSavedPrompts() {
   const seq = ++savedPromptsSeq;
   const projectId = activeProjectId;
   try {
-    const res = await fetch(`/api/prompts?projectId=${encodeURIComponent(projectId)}`);
+    const res = await fetch(
+      `/api/prompts?projectId=${encodeURIComponent(projectId)}`,
+    );
     const data = await res.json();
     if (!res.ok) throw new Error(data.msg || "Failed to load saved prompts");
     if (seq !== savedPromptsSeq) return;
@@ -4713,7 +5560,7 @@ function getProjectPrompts(projectId) {
       fetch(`/api/prompts?projectId=${encodeURIComponent(projectId)}`)
         .then((r) => r.json())
         .then((d) => d.data || [])
-        .catch(() => [])
+        .catch(() => []),
     );
   }
   return projectPromptsCache.get(projectId);
@@ -4736,25 +5583,33 @@ function makeHistoryPromptLink(entry, onLinked = () => {}) {
     const linked = list.find((p) => p.historyId === entry.id);
     sel.innerHTML = "";
     const first = new Option(
-      linked ? "✕ Unlink saved prompt" : list.length ? "📌 Link to saved prompt…" : "📌 No saved prompts",
-      ""
+      linked ? "✕ Unlink saved prompt"
+      : list.length ? "📌 Link to saved prompt…"
+      : "📌 No saved prompts",
+      "",
     );
     sel.appendChild(first);
     for (const p of list) sel.appendChild(new Option(`📌 ${p.title}`, p.id));
     sel.value = linked?.id || "";
     sel.disabled = !list.length;
     sel.classList.toggle("linked", !!linked);
-    sel.title = linked
-      ? `Linked to saved prompt "${linked.title}" — this output is its thumbnail`
+    sel.title =
+      linked ?
+        `Linked to saved prompt "${linked.title}" — this output is its thumbnail`
       : "Link this output to a saved prompt — it becomes that prompt card's thumbnail";
     onLinked(linked || null);
   };
   sel.addEventListener("change", async () => {
     sel.disabled = true;
     try {
-      await promptsApi("/api/prompts/link", "POST", { projectId, historyId: entry.id, promptId: sel.value || null });
+      await promptsApi("/api/prompts/link", "POST", {
+        projectId,
+        historyId: entry.id,
+        promptId: sel.value || null,
+      });
       projectPromptsCache.delete(projectId);
-      if (projectId === activeProjectId) await loadSavedPrompts(); // refreshes the dropdowns too
+      if (projectId === activeProjectId)
+        await loadSavedPrompts(); // refreshes the dropdowns too
       else refreshHistoryPromptLinks();
     } catch (err) {
       alert(err.message || String(err));
@@ -4785,11 +5640,15 @@ async function promptsApi(url, method, body) {
 // duration/seconds control. Null when the model has none (e.g. Seedream images).
 function currentDuration() {
   if (isComfy()) {
-    const f = comfyFields.find((c) => /duration|seconds/i.test(c.name || "") && typeof c.peek === "function");
+    const f = comfyFields.find(
+      (c) =>
+        /duration|seconds/i.test(c.name || "") && typeof c.peek === "function",
+    );
     const v = f ? Number(f.peek()) : NaN;
     return Number.isFinite(v) && v > 0 ? v : null;
   }
-  if (document.getElementById("durationField").classList.contains("hidden")) return null;
+  if (document.getElementById("durationField").classList.contains("hidden"))
+    return null;
   const v = Number(document.getElementById("duration").value);
   return Number.isFinite(v) && v > 0 ? v : null;
 }
@@ -4797,11 +5656,19 @@ function currentDuration() {
 function setCurrentDuration(seconds) {
   if (!(seconds > 0)) return;
   if (isComfy()) {
-    comfyFields.find((c) => /duration|seconds/i.test(c.name || "") && typeof c.set === "function")?.set(seconds);
+    comfyFields
+      .find(
+        (c) =>
+          /duration|seconds/i.test(c.name || "") && typeof c.set === "function",
+      )
+      ?.set(seconds);
     return;
   }
   const el = document.getElementById("duration");
-  el.value = Math.min(Math.max(seconds, Number(el.min) || 1), Number(el.max) || seconds);
+  el.value = Math.min(
+    Math.max(seconds, Number(el.min) || 1),
+    Number(el.max) || seconds,
+  );
   updateEstimate();
 }
 
@@ -4809,9 +5676,19 @@ function setCurrentDuration(seconds) {
 function currentPromptDraft() {
   const snap = snapshotCarry();
   const refs = CARRY_KINDS.flatMap((kind) =>
-    (snap.media[kind] || []).map((m) => ({ id: m.id, kind, name: m.name, tail: m.tail || 0 }))
+    (snap.media[kind] || []).map((m) => ({
+      id: m.id,
+      kind,
+      name: m.name,
+      tail: m.tail || 0,
+    })),
   );
-  return { prompt: String(snap.prompt ?? ""), refs, duration: currentDuration(), urlOnly: snap.urlOnly };
+  return {
+    prompt: String(snap.prompt ?? ""),
+    refs,
+    duration: currentDuration(),
+    urlOnly: snap.urlOnly,
+  };
 }
 
 const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
@@ -4843,19 +5720,23 @@ function openSavePrompt() {
   }
   pendingSave = draft;
   // Text already laid out in MiniMax's sections is offered as a MiniMax prompt.
-  savePromptFormat.value = /^(subject_definitions|detailed_description):/m.test(draft.prompt)
-    ? "minimax"
-    : /^integrated_multimodal_description:/m.test(draft.prompt) ? "minimax_t2v" : "default";
+  savePromptFormat.value =
+    /^(subject_definitions|detailed_description):/m.test(draft.prompt) ?
+      "minimax"
+    : /^integrated_multimodal_description:/m.test(draft.prompt) ? "minimax_t2v"
+    : "default";
   const firstLine = draft.prompt.trim().split(/\n/)[0].replace(/\s+/g, " ");
-  savePromptTitle.value = firstLine.length > 60 ? `${firstLine.slice(0, 57).trimEnd()}…` : firstLine;
+  savePromptTitle.value =
+    firstLine.length > 60 ? `${firstLine.slice(0, 57).trimEnd()}…` : firstLine;
   const bits = [
     `${draft.prompt.length.toLocaleString()} characters`,
     refSummary(draft.refs) || "no references",
     draft.duration ? `${draft.duration}s` : null,
   ].filter(Boolean);
   savePromptSummary.textContent = `${projectName(activeProjectId)} · ${bits.join(" · ")}`;
-  savePromptWarn.textContent = draft.urlOnly
-    ? `${plural(draft.urlOnly, "URL reference")} can't be saved (only files saved in the gallery can).`
+  savePromptWarn.textContent =
+    draft.urlOnly ?
+      `${plural(draft.urlOnly, "URL reference")} can't be saved (only files saved in the gallery can).`
     : "";
   savePromptWarn.classList.toggle("hidden", !draft.urlOnly);
   show(savePromptModal);
@@ -4878,15 +5759,35 @@ async function confirmSavePrompt() {
   savePromptConfirm.disabled = true;
   try {
     const { prompt, refs, duration } = pendingSave;
-    const body = { projectId: activeProjectId, title, prompt, refs, duration, type: "default" };
+    const body = {
+      projectId: activeProjectId,
+      title,
+      prompt,
+      refs,
+      duration,
+      type: "default",
+    };
     if (savePromptFormat.value === "minimax") {
       // Split the text into MiniMax's fields; subject lines for references that already
       // have a gallery definition aren't copied (that definition is used instead).
       const byId = new Map(galleryItems.map((g) => [g.id, g]));
-      const withSubjects = refs.map((r) => ({ ...r, key: byId.get(r.id)?.key || "", definition: byId.get(r.id)?.definition || "" }));
-      Object.assign(body, { type: "minimax", prompt: "", minimax: parseMinimax(prompt, withSubjects) });
+      const withSubjects = refs.map((r) => ({
+        ...r,
+        key: byId.get(r.id)?.key || "",
+        definition: byId.get(r.id)?.definition || "",
+      }));
+      Object.assign(body, {
+        type: "minimax",
+        prompt: "",
+        minimax: parseMinimax(prompt, withSubjects),
+      });
     } else if (savePromptFormat.value === "minimax_t2v") {
-      Object.assign(body, { type: "minimax_t2v", prompt: "", refs: [], minimax: parseMinimax(prompt) });
+      Object.assign(body, {
+        type: "minimax_t2v",
+        prompt: "",
+        refs: [],
+        minimax: parseMinimax(prompt),
+      });
     }
     await promptsApi("/api/prompts", "POST", body);
     closeSavePrompt();
@@ -4903,14 +5804,23 @@ function flashSaveButton() {
   const btn = activePromptHost()?.field.querySelector(".save-prompt-btn");
   if (!btn) return;
   btn.textContent = "✓ Saved";
-  setTimeout(() => { btn.textContent = "💾 Save prompt"; }, 1500);
+  setTimeout(() => {
+    btn.textContent = "💾 Save prompt";
+  }, 1500);
 }
 
 savePromptConfirm.addEventListener("click", confirmSavePrompt);
-document.getElementById("savePromptCancel").addEventListener("click", closeSavePrompt);
-savePromptModal.addEventListener("click", (e) => { if (e.target === savePromptModal) closeSavePrompt(); });
+document
+  .getElementById("savePromptCancel")
+  .addEventListener("click", closeSavePrompt);
+savePromptModal.addEventListener("click", (e) => {
+  if (e.target === savePromptModal) closeSavePrompt();
+});
 savePromptModal.addEventListener("keydown", (e) => {
-  if (e.key === "Enter") { e.preventDefault(); confirmSavePrompt(); }
+  if (e.key === "Enter") {
+    e.preventDefault();
+    confirmSavePrompt();
+  }
   if (e.key === "Escape") closeSavePrompt();
 });
 
@@ -4923,20 +5833,31 @@ savePromptModal.addEventListener("keydown", (e) => {
 function loadSavedPromptMedia(p, promptText = null) {
   const media = { image: [], video: [], audio: [] };
   for (const r of p.refs || []) {
-    if (!r.missing) media[r.kind]?.push({ id: r.id, url: r.url, name: r.name, tail: r.tail || 0 });
+    if (!r.missing)
+      media[r.kind]?.push({
+        id: r.id,
+        url: r.url,
+        name: r.name,
+        tail: r.tail || 0,
+      });
   }
   applyCarry({ prompt: promptText, media, urlOnly: 0 });
 
   const notes = [];
   const missing = (p.refs || []).filter((r) => r.missing).length;
-  if (missing) notes.push(`${plural(missing, "reference")} no longer in the gallery and ${missing === 1 ? "was" : "were"} skipped.`);
+  if (missing)
+    notes.push(
+      `${plural(missing, "reference")} no longer in the gallery and ${missing === 1 ? "was" : "were"} skipped.`,
+    );
   if (isComfy()) {
     for (const kind of CARRY_KINDS) {
       const room = comfyFields
         .filter((f) => f.mediaKind === kind && typeof f.setMedia === "function")
         .reduce((n, f) => n + (f.capacity || 1), 0);
       if (media[kind].length > room) {
-        notes.push(`This workflow takes ${room} ${kind} reference${room === 1 ? "" : "s"}; ${media[kind].length - room} didn't fit.`);
+        notes.push(
+          `This workflow takes ${room} ${kind} reference${room === 1 ? "" : "s"}; ${media[kind].length - room} didn't fit.`,
+        );
       }
     }
   }
@@ -4956,8 +5877,17 @@ async function importSavedPrompt(p, { confirmReplace = true } = {}) {
   const draft = currentPromptDraft();
   const text = exportSavedPromptText(p);
   const unsaved =
-    draft.prompt.trim() && draft.prompt !== text && !savedPrompts.some((s) => exportSavedPromptText(s) === draft.prompt);
-  if (confirmReplace && unsaved && !confirm(`Import "${p.title}"?\n\nThis replaces the prompt you have now (it isn't saved).`)) return;
+    draft.prompt.trim() &&
+    draft.prompt !== text &&
+    !savedPrompts.some((s) => exportSavedPromptText(s) === draft.prompt);
+  if (
+    confirmReplace &&
+    unsaved &&
+    !confirm(
+      `Import "${p.title}"?\n\nThis replaces the prompt you have now (it isn't saved).`,
+    )
+  )
+    return;
   hide(errorEl);
   disarmContinuation(); // the form no longer holds what the armed run was built from
   if (isComfy()) await comfyRenderPromise; // controls must exist before they're filled
@@ -4966,7 +5896,10 @@ async function importSavedPrompt(p, { confirmReplace = true } = {}) {
   setCurrentDuration(Number(p.duration));
   if (notes.length) setError(notes.join("\n"));
   setPromptTab("prompt");
-  activePromptHost()?.field.scrollIntoView({ behavior: "smooth", block: "start" });
+  activePromptHost()?.field.scrollIntoView({
+    behavior: "smooth",
+    block: "start",
+  });
 }
 
 // --- cards ---
@@ -4974,23 +5907,27 @@ async function importSavedPrompt(p, { confirmReplace = true } = {}) {
 function renderSavedPrompts() {
   syncPromptTabs(); // the tab's count
   const q = savedPromptsFilter;
-  const shown = q
-    ? savedPrompts.filter((p) => `${p.title}\n${exportSavedPromptText(p)}`.toLowerCase().includes(q))
+  const shown =
+    q ?
+      savedPrompts.filter((p) =>
+        `${p.title}\n${exportSavedPromptText(p)}`.toLowerCase().includes(q),
+      )
     : savedPrompts;
   savedFilterEl.classList.toggle("hidden", savedPrompts.length < 2 && !q);
-  savedEmptyEl.textContent = savedPrompts.length
-    ? "No saved prompts match."
+  savedEmptyEl.textContent =
+    savedPrompts.length ?
+      "No saved prompts match."
     : `No saved prompts in ${projectName(activeProjectId)} yet — write one and click 💾 Save prompt.`;
   savedEmptyEl.classList.toggle("hidden", shown.length > 0);
   savedListEl.innerHTML = "";
   for (const p of shown) savedListEl.appendChild(makeSavedPromptCard(p));
   const active = activeSavedPrompt();
   savedRunNoteEl.classList.toggle("on", !!active);
-  savedRunNoteEl.textContent = !savedPrompts.length
-    ? ""
-    : active
-      ? `▶ Generate uses “${active.title}” (${active.type === "minimax" ? "its prompt and its references, in order" : "its prompt text only"}) while this tab is open, and links the new History card to it.`
-      : "Press ▶ on a card to generate from it while this tab is open. Otherwise Generate uses the Prompt tab's text.";
+  savedRunNoteEl.textContent =
+    !savedPrompts.length ? ""
+    : active ?
+      `▶ Generate uses “${active.title}” (${active.type === "minimax" ? "its prompt and its references, in order" : "its prompt text only"}) while this tab is open, and links the new History card to it.`
+    : "Press ▶ on a card to generate from it while this tab is open. Otherwise Generate uses the Prompt tab's text.";
   savedRunNoteEl.classList.toggle("hidden", !savedPrompts.length);
   syncWildcardSource();
   syncGenerateLabel();
@@ -4999,7 +5936,10 @@ function renderSavedPrompts() {
 // Say on the Generate button when a saved prompt will be used.
 function syncGenerateLabel() {
   submitBtn.classList.toggle("from-saved", !!runSavedPrompt());
-  submitBtn.title = runSavedPrompt() ? `Generate from the saved prompt “${runSavedPrompt().title}”` : "";
+  submitBtn.title =
+    runSavedPrompt() ?
+      `Generate from the saved prompt “${runSavedPrompt().title}”`
+    : "";
 }
 
 // --- manual order ---
@@ -5016,7 +5956,9 @@ async function moveSavedPrompt(id, toIndex) {
   if (from === toIndex) return;
   const [moved] = savedPrompts.splice(from, 1);
   savedPrompts.splice(toIndex, 0, moved);
-  savedPrompts.forEach((p, i) => { p.weight = i; });
+  savedPrompts.forEach((p, i) => {
+    p.weight = i;
+  });
   renderSavedPrompts();
   savedListEl.querySelector(`[data-id="${CSS.escape(id)}"]`)?.focus();
   try {
@@ -5045,7 +5987,9 @@ function wireCardReorder(card, p) {
   });
   card.addEventListener("dragend", () => {
     card.classList.remove("dragging");
-    savedListEl.querySelectorAll(".drop-before, .drop-after").forEach((c) => c.classList.remove("drop-before", "drop-after"));
+    savedListEl
+      .querySelectorAll(".drop-before, .drop-after")
+      .forEach((c) => c.classList.remove("drop-before", "drop-after"));
   });
   // Dropping on the top half of a card puts the dragged one above it, bottom half below.
   const lowerHalf = (e) => {
@@ -5060,7 +6004,9 @@ function wireCardReorder(card, p) {
     card.classList.toggle("drop-after", after);
     card.classList.toggle("drop-before", !after);
   });
-  card.addEventListener("dragleave", () => card.classList.remove("drop-before", "drop-after"));
+  card.addEventListener("dragleave", () =>
+    card.classList.remove("drop-before", "drop-after"),
+  );
   card.addEventListener("drop", (e) => {
     if (![...e.dataTransfer.types].includes(SP_REORDER_TYPE)) return;
     e.preventDefault();
@@ -5068,7 +6014,8 @@ function wireCardReorder(card, p) {
     const id = e.dataTransfer.getData(SP_REORDER_TYPE);
     if (id === p.id) return;
     const from = savedPrompts.findIndex((x) => x.id === id);
-    let to = savedPrompts.findIndex((x) => x.id === p.id) + (lowerHalf(e) ? 1 : 0);
+    let to =
+      savedPrompts.findIndex((x) => x.id === p.id) + (lowerHalf(e) ? 1 : 0);
     if (from < to) to--; // removing the dragged card first shifts everything after it up
     moveSavedPrompt(id, to);
   });
@@ -5078,7 +6025,10 @@ function makeCardMoveButtons(p) {
   const wrap = document.createElement("span");
   wrap.className = "sp-move";
   const i = savedPrompts.findIndex((x) => x.id === p.id);
-  for (const [text, delta, title] of [["▲", -1, "Move up (Alt+↑)"], ["▼", 1, "Move down (Alt+↓)"]]) {
+  for (const [text, delta, title] of [
+    ["▲", -1, "Move up (Alt+↑)"],
+    ["▼", 1, "Move down (Alt+↓)"],
+  ]) {
     const b = document.createElement("button");
     b.type = "button";
     b.className = "link-btn";
@@ -5122,7 +6072,9 @@ function makeSavedPromptCard(p) {
     refSummary(refs) || null,
     `weight ${p.weight ?? 0}`,
     new Date(p.updatedAt || p.createdAt).toLocaleDateString(),
-  ].filter(Boolean).join(" · ");
+  ]
+    .filter(Boolean)
+    .join(" · ");
   // ▶ makes this the prompt Generate uses (while this tab is open); again to stop.
   const isActive = activeSavedPrompt()?.id === p.id;
   card.classList.toggle("run-active", isActive);
@@ -5130,8 +6082,9 @@ function makeSavedPromptCard(p) {
   use.type = "button";
   use.className = "sp-use" + (isActive ? " on" : "");
   use.textContent = isActive ? "▶ Active" : "▶";
-  use.title = isActive
-    ? "Generate uses this prompt while the Saved Prompts tab is open — click to stop"
+  use.title =
+    isActive ?
+      "Generate uses this prompt while the Saved Prompts tab is open — click to stop"
     : "Use this prompt for Generate (while the Saved Prompts tab is open)";
   use.addEventListener("click", (e) => {
     e.stopPropagation(); // not a click on the card (which opens the editor)
@@ -5142,8 +6095,9 @@ function makeSavedPromptCard(p) {
     const badge = document.createElement("span");
     badge.className = "sp-type";
     badge.textContent = p.type === "minimax_t2v" ? "MiniMax T2V" : "MiniMax";
-    badge.title = p.type === "minimax_t2v"
-      ? "MiniMax H3 text-to-video format — compiled into its three fields when used"
+    badge.title =
+      p.type === "minimax_t2v" ?
+        "MiniMax H3 text-to-video format — compiled into its three fields when used"
       : "MiniMax H3 format — compiled into its six sections when used";
     title.prepend(badge);
   }
@@ -5163,7 +6117,8 @@ function makeSavedPromptCard(p) {
   if (refs.length) {
     const mini = document.createElement("div");
     mini.className = "sp-mini";
-    for (const r of refs.slice(0, 8)) mini.appendChild(makeRefPreview(r, "sp-mini-thumb"));
+    for (const r of refs.slice(0, 8))
+      mini.appendChild(makeRefPreview(r, "sp-mini-thumb"));
     if (refs.length > 8) {
       const more = document.createElement("span");
       more.className = "sp-mini-more";
@@ -5213,7 +6168,10 @@ function makeOutputPreview(out, className) {
         v.play().catch(() => {});
       });
     });
-    box.addEventListener("mouseleave", () => { v.pause(); v.currentTime = 0; });
+    box.addEventListener("mouseleave", () => {
+      v.pause();
+      v.currentTime = 0;
+    });
     box.appendChild(v);
   }
   return box;
@@ -5224,7 +6182,13 @@ function savedPromptSnippet(p) {
   if (!isMmType(p.type)) return p.prompt || "";
   const mm = p.minimax || {};
   const shots = mm.shots || [];
-  return [mm.style, shots[0]?.text, shots.length > 1 ? `(+${shots.length - 1} cut${shots.length > 2 ? "s" : ""})` : ""]
+  return [
+    mm.style,
+    shots[0]?.text,
+    shots.length > 1 ?
+      `(+${shots.length - 1} cut${shots.length > 2 ? "s" : ""})`
+    : "",
+  ]
     .filter((x) => String(x || "").trim())
     .join(" ");
 }
@@ -5234,9 +6198,11 @@ function savedPromptSnippet(p) {
 function makeRefPreview(r, className) {
   const box = document.createElement("div");
   box.className = `${className}${r.missing ? " missing" : ""}`;
-  box.title = r.missing ? `${r.name || "file"} — no longer in the gallery` : r.name || "";
+  box.title =
+    r.missing ? `${r.name || "file"} — no longer in the gallery` : r.name || "";
   if (r.missing) box.textContent = "?";
-  else box.appendChild(makeThumbContent(r.kind, { thumb: r.url, name: r.name }));
+  else
+    box.appendChild(makeThumbContent(r.kind, { thumb: r.url, name: r.name }));
   return box;
 }
 
@@ -5271,12 +6237,18 @@ let pickerKind = "all";
 const subjectOf = (r) => {
   let s = editing.subjects.get(r.id);
   if (!s) {
-    s = { key: r.key || "", definition: r.definition || "", origKey: r.key || "", origDefinition: r.definition || "" };
+    s = {
+      key: r.key || "",
+      definition: r.definition || "",
+      origKey: r.key || "",
+      origDefinition: r.definition || "",
+    };
     editing.subjects.set(r.id, s);
   }
   return s;
 };
-const subjectChanged = (s) => s.key !== s.origKey || s.definition !== s.origDefinition;
+const subjectChanged = (s) =>
+  s.key !== s.origKey || s.definition !== s.origDefinition;
 
 // `projectId`: the project the prompt belongs to — the active one from the Saved
 // Prompts tab, or a History card's (which may be another project's).
@@ -5296,7 +6268,9 @@ function openPromptEditor(p, projectId = activeProjectId) {
   peWeight.value = p.weight ?? 0;
   peMeta.textContent =
     `Saved ${new Date(p.createdAt).toLocaleString()}` +
-    (p.updatedAt && p.updatedAt !== p.createdAt ? ` · edited ${new Date(p.updatedAt).toLocaleString()}` : "");
+    (p.updatedAt && p.updatedAt !== p.createdAt ?
+      ` · edited ${new Date(p.updatedAt).toLocaleString()}`
+    : "");
   pePicker.open = false;
   renderEditorOutput();
   renderEditorBody();
@@ -5311,13 +6285,16 @@ function renderEditorBody() {
   document.getElementById("peDefault").classList.toggle("hidden", mm);
   peMinimax.classList.toggle("hidden", !mm);
   // Text-to-video takes no references, so the reference list and picker are hidden.
-  document.getElementById("peRefsHome").classList.toggle("hidden", editing.type === "minimax_t2v");
+  document
+    .getElementById("peRefsHome")
+    .classList.toggle("hidden", editing.type === "minimax_t2v");
   const badge = document.getElementById("peType");
   badge.textContent = MM_TYPE_LABEL[editing.type] || "Default";
   badge.classList.toggle("mm", mm);
   // The reference list lives in its home spot unless the MiniMax ref form takes it —
   // moved back before that form is rebuilt, so clearing the form never drops it.
-  if (editing.type !== "minimax") document.getElementById("peRefsHome").appendChild(peRefsBlock);
+  if (editing.type !== "minimax")
+    document.getElementById("peRefsHome").appendChild(peRefsBlock);
   if (mm) renderMinimaxForm();
   else peMinimax.innerHTML = "";
   renderEditorRefs(); // reference labels follow the format (<Picture 1> vs Image 1)
@@ -5336,7 +6313,8 @@ function editorValues() {
     prompt: isMmType(editing.type) ? undefined : pePrompt.value,
     minimax: isMmType(editing.type) ? editing.mm : null,
     duration: Number.isFinite(d) && d > 0 ? d : null,
-    weight: peWeight.value.trim() !== "" && Number.isFinite(w) ? Math.round(w) : 0,
+    weight:
+      peWeight.value.trim() !== "" && Number.isFinite(w) ? Math.round(w) : 0,
     historyId: editing.historyId,
     refs: editorLiveRefs(), // with unsaved key/definition edits, for Import's compile
   };
@@ -5349,9 +6327,10 @@ function editorDirty() {
   return (
     v.title !== p.title ||
     v.type !== (p.type || "default") ||
-    (isMmType(v.type)
-      ? JSON.stringify(v.minimax) !== JSON.stringify(p.minimax ? normalizeMinimax(p.minimax) : null)
-      : v.prompt !== (p.prompt || "")) ||
+    (isMmType(v.type) ?
+      JSON.stringify(v.minimax) !==
+      JSON.stringify(p.minimax ? normalizeMinimax(p.minimax) : null)
+    : v.prompt !== (p.prompt || "")) ||
     v.duration !== (p.duration || null) ||
     v.weight !== (p.weight ?? 0) ||
     v.historyId !== (p.historyId || null) ||
@@ -5362,7 +6341,12 @@ function editorDirty() {
 
 function closePromptEditor({ force = false } = {}) {
   if (!editing) return;
-  if (!force && editorDirty() && !confirm("Discard your changes to this saved prompt?")) return;
+  if (
+    !force &&
+    editorDirty() &&
+    !confirm("Discard your changes to this saved prompt?")
+  )
+    return;
   editing = null;
   hide(promptEditModal);
 }
@@ -5379,16 +6363,28 @@ async function saveEditor() {
   let galleryChanged = false;
   for (const [id, s] of editing.subjects) {
     if (!inList.has(id) || !subjectChanged(s)) continue;
-    const g = await promptsApi(`/api/images/${encodeURIComponent(id)}`, "PUT", { key: s.key, definition: s.definition });
+    const g = await promptsApi(`/api/images/${encodeURIComponent(id)}`, "PUT", {
+      key: s.key,
+      definition: s.definition,
+    });
     Object.assign(s, { key: g.key || "", definition: g.definition || "" });
     Object.assign(s, { origKey: s.key, origDefinition: s.definition });
     galleryChanged = true;
   }
-  const saved = await promptsApi(`/api/prompts/${encodeURIComponent(editing.p.id)}`, "PUT", {
-    projectId: editing.projectId,
-    ...v,
-    refs: v.refs.map(({ id, kind, name, tail }) => ({ id, kind, name, tail })),
-  });
+  const saved = await promptsApi(
+    `/api/prompts/${encodeURIComponent(editing.p.id)}`,
+    "PUT",
+    {
+      projectId: editing.projectId,
+      ...v,
+      refs: v.refs.map(({ id, kind, name, tail }) => ({
+        id,
+        kind,
+        name,
+        tail,
+      })),
+    },
+  );
   editing.p = saved;
   editing.mm = normalizeMinimax(structuredClone(saved.minimax || null)); // as the server normalized it
   if (galleryChanged) loadGallery();
@@ -5400,16 +6396,22 @@ async function saveEditor() {
 // how to link one.
 function renderEditorOutput() {
   peOutput.innerHTML = "";
-  const out = editing.historyId && editing.historyId === editing.p.historyId ? editing.p.output : null;
+  const out =
+    editing.historyId && editing.historyId === editing.p.historyId ?
+      editing.p.output
+    : null;
   if (out && !out.missing) {
     const prev = makeOutputPreview(out, "pe-output-thumb");
     prev.title = "Open full size";
-    prev.addEventListener("click", () => openLightbox(out.kind, out.url, editing.p.title));
+    prev.addEventListener("click", () =>
+      openLightbox(out.kind, out.url, editing.p.title),
+    );
     const unlink = document.createElement("button");
     unlink.type = "button";
     unlink.className = "link-btn";
     unlink.textContent = "✕ Unlink";
-    unlink.title = "Stop using this History output as the card's thumbnail (on Save)";
+    unlink.title =
+      "Stop using this History output as the card's thumbnail (on Save)";
     unlink.addEventListener("click", () => {
       editing.historyId = null;
       renderEditorOutput();
@@ -5419,13 +6421,13 @@ function renderEditorOutput() {
   }
   const hint = document.createElement("span");
   hint.className = "hint";
-  hint.textContent = editing.p.output?.pending && editing.historyId === editing.p.historyId
-    ? "⏳ The linked run is still generating."
-    : editing.historyId
-    ? "The linked History card is gone (deleted, or its output is missing). Save to clear the link."
-    : editing.p.historyId
-      ? "Unlinked — Save to confirm."
-      : "None — use the 📌 dropdown on a History card to link its output here.";
+  hint.textContent =
+    editing.p.output?.pending && editing.historyId === editing.p.historyId ?
+      "⏳ The linked run is still generating."
+    : editing.historyId ?
+      "The linked History card is gone (deleted, or its output is missing). Save to clear the link."
+    : editing.p.historyId ? "Unlinked — Save to confirm."
+    : "None — use the 📌 dropdown on a History card to link its output here.";
   peOutput.appendChild(hint);
   if (editing.historyId) {
     const clear = document.createElement("button");
@@ -5445,7 +6447,10 @@ function renderEditorRefs() {
   const seen = { image: 0, video: 0, audio: 0 };
   for (const r of editing.refs) {
     const n = ++seen[r.kind];
-    const label = editing.type === "minimax" ? `<${MM_REF_LABEL[r.kind] || "Picture"} ${n}>` : `${KIND_LABEL[r.kind] || "Image"} ${n}`;
+    const label =
+      editing.type === "minimax" ?
+        `<${MM_REF_LABEL[r.kind] || "Picture"} ${n}>`
+      : `${KIND_LABEL[r.kind] || "Image"} ${n}`;
     peRefs.appendChild(makeRefTile(r, label));
   }
   peRefsEmpty.classList.toggle("hidden", editing.refs.length > 0);
@@ -5458,8 +6463,12 @@ function renderEditorRefs() {
 function makeRefTile(r, label) {
   const tile = document.createElement("div");
   tile.className = "sp-ref";
-  const prev = makeRefPreview(r, `thumb sp-ref-thumb${r.kind === "audio" ? " audio-thumb" : ""}`);
-  if (!r.missing && r.url) prev.appendChild(makeZoomButton(r.kind, r.url, r.name));
+  const prev = makeRefPreview(
+    r,
+    `thumb sp-ref-thumb${r.kind === "audio" ? " audio-thumb" : ""}`,
+  );
+  if (!r.missing && r.url)
+    prev.appendChild(makeZoomButton(r.kind, r.url, r.name));
   tile.appendChild(prev);
 
   const info = document.createElement("div");
@@ -5492,30 +6501,40 @@ function makeRefTile(r, label) {
     const key = document.createElement("input");
     key.type = "text";
     key.className = "sp-ref-key-input";
-    key.placeholder = "@key, e.g. sibella";
+    key.placeholder = "@key, e.g. genie";
     key.maxLength = 41;
     key.value = s.key ? `@${s.key}` : "";
     key.dataset.subject = r.id;
     key.title = "What a prompt calls this subject. Saved on the gallery file.";
     key.addEventListener("input", () => {
       s.key = key.value.trim().replace(/^@+/, "");
-      peRefs.querySelectorAll(`.sp-ref-key-input[data-subject="${CSS.escape(r.id)}"]`).forEach((el) => {
-        if (el !== key) el.value = key.value;
-      });
+      peRefs
+        .querySelectorAll(
+          `.sp-ref-key-input[data-subject="${CSS.escape(r.id)}"]`,
+        )
+        .forEach((el) => {
+          if (el !== key) el.value = key.value;
+        });
       refreshMinimaxDerived();
     });
     const def = document.createElement("textarea");
     def.className = "sp-ref-def-input";
     def.rows = 3;
-    def.placeholder = "Definition — who or what this is, e.g. “a red-haired woman in her 30s, green raincoat”";
+    def.placeholder =
+      "Definition — who or what this is, e.g. “a red-haired woman in her 30s, green raincoat”";
     def.value = s.definition;
     def.dataset.subject = r.id;
-    def.title = "Saved on the gallery file, so every prompt using it shares this.";
+    def.title =
+      "Saved on the gallery file, so every prompt using it shares this.";
     def.addEventListener("input", () => {
       s.definition = def.value;
-      peRefs.querySelectorAll(`.sp-ref-def-input[data-subject="${CSS.escape(r.id)}"]`).forEach((el) => {
-        if (el !== def) el.value = def.value;
-      });
+      peRefs
+        .querySelectorAll(
+          `.sp-ref-def-input[data-subject="${CSS.escape(r.id)}"]`,
+        )
+        .forEach((el) => {
+          if (el !== def) el.value = def.value;
+        });
       refreshMinimaxDerived();
     });
     info.append(key, def);
@@ -5541,12 +6560,16 @@ function addEditorRef(item) {
 
 function renderEditorPicker() {
   if (!editing) return;
-  pePicker.querySelectorAll(".pe-kind").forEach((b) => b.classList.toggle("active", b.dataset.kind === pickerKind));
+  pePicker
+    .querySelectorAll(".pe-kind")
+    .forEach((b) =>
+      b.classList.toggle("active", b.dataset.kind === pickerKind),
+    );
   const inPrompt = new Set(editing.refs.map((r) => r.id));
   const items = galleryItems.filter(
     (i) =>
       (i.projectId || "default") === editing.projectId &&
-      (pickerKind === "all" || (i.kind || "image") === pickerKind)
+      (pickerKind === "all" || (i.kind || "image") === pickerKind),
   );
   pePickerGrid.innerHTML = "";
   pePickerEmpty.classList.toggle("hidden", items.length > 0);
@@ -5555,7 +6578,8 @@ function renderEditorPicker() {
     const thumb = makeGalleryThumb(item, {
       title: `${item.name} — click to ${added ? "remove from" : "add to"} this prompt`,
       onPick: (it) => {
-        if (editing.refs.some((r) => r.id === it.id)) editing.refs = editing.refs.filter((r) => r.id !== it.id);
+        if (editing.refs.some((r) => r.id === it.id))
+          editing.refs = editing.refs.filter((r) => r.id !== it.id);
         else addEditorRef(it);
         renderEditorRefs();
       },
@@ -5568,20 +6592,27 @@ function renderEditorPicker() {
 
 // Save dropped/browsed files to this project's gallery, then add them to the prompt.
 async function uploadEditorMedia(files) {
-  const saved = await uploadToGallery(files, editing?.projectId || activeProjectId);
+  const saved = await uploadToGallery(
+    files,
+    editing?.projectId || activeProjectId,
+  );
   if (!editing) return;
   for (const image of saved) addEditorRef(image);
   renderEditorRefs();
 }
 
-pePicker.addEventListener("toggle", () => { if (pePicker.open) renderEditorPicker(); });
+pePicker.addEventListener("toggle", () => {
+  if (pePicker.open) renderEditorPicker();
+});
 pePicker.querySelectorAll(".pe-kind").forEach((b) =>
   b.addEventListener("click", () => {
     pickerKind = b.dataset.kind;
     renderEditorPicker();
-  })
+  }),
 );
-document.getElementById("pePickerUpload").addEventListener("click", () => pePickerFile.click());
+document
+  .getElementById("pePickerUpload")
+  .addEventListener("click", () => pePickerFile.click());
 pePickerFile.addEventListener("change", () => {
   uploadEditorMedia(pePickerFile.files);
   pePickerFile.value = "";
@@ -5591,13 +6622,13 @@ pePickerFile.addEventListener("change", () => {
     if (!e.dataTransfer?.types?.includes("Files")) return;
     e.preventDefault();
     pePicker.classList.add("dragover");
-  })
+  }),
 );
 ["dragleave", "drop"].forEach((evt) =>
   pePicker.addEventListener(evt, (e) => {
     if (evt === "dragleave" && pePicker.contains(e.relatedTarget)) return;
     pePicker.classList.remove("dragover");
-  })
+  }),
 );
 pePicker.addEventListener("drop", (e) => {
   if (!e.dataTransfer?.files?.length) return;
@@ -5658,10 +6689,14 @@ function mmRetentionField(getLabel) {
   const wrap = mmEl("div", "pe-mm-retfield");
   wrap.getLabel = getLabel;
   const head = mmEl("div", "pe-mm-rethead");
-  head.append(mmEl("span", "pe-mm-retname", "retention_analysis"), mmEl("span", "pe-mm-appears"));
+  head.append(
+    mmEl("span", "pe-mm-retname", "retention_analysis"),
+    mmEl("span", "pe-mm-appears"),
+  );
   const ta = mmEl("textarea", "pe-mm-rettext");
   ta.rows = 2;
-  ta.placeholder = "e.g. fully_preserved - her face, hair and outfit are kept. (partially_preserved, attribute_transfer, weak_reference; audio: fully_copy, partially_copy, reference) — @shots becomes this subject's shot list";
+  ta.placeholder =
+    "e.g. fully_preserved - her face, hair and outfit are kept. (partially_preserved, attribute_transfer, weak_reference; audio: fully_copy, partially_copy, reference) — @shots becomes this subject's shot list";
   ta.value = (getLabel() && mm.retention[getLabel()]) || "";
   ta.addEventListener("input", () => {
     const label = getLabel();
@@ -5681,23 +6716,49 @@ function renderMinimaxForm() {
   if (!t2v) renderMinimaxRefParts(mm);
 
   // detailed_description (integrated_multimodal_description for text-to-video)
-  const desc = t2v
-    ? mmSection("integrated_multimodal_description", "— [Shot 1] opens with the style, then each cut in playback order")
-    : mmSection("detailed_description", "— a style opening, then each shot in playback order");
-  desc.appendChild(mmText(mm, "style", {
-    rows: 2,
-    placeholder: t2v
-      ? "Live-action, cinematic, … (the style — written right after [Shot 1])"
-      : "The target video uses a … style. (the opening, before [Shot 1])",
-  }));
+  const desc =
+    t2v ?
+      mmSection(
+        "integrated_multimodal_description",
+        "— [Shot 1] opens with the style, then each cut in playback order",
+      )
+    : mmSection(
+        "detailed_description",
+        "— a style opening, then each shot in playback order",
+      );
+  desc.appendChild(
+    mmText(mm, "style", {
+      rows: 2,
+      placeholder:
+        t2v ?
+          "Live-action, cinematic, … (the style — written right after [Shot 1])"
+        : "The target video uses a … style. (the opening, before [Shot 1])",
+    }),
+  );
   renderMinimaxShots(mm, desc, t2v);
   peMinimax.appendChild(desc);
 
-  const snd = mmSection("overall_soundscape", "— ambience and physical sounds across the whole video");
-  snd.appendChild(mmText(mm, "soundscape", { rows: 2, placeholder: "e.g. Quiet library room tone; pages rustle." }));
+  const snd = mmSection(
+    "overall_soundscape",
+    "— ambience and physical sounds across the whole video",
+  );
+  snd.appendChild(
+    mmText(mm, "soundscape", {
+      rows: 2,
+      placeholder: "e.g. Quiet library room tone; pages rustle.",
+    }),
+  );
   peMinimax.appendChild(snd);
-  const mus = mmSection("non_diegetic_music", "— music only the audience hears (empty = N/A)");
-  mus.appendChild(mmText(mm, "music", { rows: 2, placeholder: "e.g. Heavy metal rock and roll, fast tempo." }));
+  const mus = mmSection(
+    "non_diegetic_music",
+    "— music only the audience hears (empty = N/A)",
+  );
+  mus.appendChild(
+    mmText(mm, "music", {
+      rows: 2,
+      placeholder: "e.g. Heavy metal rock and roll, fast tempo.",
+    }),
+  );
   peMinimax.appendChild(mus);
 
   // compiled preview
@@ -5715,7 +6776,10 @@ function renderMinimaxForm() {
 // and the summary — everything above detailed_description.
 function renderMinimaxRefParts(mm) {
   // subject_definitions — each subject with its retention_analysis line under it
-  const subj = mmSection("subject_definitions", "— each subject, with its retention_analysis below it");
+  const subj = mmSection(
+    "subject_definitions",
+    "— each subject, with its retention_analysis below it",
+  );
   const fromRefs = mmEl("div", "pe-mm-derived");
   fromRefs.id = "mmRefSubjects"; // rows built by refreshMinimaxDerived (they follow the references)
   subj.appendChild(fromRefs);
@@ -5732,14 +6796,26 @@ function renderMinimaxRefParts(mm) {
       const before = s.key ? `<${s.key}>` : null;
       s.key = normKey(key.value);
       const after = s.key ? `<${s.key}>` : null;
-      if (before && after && before !== after && mm.retention[before] != null && mm.retention[after] == null) {
+      if (
+        before &&
+        after &&
+        before !== after &&
+        mm.retention[before] != null &&
+        mm.retention[after] == null
+      ) {
         mm.retention[after] = mm.retention[before];
         delete mm.retention[before];
       }
       refreshMinimaxDerived();
     });
-    key.addEventListener("change", () => { key.value = s.key ? `<${s.key}>` : ""; });
-    const def = mmText(s, "definition", { rows: 5, placeholder: "who or what it is — e.g. a 20-year-old devil girl with red skin and short black horns." });
+    key.addEventListener("change", () => {
+      key.value = s.key ? `<${s.key}>` : "";
+    });
+    const def = mmText(s, "definition", {
+      rows: 5,
+      placeholder:
+        "who or what it is — e.g. a 20-year-old devil girl with red skin and short black horns.",
+    });
     const rm = mmEl("button", "link-btn pe-mm-remove", "×");
     rm.type = "button";
     rm.title = "Remove this subject";
@@ -5747,33 +6823,51 @@ function renderMinimaxRefParts(mm) {
       mm.subjects.splice(i, 1);
       renderMinimaxForm();
     });
-    row.append(key, def, rm, mmRetentionField(() => (s.key ? `<${s.key}>` : null)));
+    row.append(
+      key,
+      def,
+      rm,
+      mmRetentionField(() => (s.key ? `<${s.key}>` : null)),
+    );
     extras.appendChild(row);
   });
   subj.appendChild(extras);
-  const addSubj = mmEl("button", "link-btn", "＋ Add a subject without an image");
+  const addSubj = mmEl(
+    "button",
+    "link-btn",
+    "＋ Add a subject without an image",
+  );
   addSubj.type = "button";
   addSubj.addEventListener("click", () => {
     mm.subjects.push({ key: "", definition: "" });
     renderMinimaxForm();
-    peMinimax.querySelectorAll(".pe-mm-key").item(mm.subjects.length - 1)?.focus();
+    peMinimax
+      .querySelectorAll(".pe-mm-key")
+      .item(mm.subjects.length - 1)
+      ?.focus();
   });
   subj.appendChild(addSubj);
   peMinimax.appendChild(subj);
 
   // The references, right under the subjects they define — you look at the images while
   // writing the definitions. (The block itself moves here; see renderEditorBody.)
-  const refsSec = mmSection("reference media", "— key and definition are saved on the gallery file and feed subject_definitions above. Write @key anywhere in this prompt to refer to a file: it compiles to its <Picture N>, so re-ordering keeps it right.");
+  const refsSec = mmSection(
+    "reference media",
+    "— key and definition are saved on the gallery file and feed subject_definitions above. Write @key anywhere in this prompt to refer to a file: it compiles to its <Picture N>, so re-ordering keeps it right.",
+  );
   refsSec.classList.add("pe-mm-refs");
   refsSec.appendChild(peRefsBlock);
   peMinimax.appendChild(refsSec);
 
   // summary
   const sum = mmSection("summary");
-  sum.appendChild(mmText(mm, "summary", {
-    rows: 5,
-    placeholder: "[reference generation] The target video shows <sibella> … — the task type in brackets, then one short paragraph on the video and what each reference is for.",
-  }));
+  sum.appendChild(
+    mmText(mm, "summary", {
+      rows: 5,
+      placeholder:
+        "[reference generation] The target video shows <genie> … — the task type in brackets, then one short paragraph on the video and what each reference is for.",
+    }),
+  );
   peMinimax.appendChild(sum);
 }
 
@@ -5802,7 +6896,8 @@ function renderMinimaxShots(mm, desc, t2v) {
         if (sorted === mm.shots) return;
         mm.shots = sorted;
         renderMinimaxForm();
-        const moved = peMinimax.querySelectorAll(".pe-mm-shot")[mm.shots.indexOf(s)];
+        const moved =
+          peMinimax.querySelectorAll(".pe-mm-shot")[mm.shots.indexOf(s)];
         moved?.classList.add("pe-mm-moved");
         moved?.scrollIntoView({ block: "nearest", behavior: "smooth" });
       });
@@ -5819,16 +6914,20 @@ function renderMinimaxShots(mm, desc, t2v) {
     } else {
       head.appendChild(mmEl("span", "hint", "opening shot — no time"));
     }
-    card.append(head, mmText(s, "text", {
-      rows: i === 0 ? 5 : 3,
-      placeholder: t2v
-        ? i === 0
-          ? "a medium-wide shot frames … The camera pushes in slowly as the baker (S1) says: <d>[English] First batch of the morning.</d>"
-          : "the camera cuts to a close-up of … (a speaker keeps their (S1) id; lines go in <d>[Language] …</d>)"
-        : i === 0
-          ? "What the opening shot shows: composition, who's where (by <key>), action, camera, sound."
+    card.append(
+      head,
+      mmText(s, "text", {
+        rows: i === 0 ? 5 : 3,
+        placeholder:
+          t2v ?
+            i === 0 ?
+              "a medium-wide shot frames … The camera pushes in slowly as the baker (S1) says: <d>[English] First batch of the morning.</d>"
+            : "the camera cuts to a close-up of … (a speaker keeps their (S1) id; lines go in <d>[Language] …</d>)"
+          : i === 0 ?
+            "What the opening shot shows: composition, who's where (by <key>), action, camera, sound."
           : "e.g. the shot cuts to a low angle shot of <new> laughing.",
-    }));
+      }),
+    );
     shots.appendChild(card);
   });
   desc.appendChild(shots);
@@ -5859,7 +6958,9 @@ function refreshMinimaxDerived() {
     // no row below, so they get a slim one here — just to hold their retention box. A
     // subject also typed below keeps its retention there. Rebuilt only when that set
     // changes, so a retention box keeps focus while typing.
-    const typed = new Set(mm.subjects.filter((x) => x.key).map((x) => `<${x.key}>`));
+    const typed = new Set(
+      mm.subjects.filter((x) => x.key).map((x) => `<${x.key}>`),
+    );
     const lines = subjects.filter((x) => x.fromRefs && !typed.has(x.label));
     const sig = lines.map((x) => x.label).join();
     if (fromRefs.dataset.sig !== sig) {
@@ -5869,8 +6970,18 @@ function refreshMinimaxDerived() {
         const row = mmEl("div", "pe-mm-refsubj");
         row.dataset.label = x.label;
         const head = mmEl("div", "pe-mm-refsubj-head");
-        head.append(mmEl("code", "pe-mm-refsubj-label", x.label), mmEl("span", "hint", "— defined on its image in reference media below"));
-        row.append(head, mmRetentionField(() => x.label));
+        head.append(
+          mmEl("code", "pe-mm-refsubj-label", x.label),
+          mmEl(
+            "span",
+            "hint",
+            "— defined on its image in reference media below",
+          ),
+        );
+        row.append(
+          head,
+          mmRetentionField(() => x.label),
+        );
         fromRefs.appendChild(row);
       }
     }
@@ -5880,7 +6991,10 @@ function refreshMinimaxDerived() {
     const label = w.getLabel?.();
     const r = label && rows.get(label);
     const el = w.querySelector(".pe-mm-appears");
-    el.textContent = r ? appearsText(r) : label ? "add a definition to include it" : "give the subject a key first";
+    el.textContent =
+      r ? appearsText(r)
+      : label ? "add a definition to include it"
+      : "give the subject a key first";
     el.classList.toggle("none", !r || (!r.audio && !r.shots.length));
     w.querySelector("textarea").disabled = !label;
   });
@@ -5890,20 +7004,24 @@ function refreshMinimaxDerived() {
   peMinimax.querySelectorAll(".pe-mm-warn").forEach((w) => {
     const i = Number(w.dataset.shot);
     const at = mm.shots[i]?.at;
-    const prevAt = i > 1 ? mm.shots[i - 1]?.at ?? 0 : 0;
+    const prevAt = i > 1 ? (mm.shots[i - 1]?.at ?? 0) : 0;
     w.textContent =
       at == null ? "⚠ needs a time"
-        : at < prevAt ? "↕ moves into place when you're done"
-          : at === prevAt && i > 1 ? "⚠ same time as the previous cut"
-            : "";
+      : at < prevAt ? "↕ moves into place when you're done"
+      : at === prevAt && i > 1 ? "⚠ same time as the previous cut"
+      : "";
   });
 
   const out = document.getElementById("mmCompiled");
   if (out) {
-    const text = editing.type === "minimax_t2v" ? compileMinimaxT2V(mm) : compileMinimax(mm, refs);
+    const text =
+      editing.type === "minimax_t2v" ?
+        compileMinimaxT2V(mm)
+      : compileMinimax(mm, refs);
     out.textContent = text;
     const sum = out.parentElement.querySelector("summary");
-    if (sum) sum.textContent = `Compiled prompt (${text.length.toLocaleString()} characters)`;
+    if (sum)
+      sum.textContent = `Compiled prompt (${text.length.toLocaleString()} characters)`;
   }
 }
 
@@ -5934,66 +7052,126 @@ function renderEditorActions() {
   const projectId = editing.projectId;
   // The project-level actions work on the saved version — check before dropping edits.
   const okToLeaveEdits = () =>
-    !editorDirty() || confirm("You have unsaved changes. Continue without saving them?");
+    !editorDirty() ||
+    confirm("You have unsaved changes. Continue without saving them?");
 
-  btn("⤓ Import", "Load this prompt, its references and duration into the form", async () => {
-    let p = { ...editing.p, ...editorValues() };
-    if (editorDirty() && confirm("Save your changes to this prompt before importing?")) p = await saveEditor();
-    closePromptEditor({ force: true });
-    await importSavedPrompt(p);
-  }, "sp-import");
+  btn(
+    "⤓ Import",
+    "Load this prompt, its references and duration into the form",
+    async () => {
+      let p = { ...editing.p, ...editorValues() };
+      if (
+        editorDirty() &&
+        confirm("Save your changes to this prompt before importing?")
+      )
+        p = await saveEditor();
+      closePromptEditor({ force: true });
+      await importSavedPrompt(p);
+    },
+    "sp-import",
+  );
   // Converting between the two MiniMax formats keeps the shared fields (style, cuts,
   // soundscape, music); the reference format's subjects/summary/retention stay stored
   // but unused by text-to-video, so switching back restores them.
   const toT2V = () => {
-    if (editing.refs.length && !confirm(`Convert to MiniMax text-to-video?\n\nIt takes no references — the ${plural(editing.refs.length, "reference")} on this prompt will be removed when you save (the files stay in the gallery).`)) return false;
+    if (
+      editing.refs.length &&
+      !confirm(
+        `Convert to MiniMax text-to-video?\n\nIt takes no references — the ${plural(editing.refs.length, "reference")} on this prompt will be removed when you save (the files stay in the gallery).`,
+      )
+    )
+      return false;
     editing.refs = [];
     editing.type = "minimax_t2v";
     renderEditorBody();
     return true;
   };
   if (isMmType(editing.type)) {
-    btn("⇄ To plain text", "Turn this into a default prompt holding the compiled text (on Save)", async () => {
-      if (!confirm("Convert to a plain-text prompt?\n\nThe compiled MiniMax text becomes the prompt; the sections and cuts are dropped when you save.")) return;
-      pePrompt.value = editing.type === "minimax_t2v" ? compileMinimaxT2V(editing.mm) : compileMinimax(editing.mm, editorLiveRefs());
-      editing.type = "default";
-      renderEditorBody();
-    });
-    if (editing.type === "minimax") {
-      btn("⇄ To T2V", "Switch to MiniMax's text-to-video format — same cuts, soundscape and music, no references (on Save)", async () => { toT2V(); });
-    } else {
-      btn("⇄ To MiniMax ref", "Switch to MiniMax's reference format — adds subjects, summary, retention and reference media (on Save)", async () => {
-        editing.type = "minimax";
+    btn(
+      "⇄ To plain text",
+      "Turn this into a default prompt holding the compiled text (on Save)",
+      async () => {
+        if (
+          !confirm(
+            "Convert to a plain-text prompt?\n\nThe compiled MiniMax text becomes the prompt; the sections and cuts are dropped when you save.",
+          )
+        )
+          return;
+        pePrompt.value =
+          editing.type === "minimax_t2v" ?
+            compileMinimaxT2V(editing.mm)
+          : compileMinimax(editing.mm, editorLiveRefs());
+        editing.type = "default";
         renderEditorBody();
-      });
+      },
+    );
+    if (editing.type === "minimax") {
+      btn(
+        "⇄ To T2V",
+        "Switch to MiniMax's text-to-video format — same cuts, soundscape and music, no references (on Save)",
+        async () => {
+          toT2V();
+        },
+      );
+    } else {
+      btn(
+        "⇄ To MiniMax ref",
+        "Switch to MiniMax's reference format — adds subjects, summary, retention and reference media (on Save)",
+        async () => {
+          editing.type = "minimax";
+          renderEditorBody();
+        },
+      );
     }
   } else {
-    btn("⇄ To MiniMax", "Split this prompt into MiniMax H3's sections, shots and subjects (on Save)", async () => {
-      editing.mm = parseMinimax(pePrompt.value, editorLiveRefs());
-      editing.type = "minimax";
-      renderEditorBody();
-    });
-    btn("⇄ To T2V", "Split this prompt into MiniMax's text-to-video fields — cuts, soundscape and music, no references (on Save)", async () => {
-      const before = editing.mm;
-      editing.mm = parseMinimax(pePrompt.value);
-      if (!toT2V()) editing.mm = before;
-    });
+    btn(
+      "⇄ To MiniMax",
+      "Split this prompt into MiniMax H3's sections, shots and subjects (on Save)",
+      async () => {
+        editing.mm = parseMinimax(pePrompt.value, editorLiveRefs());
+        editing.type = "minimax";
+        renderEditorBody();
+      },
+    );
+    btn(
+      "⇄ To T2V",
+      "Split this prompt into MiniMax's text-to-video fields — cuts, soundscape and music, no references (on Save)",
+      async () => {
+        const before = editing.mm;
+        editing.mm = parseMinimax(pePrompt.value);
+        if (!toT2V()) editing.mm = before;
+      },
+    );
   }
-  btn("⧉ Duplicate", "Make a copy of the saved prompt in this project and open it", async () => {
-    if (!okToLeaveEdits()) return;
-    const copy = await promptsApi(`${base()}/duplicate`, "POST", { projectId });
-    await loadSavedPrompts();
-    const fresh = (await getProjectPrompts(projectId)).find((x) => x.id === copy.id);
-    openPromptEditor(fresh || copy, projectId);
-  });
+  btn(
+    "⧉ Duplicate",
+    "Make a copy of the saved prompt in this project and open it",
+    async () => {
+      if (!okToLeaveEdits()) return;
+      const copy = await promptsApi(`${base()}/duplicate`, "POST", {
+        projectId,
+      });
+      await loadSavedPrompts();
+      const fresh = (await getProjectPrompts(projectId)).find(
+        (x) => x.id === copy.id,
+      );
+      openPromptEditor(fresh || copy, projectId);
+    },
+  );
 
   // Move / copy to another project: a dropdown of the other projects, like the gallery's ⇄.
   const others = projects.filter((x) => x.id !== projectId);
   for (const mode of others.length ? ["move", "copy"] : []) {
     const sel = document.createElement("select");
     sel.className = "sp-transfer";
-    sel.title = mode === "move" ? "Move to another project" : "Copy to another project";
-    const ph = new Option(mode === "move" ? "⇄ Move to…" : "⎘ Copy to…", "", true, true);
+    sel.title =
+      mode === "move" ? "Move to another project" : "Copy to another project";
+    const ph = new Option(
+      mode === "move" ? "⇄ Move to…" : "⎘ Copy to…",
+      "",
+      true,
+      true,
+    );
     ph.disabled = true;
     sel.appendChild(ph);
     for (const x of others) sel.appendChild(new Option(x.name, x.id));
@@ -6003,7 +7181,11 @@ function renderEditorActions() {
       if (!okToLeaveEdits()) return;
       sel.disabled = true;
       try {
-        await promptsApi(`${base()}/transfer`, "POST", { projectId, toProjectId: to, mode });
+        await promptsApi(`${base()}/transfer`, "POST", {
+          projectId,
+          toProjectId: to,
+          mode,
+        });
         await loadSavedPrompts();
         if (mode === "move") closePromptEditor({ force: true });
         else alert(`Copied "${editing.p.title}" to ${projectName(to)}.`);
@@ -6016,12 +7198,20 @@ function renderEditorActions() {
     peActions.appendChild(sel);
   }
 
-  btn("🗑 Delete", "Delete this saved prompt (reference files stay in the gallery)", async () => {
-    if (!confirm(`Delete saved prompt "${editing.p.title}"?`)) return;
-    await promptsApi(`${base()}?projectId=${encodeURIComponent(projectId)}`, "DELETE");
-    closePromptEditor({ force: true });
-    await loadSavedPrompts();
-  }, "btn-secondary sp-delete");
+  btn(
+    "🗑 Delete",
+    "Delete this saved prompt (reference files stay in the gallery)",
+    async () => {
+      if (!confirm(`Delete saved prompt "${editing.p.title}"?`)) return;
+      await promptsApi(
+        `${base()}?projectId=${encodeURIComponent(projectId)}`,
+        "DELETE",
+      );
+      closePromptEditor({ force: true });
+      await loadSavedPrompts();
+    },
+    "btn-secondary sp-delete",
+  );
 }
 
 peSave.addEventListener("click", async () => {
@@ -6035,14 +7225,19 @@ peSave.addEventListener("click", async () => {
     peSave.disabled = false;
   }
 });
-document.getElementById("peCancel").addEventListener("click", () => closePromptEditor());
-document.getElementById("peClose").addEventListener("click", () => closePromptEditor());
+document
+  .getElementById("peCancel")
+  .addEventListener("click", () => closePromptEditor());
+document
+  .getElementById("peClose")
+  .addEventListener("click", () => closePromptEditor());
 promptEditModal.addEventListener("mousedown", (e) => {
   if (e.target === promptEditModal) closePromptEditor();
 });
 promptEditModal.addEventListener("keydown", (e) => {
   // Esc over a full-size view (opened from a thumbnail here) closes just that view.
-  if (e.key === "Escape" && lightbox.classList.contains("hidden")) closePromptEditor();
+  if (e.key === "Escape" && lightbox.classList.contains("hidden"))
+    closePromptEditor();
 });
 
 // --- helpers ----------------------------------------------------------------
@@ -6138,23 +7333,39 @@ function createLiveStatus(job) {
   // back into passes. The passes can run at very different speeds, so the bar, the
   // percentage and the time left all describe the current pass only.
   const splitPasses = (value, max, passes) => {
-    const n = Number.isInteger(passes) && passes > 1 && max % passes === 0 ? passes : 1;
+    const n =
+      Number.isInteger(passes) && passes > 1 && max % passes === 0 ? passes : 1;
     const perPass = max / n;
     const pass = Math.min(n, Math.max(1, Math.ceil(value / perPass)));
-    return { passes: n, perPass, pass, stepInPass: value - (pass - 1) * perPass };
+    return {
+      passes: n,
+      perPass,
+      pass,
+      stepInPass: value - (pass - 1) * perPass,
+    };
   };
   const paint = () => {
-    if (!progInfo) { statusText.textContent = baseStatus; return; }
-    const { value, passes, perPass, pass, stepInPass, anchorT, anchorValue } = progInfo;
+    if (!progInfo) {
+      statusText.textContent = baseStatus;
+      return;
+    }
+    const { value, passes, perPass, pass, stepInPass, anchorT, anchorValue } =
+      progInfo;
     const now = Date.now();
-    const pct = Math.max(0, Math.min(100, Math.round((stepInPass / perPass) * 100)));
+    const pct = Math.max(
+      0,
+      Math.min(100, Math.round((stepInPass / perPass) * 100)),
+    );
     const elapsed = fmtDuration(now - progStartedAt);
     let eta = "";
     const dv = value - anchorValue;
     const dt = now - anchorT;
     if (stepInPass < perPass && dv > 0 && dt > 0) {
       const left = fmtDuration((perPass - stepInPass) * (dt / dv));
-      eta = passes > 1 && pass < passes ? ` · ~${left} left in this pass` : ` · ~${left} left`;
+      eta =
+        passes > 1 && pass < passes ?
+          ` · ~${left} left in this pass`
+        : ` · ~${left} left`;
     }
     const passLabel = passes > 1 ? `pass ${pass} of ${passes} · ` : "";
     statusText.textContent = `${baseStatus} ${passLabel}step ${stepInPass}/${perPass} (${pct}%) · ${elapsed} elapsed${eta}`;
@@ -6165,16 +7376,27 @@ function createLiveStatus(job) {
     running: true,
     isComfy: (job.input?.model || "").startsWith("comfy:"),
     promptId: job.taskId || null,
-    setStatus(text) { baseStatus = text; paint(); },
+    setStatus(text) {
+      baseStatus = text;
+      paint();
+    },
     setProgress(value, max, passes = 1) {
       if (!max || max <= 0) return;
       const split = splitPasses(value, max, passes);
       // Restart the rate clock on a new run or a new pass, so each pass's time left
       // comes from its own speed.
-      const restart = !progInfo || value < progInfo.value || split.pass !== progInfo.pass;
-      progInfo = restart
-        ? { value, max, ...split, anchorT: Date.now(), anchorValue: value }
-        : { value, max, ...split, anchorT: progInfo.anchorT, anchorValue: progInfo.anchorValue };
+      const restart =
+        !progInfo || value < progInfo.value || split.pass !== progInfo.pass;
+      progInfo =
+        restart ?
+          { value, max, ...split, anchorT: Date.now(), anchorValue: value }
+        : {
+            value,
+            max,
+            ...split,
+            anchorT: progInfo.anchorT,
+            anchorValue: progInfo.anchorValue,
+          };
       progressBar.style.width = `${Math.max(0, Math.min(100, Math.round((split.stepInPass / split.perPass) * 100)))}%`;
       progressWrap.classList.remove("hidden");
       paint();
@@ -6217,7 +7439,9 @@ function createLiveStatus(job) {
       // the card between frames. A frame that lands after a newer one is dropped.
       const token = ++previewToken;
       const pre = new Image();
-      pre.onload = () => { if (token === previewToken) previewImg.src = pre.src; };
+      pre.onload = () => {
+        if (token === previewToken) previewImg.src = pre.src;
+      };
       pre.src = url;
     },
     // Show a Cancel button; `fn` runs once on click.
@@ -6225,11 +7449,19 @@ function createLiveStatus(job) {
       cancelBtn.classList.remove("hidden");
       cancelBtn.addEventListener(
         "click",
-        async () => { cancelBtn.disabled = true; statusText.textContent = "Cancelling…"; await fn(); },
-        { once: true }
+        async () => {
+          cancelBtn.disabled = true;
+          statusText.textContent = "Cancelling…";
+          await fn();
+        },
+        { once: true },
       );
     },
-    stop() { this.running = false; clearInterval(progTicker); progTicker = null; },
+    stop() {
+      this.running = false;
+      clearInterval(progTicker);
+      progTicker = null;
+    },
   };
 }
 
@@ -6297,22 +7529,36 @@ function ensurePreviewStream() {
   const es = (previewES = new EventSource("/api/comfy/preview-stream"));
   es.addEventListener("message", (ev) => {
     let d;
-    try { d = JSON.parse(ev.data); } catch { return; }
+    try {
+      d = JSON.parse(ev.data);
+    } catch {
+      return;
+    }
     // Route by promptId: frames for another tab's run — or for a prompt queued
     // straight from ComfyUI's own UI — simply match nothing here.
-    const live = [...liveStatus.values()].find((l) => l.isComfy && l.promptId === d.promptId);
-    live?.setPreview(`/api/comfy/preview?promptId=${encodeURIComponent(d.promptId)}&seq=${d.seq}`);
+    const live = [...liveStatus.values()].find(
+      (l) => l.isComfy && l.promptId === d.promptId,
+    );
+    live?.setPreview(
+      `/api/comfy/preview?promptId=${encodeURIComponent(d.promptId)}&seq=${d.seq}`,
+    );
   });
   es.addEventListener("error", () => {
     // Per spec a non-2xx response closes the stream for good (signed out, or a server
     // without the route) — accept that and go quiet. A merely dropped connection
     // reconnects on its own and doesn't land here as CLOSED.
-    if (es.readyState === EventSource.CLOSED) { previewDead = true; previewES = null; }
+    if (es.readyState === EventSource.CLOSED) {
+      previewDead = true;
+      previewES = null;
+    }
   });
 }
 
 function closePreviewStream() {
-  if (previewES) { previewES.close(); previewES = null; }
+  if (previewES) {
+    previewES.close();
+    previewES = null;
+  }
 }
 
 // `prompt`: the text to send — the textarea's, or an active saved prompt's export.
@@ -6327,7 +7573,8 @@ function collectInput(resolved, prompt = promptEl.value) {
       nsfw_checker: document.getElementById("nsfw_checker").checked,
     };
     if (isI2I()) input.image_urls = resolved.image;
-    if (isSeedreamPro()) input.output_format = document.getElementById("output_format").value;
+    if (isSeedreamPro())
+      input.output_format = document.getElementById("output_format").value;
     return input;
   }
   // MiniMax H3: a much smaller parameter set than Seedance — no generate_audio
@@ -6342,7 +7589,8 @@ function collectInput(resolved, prompt = promptEl.value) {
     };
     if (isH3I2V()) {
       // image-to-video takes a first and/or last frame, and no aspect_ratio.
-      if (resolved.firstFrame?.[0]) input.first_frame_url = resolved.firstFrame[0];
+      if (resolved.firstFrame?.[0])
+        input.first_frame_url = resolved.firstFrame[0];
       if (resolved.lastFrame?.[0]) input.last_frame_url = resolved.lastFrame[0];
     } else {
       input.aspect_ratio = aspectSelect.value;
@@ -6375,7 +7623,8 @@ function collectInput(resolved, prompt = promptEl.value) {
   // 2.5-only extras: output format + last-frame return.
   if (is25()) {
     input.output_format = document.getElementById("output_format").value;
-    input.return_last_frame = document.getElementById("return_last_frame").checked;
+    input.return_last_frame =
+      document.getElementById("return_last_frame").checked;
   }
   return input;
 }
@@ -6406,21 +7655,28 @@ form.addEventListener("submit", async (e) => {
   }
   const ready = (kind) => lists[kind].items.some((i) => i.status === "ready");
   if (isH3I2V() && !ready("firstFrame") && !ready("lastFrame")) {
-    setError("MiniMax H3 image-to-video needs a first frame, a last frame, or both.");
+    setError(
+      "MiniMax H3 image-to-video needs a first frame, a last frame, or both.",
+    );
     return;
   }
   // The API rejects a reference-to-video run carrying only audio.
   if (isH3Ref() && !ready("image") && !ready("video")) {
-    setError("MiniMax H3 reference-to-video needs at least one reference image or video.");
+    setError(
+      "MiniMax H3 reference-to-video needs at least one reference image or video.",
+    );
     return;
   }
   // Pinned now, so switching tabs (or the active prompt) mid-upload can't change the run.
   const fromSaved = runSavedPrompt();
-  const promptText = fromSaved ? exportSavedPromptText(fromSaved) : promptEl.value;
+  const promptText =
+    fromSaved ? exportSavedPromptText(fromSaved) : promptEl.value;
   // Wildcards: each run of a ×N batch gets its own picks.
   let runPrompts;
   try {
-    runPrompts = Array.from({ length: queueCount() }, () => resolveWildcards(promptText));
+    runPrompts = Array.from({ length: queueCount() }, () =>
+      resolveWildcards(promptText),
+    );
   } catch (err) {
     setError(err.message || String(err));
     return;
@@ -6430,7 +7686,7 @@ form.addEventListener("submit", async (e) => {
     setError(
       `${fromSaved ? `Saved prompt “${fromSaved.title}”` : "Prompt"} is ${longest.toLocaleString()} characters` +
         `${longest !== promptText.length ? " with its wildcards filled in" : ""} — ` +
-        `this model's limit is ${promptCap().toLocaleString()}.`
+        `this model's limit is ${promptCap().toLocaleString()}.`,
     );
     return;
   }
@@ -6457,7 +7713,10 @@ form.addEventListener("submit", async (e) => {
   // kie.ai task, but the reference media is uploaded once and shared by all of them.
   const count = runPrompts.length;
   const storedInputFor = (i) => {
-    const s = collectInput({ image: [], video: [], audio: [], firstFrame: [], lastFrame: [] }, runPrompts[i]);
+    const s = collectInput(
+      { image: [], video: [], audio: [], firstFrame: [], lastFrame: [] },
+      runPrompts[i],
+    );
     if (fromSaved) s.savedPrompt = savedPromptStamp(fromSaved); // History only, not sent to kie.ai
     if (templated) s.promptTemplate = promptText; // History only: Re-import restores the %tokens%
     return s;
@@ -6480,7 +7739,13 @@ form.addEventListener("submit", async (e) => {
       refSecs,
       startedAt: Date.now(),
     };
-    job.historyId = await createHistoryEntry(job.input, null, job.mediaLocalIds, job.projectId, job.refSecs);
+    job.historyId = await createHistoryEntry(
+      job.input,
+      null,
+      job.mediaLocalIds,
+      job.projectId,
+      job.refSecs,
+    );
     job.live = createLiveStatus(job);
     if (count > 1) job.live.setStatus(`Waiting (${i + 1} of ${count})…`);
     if (job.historyId) liveStatus.set(job.historyId, job.live);
@@ -6493,7 +7758,11 @@ form.addEventListener("submit", async (e) => {
   let resolved;
   try {
     if (allItems().some((i) => i.status === "ready")) {
-      setAllStatus(count > 1 ? `Uploading reference media (shared by ${count} runs)…` : "Uploading reference media…");
+      setAllStatus(
+        count > 1 ?
+          `Uploading reference media (shared by ${count} runs)…`
+        : "Uploading reference media…",
+      );
     }
     resolved = {
       // only upload the reference kinds the selected model+mode actually uses
@@ -6511,7 +7780,6 @@ form.addEventListener("submit", async (e) => {
     return;
   }
 
-
   // Snapshot the balance so we can measure actual cost on completion. (With
   // overlapping runs this delta is unreliable; the per-task creditsConsumed
   // reported on completion is the primary source and stays accurate.)
@@ -6527,7 +7795,10 @@ form.addEventListener("submit", async (e) => {
       job.live.setStatus("Submitting…");
       try {
         // The real input (hosted URLs, this run's wildcard picks) for the API call.
-        job.taskId = await createTask(collectInput(resolved, runPrompts[i]), job.live);
+        job.taskId = await createTask(
+          collectInput(resolved, runPrompts[i]),
+          job.live,
+        );
         job.live.setStatus("Generating… this can take a few minutes.");
         await persistEntryTask(job); // let the server-side sweep finish it if this tab goes away
         pollJob(job);
@@ -6558,7 +7829,9 @@ async function createTask(input, live) {
     const data = await res.json().catch(() => ({}));
 
     if (res.status === 429 && attempt < RATE_LIMIT_RETRIES) {
-      live.setStatus(`Rate-limited — retrying (${attempt + 1}/${RATE_LIMIT_RETRIES})…`);
+      live.setStatus(
+        `Rate-limited — retrying (${attempt + 1}/${RATE_LIMIT_RETRIES})…`,
+      );
       await sleep(RATE_LIMIT_BACKOFF_MS);
       continue;
     }
@@ -6580,7 +7853,8 @@ async function pollJob(job) {
       await failJob(job, data.msg || `Status check failed (${res.status})`);
       return;
     }
-    if (!res.ok || data.code !== 200) throw new Error(data.msg || `Status check failed (${res.status})`);
+    if (!res.ok || data.code !== 200)
+      throw new Error(data.msg || `Status check failed (${res.status})`);
   } catch {
     // Transient (network / 5xx) — leave the entry pending and retry.
     setTimeout(() => pollJob(job), POLL_INTERVAL_MS);
@@ -6591,7 +7865,8 @@ async function pollJob(job) {
   if (state === "success") {
     finishLive(job);
     const url = JSON.parse(data.data.resultJson || "{}").resultUrls?.[0];
-    if (!url) return failJob(job, "Task succeeded but no result URL was returned.");
+    if (!url)
+      return failJob(job, "Task succeeded but no result URL was returned.");
 
     // Prefer the API's exact per-task cost (creditsConsumed on recordInfo); fall
     // back to the balance delta for older responses (unreliable when runs overlap).
@@ -6599,7 +7874,10 @@ async function pollJob(job) {
     let cost = null;
     const reported = Number(data.data.creditsConsumed);
     if (Number.isFinite(reported) && reported > 0) cost = reported;
-    else if (typeof balanceBefore === "number" && typeof balanceAfter === "number") {
+    else if (
+      typeof balanceBefore === "number" &&
+      typeof balanceAfter === "number"
+    ) {
       const delta = balanceBefore - balanceAfter;
       if (delta > 0) cost = delta;
     }
@@ -6607,7 +7885,11 @@ async function pollJob(job) {
     return;
   }
   if (state === "fail") {
-    await failJob(job, data.data?.failMsg || `Generation failed (code ${data.data?.failCode ?? "?"}).`);
+    await failJob(
+      job,
+      data.data?.failMsg ||
+        `Generation failed (code ${data.data?.failCode ?? "?"}).`,
+    );
     return;
   }
   setTimeout(() => pollJob(job), POLL_INTERVAL_MS);
@@ -6617,7 +7899,13 @@ async function pollJob(job) {
 // Create a PENDING history entry at submit time so the prompt/settings are saved
 // immediately — a run that later fails, stalls, or is cancelled won't lose them.
 // Returns the new entry's id (to attach the output to on success).
-async function createHistoryEntry(input, taskId, mediaLocalIds, projectId, refSecs) {
+async function createHistoryEntry(
+  input,
+  taskId,
+  mediaLocalIds,
+  projectId,
+  refSecs,
+) {
   try {
     const res = await fetch("/api/history", {
       method: "POST",
@@ -6697,7 +7985,10 @@ async function loadHistory() {
     // A run generated from a saved prompt links itself when its output lands — or a
     // linked run just finished — so the saved-prompt cards need a fresh look.
     const linkKey = historyEntries
-      .filter((e) => e.savedPromptLinked || savedPrompts.some((p) => p.historyId === e.id))
+      .filter(
+        (e) =>
+          e.savedPromptLinked || savedPrompts.some((p) => p.historyId === e.id),
+      )
       .map((e) => `${e.id}:${e.status}`)
       .join();
     if (linkKey !== lastHistoryLinkKey) {
@@ -6716,7 +8007,10 @@ async function loadHistory() {
 // land on status "failed"), so it's handled here rather than via entryTags.
 function filterHistory(entries) {
   const filter = historyFilter.value || "all";
-  const byProject = filter === "all" ? entries : entries.filter((e) => (e.projectId || "default") === filter);
+  const byProject =
+    filter === "all" ? entries : (
+      entries.filter((e) => (e.projectId || "default") === filter)
+    );
   if (!hiddenTags.size) return byProject;
   return byProject.filter((e) => {
     if (hiddenTags.has("cancelled") && e.status === "failed") return false;
@@ -6731,7 +8025,10 @@ function entryTags(entry) {
   const src = entry.localVideo || entry.resultUrl || "";
   if (src) {
     const input = entry.input || {};
-    const isImg = (input.model || "").startsWith("comfy:") ? isImageFile(src) : isImageOutput(input.model);
+    const isImg =
+      (input.model || "").startsWith("comfy:") ?
+        isImageFile(src)
+      : isImageOutput(input.model);
     tags.push(isImg ? "image" : "video");
   }
   if (entry.favorite) tags.push("favorite");
@@ -6759,7 +8056,8 @@ const isImageFile = (u) => {
 // resultUrl/localVideo, normalized here to a one-item list.
 function entryOutputs(entry) {
   if (entry.outputs && entry.outputs.length) return entry.outputs;
-  if (entry.localVideo || entry.resultUrl) return [{ resultUrl: entry.resultUrl, localVideo: entry.localVideo }];
+  if (entry.localVideo || entry.resultUrl)
+    return [{ resultUrl: entry.resultUrl, localVideo: entry.localVideo }];
   return [];
 }
 
@@ -6767,10 +8065,14 @@ function entryOutputs(entry) {
 function outputMedia(entry, out, index, total) {
   const input = entry.input || {};
   const src = out.localVideo || out.resultUrl; // localVideo is the saved output file
-  const kind = (input.model || "").startsWith("comfy:")
-    ? isImageFile(src) ? "image" : "video"
-    : isImageOutput(input.model) ? "image" : "video";
-  const name = total > 1 ? `${input.prompt || ""} (${index + 1}/${total})` : input.prompt;
+  const kind =
+    (input.model || "").startsWith("comfy:") ?
+      isImageFile(src) ? "image"
+      : "video"
+    : isImageOutput(input.model) ? "image"
+    : "video";
+  const name =
+    total > 1 ? `${input.prompt || ""} (${index + 1}/${total})` : input.prompt;
   return { kind, src, name };
 }
 
@@ -6797,7 +8099,10 @@ function openHistoryLightbox(entry, outIndex = 0) {
   const items = flattenHistoryOutputs();
   let index = items.findIndex((it) => it.src === m.src);
   if (index < 0) index = 0;
-  openLightbox(items[index].kind, items[index].src, items[index].name, { items, index });
+  openLightbox(items[index].kind, items[index].src, items[index].name, {
+    items,
+    index,
+  });
 }
 
 // Human-readable spend category for a model id, used in the per-project credit
@@ -6821,7 +8126,7 @@ function creditCategory(model) {
 function renderProjectCredits() {
   if (!projectCreditsTotal) return;
   const entries = historyEntries.filter(
-    (e) => (e.projectId || "default") === activeProjectId
+    (e) => (e.projectId || "default") === activeProjectId,
   );
   let total = 0;
   const byCat = new Map();
@@ -6875,12 +8180,18 @@ function buildHistDetails(entry, input, comfyEntry, isImg) {
     push("Scheduler", v.scheduler);
     push("Steps", v.steps);
     push("Seed", v.seed);
-    push("Duration", v.duration != null && v.duration !== "" ? `${v.duration}s` : v.duration);
+    push(
+      "Duration",
+      v.duration != null && v.duration !== "" ? `${v.duration}s` : v.duration,
+    );
     // Chain position in full, next to the settings it has to stay consistent with.
     const chain = entry.continuation;
     if (chain?.slot) {
       push("Chain slot", chain.slot);
-      push("Continues from", chain.from ? `slot ${chain.from}` : "— chain start");
+      push(
+        "Continues from",
+        chain.from ? `slot ${chain.from}` : "— chain start",
+      );
     }
   } else if (isImg) {
     push("Aspect ratio", input.aspect_ratio);
@@ -6890,7 +8201,12 @@ function buildHistDetails(entry, input, comfyEntry, isImg) {
   } else {
     push("Resolution", input.resolution);
     push("Aspect ratio", input.aspect_ratio);
-    push("Duration", input.duration != null && input.duration !== "" ? `${input.duration}s` : input.duration);
+    push(
+      "Duration",
+      input.duration != null && input.duration !== "" ?
+        `${input.duration}s`
+      : input.duration,
+    );
     push("Seed", input.seed);
   }
 
@@ -6927,9 +8243,13 @@ function buildHistDetails(entry, input, comfyEntry, isImg) {
       const cell = document.createElement("div");
       // Images are larger and carry action buttons; video/audio stay compact.
       cell.className =
-        "hist-ref" + (r.kind === "image" ? " hist-ref-lg" : "") + (r.kind === "audio" ? " audio-thumb" : "");
+        "hist-ref" +
+        (r.kind === "image" ? " hist-ref-lg" : "") +
+        (r.kind === "audio" ? " audio-thumb" : "");
       cell.title = r.name || r.kind;
-      cell.appendChild(makeThumbContent(r.kind, { thumb: r.thumb, name: r.name }));
+      cell.appendChild(
+        makeThumbContent(r.kind, { thumb: r.thumb, name: r.name }),
+      );
       if (r.kind === "image") {
         const bar = document.createElement("div");
         bar.className = "hist-ref-bar";
@@ -6984,7 +8304,8 @@ function historyRefMedia(entry) {
   const byId = new Map(galleryItems.map((i) => [i.id, i]));
   const out = [];
   const addUrls = (urls, kind) => {
-    for (const u of urls || []) if (u) out.push({ kind, id: null, thumb: u, name: urlBasename(u) });
+    for (const u of urls || [])
+      if (u) out.push({ kind, id: null, thumb: u, name: urlBasename(u) });
   };
   const addLocal = (ids, kind) => {
     for (const id of ids || []) {
@@ -6995,9 +8316,11 @@ function historyRefMedia(entry) {
   const imgUrls = input.reference_image_urls || input.image_urls;
   if (imgUrls?.length) addUrls(imgUrls, "image");
   else addLocal(mli.image || entry.imageLocalIds, "image");
-  if (input.reference_video_urls?.length) addUrls(input.reference_video_urls, "video");
+  if (input.reference_video_urls?.length)
+    addUrls(input.reference_video_urls, "video");
   else addLocal(mli.video, "video");
-  if (input.reference_audio_urls?.length) addUrls(input.reference_audio_urls, "audio");
+  if (input.reference_audio_urls?.length)
+    addUrls(input.reference_audio_urls, "audio");
   else addLocal(mli.audio, "audio");
   return out;
 }
@@ -7008,9 +8331,13 @@ function historyRefMedia(entry) {
 // true on success, false if the field is full or a local file was required but the
 // reference is a remote-only URL.
 function addRefToPictureField(r) {
-  const comfyActive = comfyControlsEl && !comfyControlsEl.classList.contains("hidden");
-  const comfyImg = comfyActive
-    ? comfyFields.find((f) => f.mediaKind === "image" && typeof f.addMedia === "function")
+  const comfyActive =
+    comfyControlsEl && !comfyControlsEl.classList.contains("hidden");
+  const comfyImg =
+    comfyActive ?
+      comfyFields.find(
+        (f) => f.mediaKind === "image" && typeof f.addMedia === "function",
+      )
     : null;
   if (comfyImg) {
     // ComfyUI needs a saved local file; remote-only kie URLs can't be used here.
@@ -7028,7 +8355,11 @@ function addRefToPictureField(r) {
 function urlBasename(u) {
   try {
     const p = new URL(u, location.origin);
-    return p.searchParams.get("filename") || decodeURIComponent(p.pathname.split("/").pop() || "") || u;
+    return (
+      p.searchParams.get("filename") ||
+      decodeURIComponent(p.pathname.split("/").pop() || "") ||
+      u
+    );
   } catch {
     return String(u).split("/").pop() || u;
   }
@@ -7045,7 +8376,9 @@ function goHistoryPage(n) {
 // null standing in for an ellipsis gap. e.g. 1 … 4 5 6 … 20.
 function historyPageNumbers(current, total) {
   const pages = new Set([1, total, current, current - 1, current + 1]);
-  const shown = [...pages].filter((p) => p >= 1 && p <= total).sort((a, b) => a - b);
+  const shown = [...pages]
+    .filter((p) => p >= 1 && p <= total)
+    .sort((a, b) => a - b);
   const out = [];
   let prev = 0;
   for (const p of shown) {
@@ -7069,11 +8402,14 @@ function renderHistoryPager(pageCount) {
     b.className = "hist-page-btn" + (current ? " current" : "");
     b.textContent = label;
     b.disabled = disabled;
-    if (!disabled && !current) b.addEventListener("click", () => goHistoryPage(page));
+    if (!disabled && !current)
+      b.addEventListener("click", () => goHistoryPage(page));
     return b;
   };
 
-  historyPager.appendChild(mkBtn("‹ Prev", historyPage - 1, { disabled: historyPage <= 1 }));
+  historyPager.appendChild(
+    mkBtn("‹ Prev", historyPage - 1, { disabled: historyPage <= 1 }),
+  );
   for (const p of historyPageNumbers(historyPage, pageCount)) {
     if (p === null) {
       const gap = document.createElement("span");
@@ -7081,10 +8417,14 @@ function renderHistoryPager(pageCount) {
       gap.textContent = "…";
       historyPager.appendChild(gap);
     } else {
-      historyPager.appendChild(mkBtn(String(p), p, { current: p === historyPage }));
+      historyPager.appendChild(
+        mkBtn(String(p), p, { current: p === historyPage }),
+      );
     }
   }
-  historyPager.appendChild(mkBtn("Next ›", historyPage + 1, { disabled: historyPage >= pageCount }));
+  historyPager.appendChild(
+    mkBtn("Next ›", historyPage + 1, { disabled: historyPage >= pageCount }),
+  );
 }
 
 function renderHistory(entries) {
@@ -7125,7 +8465,9 @@ function renderHistory(entries) {
         const ph = document.createElement("div");
         ph.className = `hist-placeholder ${entry.status === "pending" ? "pending" : "unfinished"}`;
         ph.textContent =
-          entry.status === "pending" ? "⏳ Generating…" : entry.error || "no output — re-run below";
+          entry.status === "pending" ?
+            "⏳ Generating…"
+          : entry.error || "no output — re-run below";
         if (entry.error) ph.title = entry.error;
         card.appendChild(ph);
       }
@@ -7136,11 +8478,13 @@ function renderHistory(entries) {
       // run that produced several outputs (a batch) shows them all in a grid.
       const outs = entryOutputs(entry);
       const thumb = document.createElement("div");
-      thumb.className = "hist-thumb" + (outs.length > 1 ? " hist-thumb-grid" : "");
+      thumb.className =
+        "hist-thumb" + (outs.length > 1 ? " hist-thumb-grid" : "");
       outs.forEach((o, i) => {
         const src = o.localVideo || o.resultUrl;
         if (!src) return;
-        const oIsImg = comfyEntry ? isImageFile(src) : isImageOutput(input.model);
+        const oIsImg =
+          comfyEntry ? isImageFile(src) : isImageOutput(input.model);
         if (oIsImg) {
           const im = document.createElement("img");
           im.src = src;
@@ -7174,13 +8518,19 @@ function renderHistory(entries) {
     const meta = document.createElement("div");
     meta.className = "hist-meta";
     const date = new Date(entry.createdAt).toLocaleString();
-    const cost = typeof entry.costCredits === "number" ? ` · ${entry.costCredits.toLocaleString()} credits` : "";
+    const cost =
+      typeof entry.costCredits === "number" ?
+        ` · ${entry.costCredits.toLocaleString()} credits`
+      : "";
     // generation run-time (wall time from submit to finished output)
     const rt = entry.runtimeMs ? ` · ⏱ ${fmtDuration(entry.runtimeMs)}` : "";
     // show which project the entry belongs to when viewing all projects
-    const proj = filter === "all" ? ` · ${projectName(entry.projectId || "default")}` : "";
+    const proj =
+      filter === "all" ? ` · ${projectName(entry.projectId || "default")}` : "";
     if (comfyEntry) {
-      const wfName = input.workflow || input.model.slice("comfy:".length).replace(/\.json$/i, "");
+      const wfName =
+        input.workflow ||
+        input.model.slice("comfy:".length).replace(/\.json$/i, "");
       meta.textContent = `${date} · ComfyUI · ${wfName}`;
       // Chain position, for a run that has one. "⛓ 6→9" = read slot 6, wrote slot 9;
       // a bare "⛓ 9" is a chain start. What a slot *holds* is the workflow's business
@@ -7192,8 +8542,9 @@ function renderHistory(entries) {
         const tag = document.createElement("span");
         tag.className = "hist-chain";
         tag.textContent = `· ⛓ ${chain.from ? `${chain.from}→` : ""}${chain.slot}`;
-        tag.title = chain.from
-          ? `Continues slot ${chain.from} · this run writes slot ${chain.slot}`
+        tag.title =
+          chain.from ?
+            `Continues slot ${chain.from} · this run writes slot ${chain.slot}`
           : `Chain start · this run writes slot ${chain.slot}`;
         meta.append(" ", tag);
       }
@@ -7203,7 +8554,10 @@ function renderHistory(entries) {
         `${date} · ${seedreamLabel(input.model)} · ${input.quality || "basic"} · ${input.aspect_ratio || "?"}` +
         `${cost}${rt}${proj}`;
     } else {
-      const variant = VIDEO_VARIANT_LABEL[input.model] ? ` · ${VIDEO_VARIANT_LABEL[input.model]}` : "";
+      const variant =
+        VIDEO_VARIANT_LABEL[input.model] ?
+          ` · ${VIDEO_VARIANT_LABEL[input.model]}`
+        : "";
       // H3 image-to-video has no aspect_ratio at all — leave the segment out rather
       // than printing a "?" for a setting the model never had.
       const ratio = input.aspect_ratio ? ` · ${input.aspect_ratio}` : "";
@@ -7236,16 +8590,20 @@ function renderHistory(entries) {
     editPromptBtn.className = "btn-secondary hidden";
     editPromptBtn.innerHTML = '<span class="btn-ico">✎</span> Edit prompt';
     editPromptBtn.addEventListener("click", () => {
-      if (linkedPrompt) openPromptEditor(linkedPrompt, entry.projectId || "default");
+      if (linkedPrompt)
+        openPromptEditor(linkedPrompt, entry.projectId || "default");
     });
     actions.appendChild(editPromptBtn);
     const onLinked = (p) => {
       linkedPrompt = p;
       editPromptBtn.classList.toggle("hidden", !p);
-      editPromptBtn.title = p ? `Edit the linked saved prompt "${p.title}"` : "";
-      reimport.innerHTML = p ? '<span class="btn-ico">📌</span> Re-import' : "Re-import";
-      reimport.title = p
-        ? `Load this run's model and settings with the linked saved prompt "${p.title}" (its text, references and duration)`
+      editPromptBtn.title =
+        p ? `Edit the linked saved prompt "${p.title}"` : "";
+      reimport.innerHTML =
+        p ? '<span class="btn-ico">📌</span> Re-import' : "Re-import";
+      reimport.title =
+        p ?
+          `Load this run's model and settings with the linked saved prompt "${p.title}" (its text, references and duration)`
         : "Load this run's prompt, references and settings into the form";
     };
 
@@ -7253,8 +8611,11 @@ function renderHistory(entries) {
     // run that carries a slot. The workflow list is already in memory, so this
     // self-heals: drop the tags from the .json and the buttons disappear.
     const cont = entry.continuation;
-    const wfMeta = comfyEntry
-      ? comfyWorkflows.find((w) => w.file === (input.model || "").slice("comfy:".length))
+    const wfMeta =
+      comfyEntry ?
+        comfyWorkflows.find(
+          (w) => w.file === (input.model || "").slice("comfy:".length),
+        )
       : null;
     const roles = wfMeta?.roles || {};
     const when = new Date(entry.createdAt || Number(entry.id)).toLocaleString();
@@ -7268,8 +8629,14 @@ function renderHistory(entries) {
       contBtn.addEventListener("click", async () => {
         await applyEntry(entry); // reselects the workflow and prefills everything
         armContinuation(
-          { parentId: entry.id, from: cont.slot, into: null, file: wfMeta.file, label: when },
-          input.values || {}
+          {
+            parentId: entry.id,
+            from: cont.slot,
+            into: null,
+            file: wfMeta.file,
+            label: when,
+          },
+          input.values || {},
         );
         window.scrollTo({ top: 0, behavior: "smooth" });
       });
@@ -7284,12 +8651,19 @@ function renderHistory(entries) {
       rollBtn.type = "button";
       rollBtn.className = "btn-secondary";
       rollBtn.innerHTML = '<span class="btn-ico">↻</span> Re-roll';
-      rollBtn.title = "Regenerate this run in place, keeping its place in the chain";
+      rollBtn.title =
+        "Regenerate this run in place, keeping its place in the chain";
       rollBtn.addEventListener("click", async () => {
         await applyEntry(entry);
         armContinuation(
-          { parentId: cont.parentId, from: cont.from, into: cont.slot, file: wfMeta.file, label: when },
-          input.values || {}
+          {
+            parentId: cont.parentId,
+            from: cont.from,
+            into: cont.slot,
+            file: wfMeta.file,
+            label: when,
+          },
+          input.values || {},
         );
         window.scrollTo({ top: 0, behavior: "smooth" });
       });
@@ -7305,7 +8679,7 @@ function renderHistory(entries) {
       if (entryProject !== activeProjectId) {
         const ok = confirm(
           `This generation is from project "${projectName(entryProject)}".\n` +
-            `The new result will be saved to the active project "${projectName(activeProjectId)}".\n\nContinue?`
+            `The new result will be saved to the active project "${projectName(activeProjectId)}".\n\nContinue?`,
         );
         if (!ok) return;
       }
@@ -7321,8 +8695,12 @@ function renderHistory(entries) {
     copyBtn.innerHTML = '<span class="btn-ico">⧉</span> Prompt';
     copyBtn.title = "Copy the prompt to the clipboard";
     copyBtn.addEventListener("click", async () => {
-      copyBtn.textContent = (await copyText(input.prompt || "")) ? "Copied!" : "Copy failed";
-      setTimeout(() => (copyBtn.innerHTML = '<span class="btn-ico">⧉</span> Prompt'), 1200);
+      copyBtn.textContent =
+        (await copyText(input.prompt || "")) ? "Copied!" : "Copy failed";
+      setTimeout(
+        () => (copyBtn.innerHTML = '<span class="btn-ico">⧉</span> Prompt'),
+        1200,
+      );
     });
     actions.appendChild(copyBtn);
 
@@ -7336,19 +8714,24 @@ function renderHistory(entries) {
 
     // Re-download the saved output from its source URL — recovers a run whose local
     // file failed to save or went missing. Only shown when there's a source to fetch.
-    const hasSource = !!(entry.resultUrl || (entry.outputs || []).some((o) => o.resultUrl));
+    const hasSource = !!(
+      entry.resultUrl || (entry.outputs || []).some((o) => o.resultUrl)
+    );
     if (hasSource) {
       const refreshBtn = document.createElement("button");
       refreshBtn.type = "button";
       refreshBtn.className = "btn-secondary";
       refreshBtn.innerHTML = '<span class="btn-ico">⟳</span> Refresh';
-      refreshBtn.title = "Re-download the output file from the source (fixes a missing or wrong saved file)";
+      refreshBtn.title =
+        "Re-download the output file from the source (fixes a missing or wrong saved file)";
       refreshBtn.addEventListener("click", async () => {
         refreshBtn.disabled = true;
         const prev = refreshBtn.innerHTML;
         refreshBtn.innerHTML = "Refreshing…";
         try {
-          const res = await fetch(`/api/history/${entry.id}/redownload`, { method: "POST" });
+          const res = await fetch(`/api/history/${entry.id}/redownload`, {
+            method: "POST",
+          });
           const data = await res.json();
           if (!res.ok) throw new Error(data.msg || "Re-download failed");
           refreshBtn.innerHTML = "Refreshed!";
@@ -7372,7 +8755,9 @@ function renderHistory(entries) {
       galleryBtn.addEventListener("click", async () => {
         galleryBtn.disabled = true;
         try {
-          const res = await fetch(`/api/history/${entry.id}/to-gallery`, { method: "POST" });
+          const res = await fetch(`/api/history/${entry.id}/to-gallery`, {
+            method: "POST",
+          });
           const data = await res.json();
           if (!res.ok) throw new Error(data.msg || "Failed to add to gallery");
           galleryBtn.innerHTML = "Added!";
@@ -7403,7 +8788,10 @@ function renderHistory(entries) {
       projSel.appendChild(opt);
     }
     const entryProjectId = entry.projectId || "default";
-    projSel.value = projSel.querySelector(`option[value="${entryProjectId}"]`) ? entryProjectId : "default";
+    projSel.value =
+      projSel.querySelector(`option[value="${entryProjectId}"]`) ?
+        entryProjectId
+      : "default";
     projSel.addEventListener("change", async () => {
       try {
         const res = await fetch(`/api/history/${entry.id}`, {
@@ -7430,11 +8818,22 @@ function renderHistory(entries) {
     del.addEventListener("click", async (e) => {
       // Ctrl (or ⌘) + click deletes immediately, skipping the confirm prompt.
       const skipConfirm = e.ctrlKey || e.metaKey;
-      if (!skipConfirm && !confirm("Delete this history item? This also removes its saved output file and can't be undone.")) return;
+      if (
+        !skipConfirm &&
+        !confirm(
+          "Delete this history item? This also removes its saved output file and can't be undone.",
+        )
+      )
+        return;
       del.disabled = true;
       try {
-        const res = await fetch(`/api/history/${entry.id}`, { method: "DELETE" });
-        if (!res.ok) throw new Error((await res.json().catch(() => ({}))).msg || "Delete failed");
+        const res = await fetch(`/api/history/${entry.id}`, {
+          method: "DELETE",
+        });
+        if (!res.ok)
+          throw new Error(
+            (await res.json().catch(() => ({}))).msg || "Delete failed",
+          );
         loadHistory();
       } catch (err) {
         alert(err.message || String(err));
@@ -7447,19 +8846,23 @@ function renderHistory(entries) {
     // both also relocate the saved file server-side.
     const favBtn = document.createElement("button");
     favBtn.type = "button";
-    favBtn.className = "btn-secondary hist-tag-toggle" + (entry.favorite ? " active" : "");
+    favBtn.className =
+      "btn-secondary hist-tag-toggle" + (entry.favorite ? " active" : "");
     favBtn.innerHTML = entry.favorite ? "★ Favorite" : "☆ Favorite";
-    favBtn.title = entry.favorite
-      ? "Remove from favorites (moves the file out of favorites/)"
+    favBtn.title =
+      entry.favorite ?
+        "Remove from favorites (moves the file out of favorites/)"
       : "Mark as favorite (moves the file into favorites/)";
     favBtn.addEventListener("click", () => toggleHistoryTag(entry, "favorite"));
     actions.appendChild(favBtn);
 
     const draftBtn = document.createElement("button");
     draftBtn.type = "button";
-    draftBtn.className = "btn-secondary hist-tag-toggle" + (entry.draft ? " active" : "");
+    draftBtn.className =
+      "btn-secondary hist-tag-toggle" + (entry.draft ? " active" : "");
     draftBtn.innerHTML = "📝 Draft";
-    draftBtn.title = entry.draft ? "Remove the draft tag" : "Tag this as a draft";
+    draftBtn.title =
+      entry.draft ? "Remove the draft tag" : "Tag this as a draft";
     draftBtn.addEventListener("click", () => toggleHistoryTag(entry, "draft"));
     actions.appendChild(draftBtn);
 
@@ -7495,17 +8898,23 @@ async function applyEntry(entry) {
     if (![...modelSelect.options].some((o) => o.value === input.model)) {
       setError(
         `Workflow "${input.workflow || input.model.slice("comfy:".length)}" isn't loaded — ` +
-          `put its .json back in the workflows folder and reload.`
+          `put its .json back in the workflows folder and reload.`,
       );
       return;
     }
     modelSelect.value = input.model;
     applyModelUI(); // kicks off the async control render (ComfyUI options + settings)
     await comfyRenderPromise; // wait for the controls to exist before filling them
-    prefillComfyControls({ ...(input.values || {}), ...(input.valueTemplates || {}) });
-    if (comfyLoraControl && Array.isArray(input.loras)) comfyLoraControl.setLoras(input.loras);
-    if (comfyMediaControl && Array.isArray(input.workflowMedia)) comfyMediaControl.setMedia(input.workflowMedia);
-    if (comfyBypassControl && Array.isArray(input.bypass)) comfyBypassControl.setDisabled(input.bypass);
+    prefillComfyControls({
+      ...(input.values || {}),
+      ...(input.valueTemplates || {}),
+    });
+    if (comfyLoraControl && Array.isArray(input.loras))
+      comfyLoraControl.setLoras(input.loras);
+    if (comfyMediaControl && Array.isArray(input.workflowMedia))
+      comfyMediaControl.setMedia(input.workflowMedia);
+    if (comfyBypassControl && Array.isArray(input.bypass))
+      comfyBypassControl.setDisabled(input.bypass);
     await restoreComfyMedia(entry); // re-populate the image/video/audio fields
     // "Generate preview" is a persisted global preference — re-import leaves it as-is.
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -7514,11 +8923,15 @@ async function applyEntry(entry) {
 
   modelSelect.value = input.model || "bytedance/seedance-2";
   // Restore the 2.5 image-source mode (frames if the entry saved either keyframe).
-  const savedMode = input.first_frame_url || input.last_frame_url ? "frames" : "refs";
-  const modeRadio = document.querySelector(`input[name="imageSource"][value="${savedMode}"]`);
+  const savedMode =
+    input.first_frame_url || input.last_frame_url ? "frames" : "refs";
+  const modeRadio = document.querySelector(
+    `input[name="imageSource"][value="${savedMode}"]`,
+  );
   if (modeRadio) modeRadio.checked = true;
   applyModelUI(); // shape the form (and aspect options) before filling values
-  document.getElementById("prompt").value = input.promptTemplate || input.prompt || "";
+  document.getElementById("prompt").value =
+    input.promptTemplate || input.prompt || "";
   // applyModelUI already populated this model family's options and picked a
   // default; only override when the saved entry recorded one.
   if (input.resolution) resolutionSelect.value = input.resolution;
@@ -7528,14 +8941,19 @@ async function applyEntry(entry) {
   // override when the saved entry recorded one.
   if (input.output_format) outputFormatSelect.value = input.output_format;
   updatePromptCount();
-  if (input.duration) document.getElementById("duration").value = input.duration;
-  document.getElementById("generate_audio").checked = input.generate_audio !== false;
+  if (input.duration)
+    document.getElementById("duration").value = input.duration;
+  document.getElementById("generate_audio").checked =
+    input.generate_audio !== false;
   document.getElementById("web_search").checked = !!input.web_search;
   document.getElementById("nsfw_checker").checked = !!input.nsfw_checker;
-  document.getElementById("return_last_frame").checked = !!input.return_last_frame;
+  document.getElementById("return_last_frame").checked =
+    !!input.return_last_frame;
   // "Generate preview" is a persisted global preference — re-import leaves it as-is.
 
-  const saved = await fetch("/api/images").then((r) => r.json()).then((d) => d.data || []);
+  const saved = await fetch("/api/images")
+    .then((r) => r.json())
+    .then((d) => d.data || []);
   const localIds = entry.mediaLocalIds || { image: entry.imageLocalIds || [] };
   const urlsByKind = {
     image: input.reference_image_urls || input.image_urls || [],
@@ -7605,9 +9023,12 @@ function resumeFromHistory() {
   if (resumedOnce) return;
   resumedOnce = true;
   let attached = false;
-  for (const entry of historyEntries) attached = trackPendingEntry(entry) || attached;
+  for (const entry of historyEntries)
+    attached = trackPendingEntry(entry) || attached;
   if (attached) renderHistory(historyEntries); // drop the freshly-attached live status into the cards
-  lastPendingKey = pendingKey(historyEntries.filter((e) => e.status === "pending"));
+  lastPendingKey = pendingKey(
+    historyEntries.filter((e) => e.status === "pending"),
+  );
   scheduleSyncPending();
 }
 
@@ -7621,7 +9042,11 @@ const SYNC_PENDING_ACTIVE_MS = 5000; // something pending — check often
 const SYNC_PENDING_IDLE_MS = 20000; // nothing pending — just watch for runs from elsewhere
 let syncPendingTimer = null;
 let lastPendingKey = "";
-const pendingKey = (list) => list.map((e) => e.id).sort().join(",");
+const pendingKey = (list) =>
+  list
+    .map((e) => e.id)
+    .sort()
+    .join(",");
 
 function scheduleSyncPending(delay) {
   clearTimeout(syncPendingTimer);
@@ -7633,7 +9058,8 @@ async function syncPending() {
   try {
     const res = await fetch("/api/history/pending");
     const data = await res.json();
-    if (!res.ok || data.code !== 200) throw new Error(data.msg || "sync failed");
+    if (!res.ok || data.code !== 200)
+      throw new Error(data.msg || "sync failed");
     pending = data.data || [];
   } catch {
     scheduleSyncPending(); // transient — retry next tick
@@ -7649,7 +9075,9 @@ async function syncPending() {
     lastPendingKey = key;
     loadHistory(); // renderHistory re-parents live-status elements, so active cards stay live
   }
-  scheduleSyncPending(pending.length ? SYNC_PENDING_ACTIVE_MS : SYNC_PENDING_IDLE_MS);
+  scheduleSyncPending(
+    pending.length ? SYNC_PENDING_ACTIVE_MS : SYNC_PENDING_IDLE_MS,
+  );
 }
 
 // --- server-down banner ----------------------------------------------------------
@@ -7704,7 +9132,9 @@ function renderComfyStats(d) {
   }
   parts.push(`GPU ${pct(d.gpu)}`);
   if (d.vram) {
-    parts.push(`VRAM ${d.vram.pct}% (${gb(d.vram.used)}/${gb(d.vram.total)} GB)`);
+    parts.push(
+      `VRAM ${d.vram.pct}% (${gb(d.vram.used)}/${gb(d.vram.total)} GB)`,
+    );
   } else {
     parts.push("VRAM –");
   }
@@ -7721,8 +9151,14 @@ freeVramBtn.addEventListener("click", async () => {
   freeVramBtn.textContent = "Freeing…";
   let msg;
   try {
-    const d = await fetch("/api/comfy/free", { method: "POST" }).then((r) => r.json());
-    msg = d?.code === 200 ? (running ? "Frees after this run" : "Freed") : "Couldn't free";
+    const d = await fetch("/api/comfy/free", { method: "POST" }).then((r) =>
+      r.json(),
+    );
+    msg =
+      d?.code === 200 ?
+        running ? "Frees after this run"
+        : "Freed"
+      : "Couldn't free";
   } catch {
     msg = "Couldn't free";
   }
