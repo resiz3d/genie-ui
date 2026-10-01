@@ -1130,14 +1130,270 @@ function renderGallery(items) {
   galleryCount.textContent = visible.length ? `(${visible.length})` : "";
   galleryEmpty.classList.toggle("hidden", visible.length > 0);
 
-  for (const item of visible) {
-    galleryEl.appendChild(
-      makeGalleryThumb(item, {
-        onPick: (it) => lists[it.kind || "image"].addFromGallery(it),
+  for (const item of visible) galleryEl.appendChild(makeGalleryCard(item));
+}
+
+// The final frame of a same-origin video as a PNG blob, decoded by the browser (no
+// ffmpeg needed). Seeking to the duration parks the player on the last frame.
+function captureLastFrame(url) {
+  return new Promise((resolve, reject) => {
+    const v = document.createElement("video");
+    v.muted = true;
+    v.preload = "auto";
+    const fail = () =>
+      reject(new Error("This browser couldn't decode the video to read its last frame."));
+    v.addEventListener("error", fail);
+    v.addEventListener("loadedmetadata", () => {
+      if (!Number.isFinite(v.duration) || !v.videoWidth) return fail();
+      v.currentTime = v.duration;
+    });
+    v.addEventListener("seeked", () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = v.videoWidth;
+      canvas.height = v.videoHeight;
+      canvas.getContext("2d").drawImage(v, 0, 0);
+      canvas.toBlob((blob) => (blob ? resolve(blob) : fail()), "image/png");
+      v.removeAttribute("src");
+      v.load(); // release the decoder
+    });
+    v.src = url;
+  });
+}
+
+// Save a video's last frame to a project's gallery as "<name>-last-frame.png".
+// Returns the new gallery entry, or null if the save failed (already reported).
+async function saveLastFrame(url, name, projectId) {
+  const blob = await captureLastFrame(url);
+  const base = String(name || "video").replace(/\.[^.]+$/, "");
+  const file = new File([blob], `${base}-last-frame.png`, { type: "image/png" });
+  return (await uploadToGallery([file], projectId))[0] || null;
+}
+
+// A "Last frame" button: grabs the final frame of the video at `url` into the gallery.
+// `iconOnly` drops the words (the gallery cards' compact action row).
+function makeLastFrameButton(url, name, projectId, { iconOnly = false } = {}) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "btn-secondary";
+  const label = iconOnly ? "⇥" : '<span class="btn-ico">⇥</span> Last frame';
+  btn.innerHTML = label;
+  btn.title =
+    "Save this video's last frame to the gallery as an image (e.g. to start the next clip from it)";
+  btn.addEventListener("click", async () => {
+    btn.disabled = true;
+    btn.innerHTML = iconOnly ? "…" : "Grabbing…";
+    try {
+      const saved = await saveLastFrame(url, name, projectId);
+      btn.innerHTML =
+        !saved ? label
+        : iconOnly ? "✓"
+        : "Added to gallery!";
+    } catch (err) {
+      alert(err.message || String(err));
+      btn.innerHTML = label;
+    }
+    setTimeout(() => {
+      // the gallery re-render may already have replaced this card
+      btn.innerHTML = label;
+      btn.disabled = false;
+    }, 1500);
+  });
+  return btn;
+}
+
+// One card of the main Gallery panel: the preview and its details side by side,
+// with a row of icon-only actions underneath.
+function makeGalleryCard(item) {
+  const kind = item.kind || "image"; // older entries predate the kind field
+  const card = document.createElement("div");
+  card.className = "hist-card gallery-card";
+
+  const thumb = document.createElement("div");
+  thumb.className = `hist-thumb gallery-card-thumb${kind === "audio" ? " audio-thumb" : ""}`;
+  const media = makeThumbContent(kind, {
+    thumb: item.localUrl,
+    name: item.name,
+  });
+  if (kind === "image") media.loading = "lazy";
+  thumb.appendChild(media);
+  thumb.title = "View full size";
+  thumb.addEventListener("click", () =>
+    openLightbox(kind, item.localUrl, item.name),
+  );
+
+  const top = document.createElement("div");
+  top.className = "gallery-card-top";
+
+  // Kind, subject key and date now; size and length are filled in once the media
+  // has loaded. (The filename lives in the Edit modal.)
+  const meta = document.createElement("div");
+  meta.className = "hist-meta";
+  const facts = [
+    kind[0].toUpperCase() + kind.slice(1),
+    item.key ? `@${item.key}` : null,
+    item.createdAt ? new Date(item.createdAt).toLocaleDateString() : null,
+  ];
+  const showFacts = () => (meta.textContent = facts.filter(Boolean).join(" · "));
+  showFacts();
+  if (kind === "image") {
+    media.addEventListener("load", () => {
+      facts.push(`${media.naturalWidth}×${media.naturalHeight}`);
+      showFacts();
+    });
+  } else if (kind === "video") {
+    media.addEventListener("loadedmetadata", () => {
+      facts.push(`${media.videoWidth}×${media.videoHeight}`);
+      if (Number.isFinite(media.duration))
+        facts.push(`${media.duration.toFixed(1)}s`);
+      showFacts();
+    });
+  }
+
+  const actions = document.createElement("div");
+  actions.className = "hist-actions";
+  const button = (html, title, onClick) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "btn-secondary";
+    b.innerHTML = html;
+    b.title = title;
+    b.addEventListener("click", onClick);
+    actions.appendChild(b);
+    return b;
+  };
+  button(
+    "＋",
+    "Use — add to this form's references",
+    () => lists[kind].addFromGallery(item),
+  );
+  button(
+    "✎",
+    "Edit — filename, subject key and definition",
+    () => openGalleryEdit(item),
+  );
+  if (kind === "video") {
+    actions.appendChild(
+      makeLastFrameButton(item.localUrl, item.name, item.projectId || "default", {
+        iconOnly: true,
       }),
     );
   }
+
+  // move to another project (file physically moves)
+  const mv = document.createElement("select");
+  mv.className = "hist-project";
+  mv.title = "Move to another project";
+  const ph = new Option("Move to…", "", true, true);
+  ph.disabled = true;
+  mv.appendChild(ph);
+  for (const p of projects) {
+    if (p.id !== (item.projectId || "default"))
+      mv.appendChild(new Option(p.name, p.id));
+  }
+  mv.addEventListener("change", async () => {
+    try {
+      const res = await fetch(`/api/images/${item.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectId: mv.value }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.msg || "Move failed");
+      loadGallery();
+    } catch (err) {
+      alert(err.message || String(err));
+      mv.value = "";
+    }
+  });
+  actions.appendChild(mv);
+
+  const del = button(
+    "🗑",
+    "Delete this file from the gallery",
+    async () => {
+      if (!confirm(`Delete "${item.name}" from the gallery?`)) return;
+      try {
+        await fetch(`/api/images/${item.id}`, { method: "DELETE" });
+        loadGallery();
+      } catch (err) {
+        console.error(err);
+      }
+    },
+  );
+  del.classList.add("hist-delete");
+
+  top.append(thumb, meta);
+  card.append(top, actions);
+  return card;
 }
+
+// The gallery Edit modal: shows a file's name and edits its subject key + definition.
+// Those live on the gallery file (every prompt using it shares them) — the same pair
+// the saved-prompt editor edits.
+const galleryEditModal = document.getElementById("galleryEditModal");
+const galleryEditKey = document.getElementById("galleryEditKey");
+const galleryEditDef = document.getElementById("galleryEditDef");
+const galleryEditPreview = document.getElementById("galleryEditPreview");
+let galleryEditing = null; // the gallery item open in the modal
+
+function openGalleryEdit(item) {
+  galleryEditing = item;
+  document.getElementById("galleryEditName").textContent =
+    item.name || "(unnamed)";
+  // A playable preview: the image itself, or the video/audio with its controls.
+  const kind = item.kind || "image";
+  const media = document.createElement(kind === "image" ? "img" : kind);
+  media.src = item.localUrl;
+  if (kind !== "image") media.controls = true;
+  galleryEditPreview.replaceChildren(media);
+  galleryEditKey.value = item.key ? `@${item.key}` : "";
+  galleryEditDef.value = item.definition || "";
+  show(galleryEditModal);
+  galleryEditKey.focus();
+}
+
+function closeGalleryEdit() {
+  galleryEditing = null;
+  galleryEditPreview.replaceChildren(); // also stops a playing video/audio
+  hide(galleryEditModal);
+}
+
+async function saveGalleryEdit() {
+  if (!galleryEditing) return;
+  try {
+    const res = await fetch(`/api/images/${galleryEditing.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        key: galleryEditKey.value,
+        definition: galleryEditDef.value,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.msg || "Save failed");
+    closeGalleryEdit();
+    loadGallery();
+  } catch (err) {
+    alert(err.message || String(err));
+  }
+}
+
+document
+  .getElementById("galleryEditCancel")
+  .addEventListener("click", closeGalleryEdit);
+document
+  .getElementById("galleryEditSave")
+  .addEventListener("click", saveGalleryEdit);
+galleryEditModal.addEventListener("click", (e) => {
+  if (e.target === galleryEditModal) closeGalleryEdit();
+});
+galleryEditModal.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closeGalleryEdit();
+  if (e.key === "Enter" && (e.ctrlKey || e.target === galleryEditKey)) {
+    e.preventDefault();
+    saveGalleryEdit();
+  }
+});
 
 // --- credits + estimate ------------------------------------------------------
 async function loadCredits() {
@@ -9196,6 +9452,17 @@ function renderHistory(entries) {
         }
       });
       actions.appendChild(galleryBtn);
+    }
+
+    // ...and a generated video's last frame, as the next clip's starting image
+    if (/^\/output\/.+\.(mp4|webm|mov|mkv)$/i.test(entry.localVideo || "")) {
+      actions.appendChild(
+        makeLastFrameButton(
+          entry.localVideo,
+          `generated-${entry.id}`,
+          entry.projectId || "default",
+        ),
+      );
     }
 
     if (output) actions.appendChild(makeHistoryPromptLink(entry, onLinked));

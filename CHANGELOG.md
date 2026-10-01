@@ -24,6 +24,16 @@ heading for that version with the date, commit, then tag the commit `vX.Y.Z`.
 
 ### Changed
 
+- **The Gallery shows cards, two to a row:** the preview on the left (click to view
+  full size); the kind, @key, date, pixel size and video length on the right; and
+  a row of actions along the bottom — **＋** use, **✎** edit, **Move to…** and
+  **🗑** delete — in place of the icons that sat on each thumbnail. Delete now
+  asks first. **Edit** opens a modal with the filename and the file's **@key**
+  and **definition** — the same pair the saved-prompt editor edits. The
+  "Pick from gallery" pickers inside reference fields keep the compact grid.
+- **⇥ Last frame** on a gallery video and on a History video card saves the clip's
+  final frame to the gallery as a PNG at the video's own resolution, ready to use
+  as the next clip's first frame. It is read in the browser, so no ffmpeg is needed.
 - **Seedance form rules match kie.ai's current API docs** (re-read 2026-10-01).
   - **Seedance 2.5:** first/last-frame mode now hides and leaves out reference video
     and audio (the API treats frames and references as mutually exclusive), and a

@@ -166,7 +166,7 @@
             <input id="file-gallery" type="file" accept="image/*,video/*,audio/*" multiple hidden />
           </div>
           <p class="dz-hint" id="galleryEmpty">No saved media yet.</p>
-          <div id="gallery" class="thumbs gallery"></div>
+          <div id="gallery" class="gallery gallery-list"></div>
         </details>
 
         <div class="row" id="optionsRow">
@@ -333,6 +333,30 @@
         <div class="modal-actions">
           <button type="button" id="savePromptCancel" class="btn-secondary">Cancel</button>
           <button type="button" id="savePromptConfirm">💾 Save</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Opened from a Gallery row's Edit button; filled by openGalleryEdit(). -->
+    <div id="galleryEditModal" class="modal hidden">
+      <div class="modal-box gallery-edit-box" role="dialog" aria-labelledby="galleryEditHeading">
+        <h3 id="galleryEditHeading">Edit gallery file</h3>
+        <div class="gallery-edit-preview" id="galleryEditPreview"></div>
+        <p class="muted gallery-edit-name" id="galleryEditName"></p>
+        <label>
+          Key
+          <input type="text" id="galleryEditKey" class="sp-ref-key-input" maxlength="41" autocomplete="off"
+            placeholder="@key, e.g. genie" title="What a prompt calls this subject (write @key in a MiniMax prompt)." />
+        </label>
+        <label>
+          Definition
+          <textarea id="galleryEditDef" class="sp-ref-def-input" rows="4"
+            placeholder="Who or what this is, e.g. “a red-haired woman in her 30s, green raincoat”"
+            title="Shared by every prompt that uses this file."></textarea>
+        </label>
+        <div class="modal-actions">
+          <button type="button" id="galleryEditCancel" class="btn-secondary">Cancel</button>
+          <button type="button" id="galleryEditSave">💾 Save</button>
         </div>
       </div>
     </div>
