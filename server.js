@@ -12,6 +12,7 @@ import {
   applyReferenceCollections,
   progressPasses,
 } from "./comfy-recognize.js";
+import { createLlm } from "./llm.js";
 import "dotenv/config";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -70,6 +71,9 @@ const IMAGES_FILE = path.join(__dirname, "images.json");
 const PROJECTS_FILE = path.join(__dirname, "projects.json");
 // Wildcards (shared by every project): named lists a prompt picks from at random.
 const WILDCARDS_FILE = path.join(__dirname, "wildcards.json");
+// Global variables ($name, shared by every project); each project also keeps its own
+// in <PROJECT_DATA_DIR>/<slug>/variables.json.
+const VARIABLES_FILE = path.join(__dirname, "variables.json");
 // Per-project data that isn't media: <PROJECT_DATA_DIR>/<slug>/prompts.json holds the
 // project's saved prompts. Keyed by slug like the media folders (slugs survive renames).
 const PROJECT_DATA_DIR = path.resolve(
@@ -1968,6 +1972,7 @@ function ensureComfyWs() {
       return;
     }
     const { type, data } = msg || {};
+    llm.onComfyEvent(type); // a run started elsewhere takes the GPU back from the LLM
     if (type === "execution_start" || type === "executing") {
       if (data?.prompt_id) comfyCurrentPrompt = data.prompt_id;
     } else if (type === "progress") {
@@ -2209,6 +2214,12 @@ app.post("/api/comfy/generate", async (req, res) => {
         msg: err.message || "Workflow could not be prepared",
       });
   }
+  // A prompt-building LLM on the GPU steps aside first (unloads), so the video
+  // model has the room. Bounded: a stuck LLM server never blocks a generation.
+  await Promise.race([
+    llm.yieldForGeneration("a generation started").catch(() => {}),
+    new Promise((r) => setTimeout(r, 30000)),
+  ]);
   try {
     const r = await fetch(`${COMFYUI_URL}/prompt`, {
       method: "POST",
@@ -3320,6 +3331,20 @@ app.delete("/api/projects/:id", (req, res) => {
     fs.rmSync(promptsFile(proj), { force: true });
   } catch {}
 
+  // So do its variables, except names Default already has.
+  const vars = readVariables(proj);
+  if (vars.length) {
+    const def = resolveProject("default");
+    const have = new Set(readVariables(def).map((v) => v.name));
+    writeVariables(def, [
+      ...readVariables(def),
+      ...vars.filter((v) => !have.has(v.name)),
+    ]);
+  }
+  try {
+    fs.rmSync(variablesFile(proj), { force: true });
+  } catch {}
+
   writeJson(
     PROJECTS_FILE,
     projects.filter((p) => p.id !== proj.id),
@@ -3812,6 +3837,156 @@ app.delete("/api/wildcards/:id", (req, res) => {
     list.filter((w) => w.id !== req.params.id),
   );
   res.json({ code: 200, msg: "deleted" });
+});
+
+// --- variables (per project, or global) -------------------------------------
+// A prompt writes $name and the UI swaps in that variable's text at Generate. Each
+// project keeps its own (<PROJECT_DATA_DIR>/<slug>/variables.json); ones marked
+// global live in variables.json and apply to every project. A project variable wins
+// over a global one of the same name. Entries: { id, name, value, createdAt, updatedAt }
+// — `global` is added on the way out, from the file it came from.
+const VARIABLE_MAX_VALUE = 20000;
+
+function variablesFile(proj) {
+  return proj ?
+      path.join(PROJECT_DATA_DIR, proj.slug, "variables.json")
+    : VARIABLES_FILE;
+}
+function readVariables(proj) {
+  const list = readJson(variablesFile(proj));
+  return Array.isArray(list) ? list : [];
+}
+function writeVariables(proj, list) {
+  const file = variablesFile(proj);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  writeJson(file, list);
+}
+
+// Starts with a letter or _, then letters, digits or _ — so "$5" in a prompt is money,
+// and a hyphen or apostrophe after a name ends it.
+function normalizeVariableName(v) {
+  return String(v ?? "")
+    .trim()
+    .replace(/^\$+/, "")
+    .replace(/\s+/g, "_")
+    .replace(/[^\p{L}\p{N}_]/gu, "")
+    .replace(/^\p{N}+/u, "")
+    .toLowerCase()
+    .slice(0, 60);
+}
+
+function variableConflict(list, name, selfId = null) {
+  if (!name) return "a name is required (letters, numbers or _)";
+  return list.some((v) => v.id !== selfId && v.name === name) ?
+      `$${name} already exists here`
+    : null;
+}
+
+const variableOut = (v, global) => ({ ...v, global });
+
+// Both scopes; the client decides precedence (project first).
+app.get("/api/variables", (req, res) => {
+  const proj = findProject(req.query.projectId);
+  if (!proj)
+    return res.status(400).json({ code: 400, msg: "unknown projectId" });
+  res.json({
+    code: 200,
+    msg: "success",
+    data: [
+      ...readVariables(proj).map((v) => variableOut(v, false)),
+      ...readVariables(null).map((v) => variableOut(v, true)),
+    ],
+  });
+});
+
+app.post("/api/variables", (req, res) => {
+  const b = req.body || {};
+  const proj = findProject(b.projectId);
+  if (!proj)
+    return res.status(400).json({ code: 400, msg: "unknown projectId" });
+  const scope = b.global ? null : proj;
+  const list = readVariables(scope);
+  const name = normalizeVariableName(b.name);
+  const problem = variableConflict(list, name);
+  if (problem) return res.status(400).json({ code: 400, msg: problem });
+  const now = new Date().toISOString();
+  const entry = {
+    id: randomUUID(),
+    name,
+    value: String(b.value ?? "").slice(0, VARIABLE_MAX_VALUE),
+    createdAt: now,
+    updatedAt: now,
+  };
+  writeVariables(scope, [...list, entry]);
+  res.json({ code: 200, msg: "saved", data: variableOut(entry, !scope) });
+});
+
+// Updates in place; `global` flipping moves the entry to the other file.
+app.put("/api/variables/:id", (req, res) => {
+  const b = req.body || {};
+  const proj = findProject(b.projectId);
+  if (!proj)
+    return res.status(400).json({ code: 400, msg: "unknown projectId" });
+  let from = proj;
+  let list = readVariables(proj);
+  let entry = list.find((v) => v.id === req.params.id);
+  if (!entry) {
+    from = null;
+    list = readVariables(null);
+    entry = list.find((v) => v.id === req.params.id);
+  }
+  if (!entry)
+    return res.status(404).json({ code: 404, msg: "variable not found" });
+  const to = b.global === undefined ? from : b.global ? null : proj;
+  const name = b.name !== undefined ? normalizeVariableName(b.name) : entry.name;
+  const updated = {
+    ...entry,
+    name,
+    value:
+      b.value !== undefined ?
+        String(b.value ?? "").slice(0, VARIABLE_MAX_VALUE)
+      : entry.value,
+    updatedAt: new Date().toISOString(),
+  };
+  if (to === from) {
+    const problem = variableConflict(list, name, entry.id);
+    if (problem) return res.status(400).json({ code: 400, msg: problem });
+    writeVariables(
+      from,
+      list.map((v) => (v.id === entry.id ? updated : v)),
+    );
+  } else {
+    const dest = readVariables(to);
+    const problem = variableConflict(dest, name);
+    if (problem)
+      return res.status(400).json({
+        code: 400,
+        msg: `${problem} (${to ? "in this project" : "as a global"})`,
+      });
+    writeVariables(to, [...dest, updated]);
+    writeVariables(
+      from,
+      list.filter((v) => v.id !== entry.id),
+    );
+  }
+  res.json({ code: 200, msg: "updated", data: variableOut(updated, !to) });
+});
+
+app.delete("/api/variables/:id", (req, res) => {
+  const proj = findProject(req.query.projectId);
+  if (!proj)
+    return res.status(400).json({ code: 400, msg: "unknown projectId" });
+  for (const scope of [proj, null]) {
+    const list = readVariables(scope);
+    if (list.some((v) => v.id === req.params.id)) {
+      writeVariables(
+        scope,
+        list.filter((v) => v.id !== req.params.id),
+      );
+      return res.json({ code: 200, msg: "deleted" });
+    }
+  }
+  res.status(404).json({ code: 404, msg: "variable not found" });
 });
 
 app.get("/api/prompts", (req, res) => {
@@ -4531,6 +4706,137 @@ app.post("/api/history/:id/to-gallery", (req, res) => {
   writeJson(IMAGES_FILE, images);
 
   res.json({ code: 200, msg: "added", image: galleryEntry });
+});
+
+// --- local LLM: vision prompt builder (see llm.js) -------------------------
+// Free/total VRAM in MiB for the LLM's fit check: nvidia-smi, else ComfyUI's view.
+async function gpuMemory() {
+  const gpus = await nvidiaSmi();
+  if (gpus) {
+    const g = gpus[0];
+    return { freeMiB: g.memTotal - g.memUsed, totalMiB: g.memTotal };
+  }
+  const v = await comfyVram();
+  return v ? { freeMiB: v.total - v.used, totalMiB: v.total } : null;
+}
+
+const llm = createLlm({
+  settingsFile: path.join(path.dirname(APP_SETTINGS_FILE), "llm.json"),
+  comfyUrl: COMFYUI_URL,
+  inputDir: INPUT_DIR,
+  imagesFile: IMAGES_FILE,
+  readJson,
+  findProject,
+  readPrompts,
+  writePrompts,
+  sanitizePromptFields,
+  withRefDetails,
+  gpuMemory,
+  ensureComfyWs,
+  builderFile: (proj) =>
+    path.join(PROJECT_DATA_DIR, proj.slug, "llm-builder.json"),
+});
+
+const llmFail = (res, err, code = 400) =>
+  res.status(code).json({ code, msg: err.message || String(err) });
+
+app.get("/api/llm/settings", (req, res) => {
+  res.json({ code: 200, msg: "success", data: llm.publicSettings() });
+});
+app.put("/api/llm/settings", (req, res) => {
+  try {
+    const s = llm.updateSettings(req.body || {});
+    res.json({ code: 200, msg: "saved", data: llm.publicSettings(s) });
+  } catch (err) {
+    llmFail(res, err);
+  }
+});
+
+// The models a source offers (also the settings' "Test" button). `source` may be an
+// unsaved draft from the settings form; its key falls back to the saved one.
+app.post("/api/llm/models", async (req, res) => {
+  const { sourceId, source } = req.body || {};
+  let src = llm.getSource(sourceId || source?.id);
+  if (source) {
+    src = {
+      ...(src || {}),
+      ...source,
+      apiKey: source.apiKey?.trim() || (source.clearApiKey ? "" : src?.apiKey || ""),
+    };
+    src.baseUrl = String(src.baseUrl || "").trim().replace(/\/+$/, "");
+    src.name ||= "LLM server";
+  }
+  if (!src) return llmFail(res, new Error("unknown source"));
+  try {
+    const [models, gpu] = await Promise.all([llm.listModels(src), gpuMemory()]);
+    res.json({ code: 200, msg: "success", data: { models, gpu } });
+  } catch (err) {
+    llmFail(res, err, 502);
+  }
+});
+
+app.get("/api/llm/status", async (req, res) => {
+  res.json({
+    code: 200,
+    msg: "success",
+    data: { ...llm.status(), gpu: await gpuMemory() },
+  });
+});
+
+// The ✨ Build form as last left in this project, plus its recent builds' inputs.
+app.get("/api/llm/builder", (req, res) => {
+  try {
+    res.json({ code: 200, msg: "success", data: llm.readBuilder(req.query.projectId) });
+  } catch (err) {
+    llmFail(res, err);
+  }
+});
+app.put("/api/llm/builder", (req, res) => {
+  try {
+    const draft = llm.saveDraft(req.body?.projectId, req.body?.draft || {});
+    res.json({ code: 200, msg: "saved", data: draft });
+  } catch (err) {
+    llmFail(res, err);
+  }
+});
+
+// ✏️ Revise one saved prompt as the editor has it. The result waits on the job
+// (GET /api/llm/jobs/:id → data.result); nothing is saved until the user applies it.
+app.post("/api/llm/revise", (req, res) => {
+  try {
+    res.json({ code: 200, msg: "queued", data: llm.startRevise(req.body || {}) });
+  } catch (err) {
+    llmFail(res, err);
+  }
+});
+
+app.post("/api/llm/build", (req, res) => {
+  try {
+    res.json({ code: 200, msg: "queued", data: llm.startBuild(req.body || {}) });
+  } catch (err) {
+    llmFail(res, err);
+  }
+});
+
+app.get("/api/llm/jobs/:id", (req, res) => {
+  const job = llm.getJob(req.params.id);
+  if (!job) return res.status(404).json({ code: 404, msg: "no such build" });
+  res.json({ code: 200, msg: "success", data: job });
+});
+
+app.post("/api/llm/jobs/:id/cancel", (req, res) => {
+  const job = llm.cancelJob(req.params.id);
+  if (!job) return res.status(404).json({ code: 404, msg: "no such build" });
+  res.json({ code: 200, msg: "cancelled", data: job });
+});
+
+app.post("/api/llm/unload", async (req, res) => {
+  try {
+    const did = await llm.unloadNow();
+    res.json({ code: 200, msg: did ? "unloaded" : "nothing loaded" });
+  } catch (err) {
+    llmFail(res, err, 409);
+  }
 });
 
 // IPv4 addresses of this machine on the local network (for the startup hint).

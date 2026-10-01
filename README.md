@@ -108,6 +108,13 @@ submit a prompt + reference media, then polls until the result is ready.
   reloading the tab mid-generation resumes polling automatically on the next load
   (generations can take 5+ minutes; nothing is held on an open connection).
 
+- **✨ Build with AI** — a local vision LLM (LM Studio, text-generation-webui,
+  Ollama, or any OpenAI-compatible server) looks at gallery images and writes
+  prompts from a short description and theme, saved straight to Saved Prompts with
+  the images as references. GENie loads the model only when ComfyUI is idle and
+  VRAM allows (freeing ComfyUI's models if needed), and unloads it the moment a
+  generation starts. See [`docs/LLM.md`](docs/LLM.md).
+
 ### kie.ai cloud (optional)
 
 - **Cloud reference hosting** — dropped files are saved locally and only uploaded to
@@ -127,7 +134,8 @@ submit a prompt + reference media, then polls until the result is ready.
   720p ≈ 41 credits/s, audio on) and refines itself from your measured runs per
   resolution + audio setting. Reference videos appear to bill by the combined
   input + output duration, so their measured lengths are added to the estimate
-  (with a warning if they exceed the 15s total input limit).
+  (with a warning if they exceed the model's total input limit — 15s, or 30s on
+  Seedance 2.5).
 
 ## Setup
 
@@ -304,6 +312,8 @@ server.js          Express proxy (holds the API key)
 public/index.html  UI
 public/style.css   styling
 public/app.js      form handling, image upload, polling, history
+public/llm.js      ✨ Build with AI dialog and LLM settings
+llm.js             LLM sources, GPU turn-taking with ComfyUI, prompt-build jobs
 .env.example       template — copy to .env and add your key
 output/<project>/   downloaded result videos (git-ignored, created at runtime)
 input/<project>/  saved reference media — images/video/audio (git-ignored, created at runtime)
@@ -312,6 +322,7 @@ history.json       generation history (git-ignored, created at runtime)
 images.json        saved-media gallery manifest (git-ignored, created at runtime)
 projects.json      project list (git-ignored, created at runtime)
 projects/<project>/prompts.json  the project's saved prompts (git-ignored, created at runtime)
+settings/llm.json  LLM servers, keys and options (git-ignored, created at runtime)
 ```
 
 The `output/` and `input/` locations can be moved off the app folder by setting

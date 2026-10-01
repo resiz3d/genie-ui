@@ -15,15 +15,11 @@ Seedream (image) models are used by the tool too but aren't documented here yet.
 
 | Model | Source | Confidence |
 | --- | --- | --- |
-| Seedance 2.5 | Official kie.ai API docs (pasted in full into the project) | High — authoritative param table with types/defaults |
-| Seedance 2.0 / Fast | Playground **Form** view at <https://kie.ai/seedance-2-0> | Good — param names + option lists read off the live form |
-| Seedance 2.0 Mini | Playground **Form** view at <https://kie.ai/seedance-2-0-mini> | Good — same |
-| MiniMax H3 | Official OpenAPI specs under <https://docs.kie.ai/market/minimax-h3/> (retrieved 2026-09-17) | High — full schemas with types/enums/defaults |
+| Seedance 2.5 / 2.0 / Fast / Mini | Official OpenAPI specs under <https://docs.kie.ai/market/bytedance/> (retrieved 2026-10-01) | High — full schemas with types/enums/defaults |
+| MiniMax H3 | Official OpenAPI specs under <https://docs.kie.ai/market/minimax-h3/> (retrieved 2026-09-17; re-checked 2026-10-01, unchanged) | High — full schemas with types/enums/defaults |
 
-Retrieved **2026-08-18**. The 2.0/Mini entries come from the rendered playground
-form (which reliably shows a field only when the model supports it), not a formal
-schema doc — so treat option lists as authoritative but re-verify if kie.ai
-revises the pages.
+The index of every doc page is <https://docs.kie.ai/llms.txt>; append `.md` to a
+page URL for its raw OpenAPI spec.
 
 ## Shared request/response mechanics (all models)
 
@@ -68,33 +64,26 @@ Rate limit is ~20 new requests / 10s; rejected requests are **not** queued.
 | --- | :---: | :---: | :---: | :---: |
 | `prompt` | ✓ | ✓ | ✓ | ✓ |
 | `first_frame_url` / `last_frame_url` | ✓ | ✓ | ✓ | ✓ |
-| `reference_image_urls` | ✓ | ✓ (≤9) | ✓ (≤9) | ✓ (≤9) |
-| `reference_video_urls` | ✓ | ✓ | ✓ | ✓ |
-| `reference_audio_urls` | ✓ | ✓ | ✓ | ✓ |
+| `reference_image_urls` | ✓ (≤30) | ✓ (≤9) | ✓ (≤9) | ✓ (≤9) |
+| `reference_video_urls` | ✓ (≤10, total ≤30s, ≤200MB) | ✓ (≤3, total ≤15s, ≤50MB) | same | same |
+| `reference_audio_urls` | ✓ (≤10, total ≤30s) | ✓ (≤3, total ≤15s) | same | same |
 | `generate_audio` | ✓ | ✓ | ✓ | ✓ |
-| `web_search` | ✓ | ✓ | ✓ | ✓ |
+| `web_search` | ✓ | ✓ | t2v only | t2v only |
 | `nsfw_checker` | ✓ | ✓ | ✓ | ✓ |
-| `resolution` (480p/720p) | ✓ | ✓ | ✓ | ✓ |
-| `aspect_ratio` | ✓ +`adaptive` | ✓ | ✓ | ✓ +`adaptive` |
-| `duration` | −1..30 | 4..15 | 4..15 | 4..15 |
+| `resolution` | 480p–1080p | 480p–4k | 480p/720p | 480p/720p |
+| `aspect_ratio` (+`adaptive`) | ✓ (default) | ✓ | ✓ | ✓ |
+| `duration` | 4..30 or −1 | 4..15 or −1 | 4..15 or −1 | 4..15 or −1 |
+| prompt max chars | 30,000 | 20,000 | 20,000 | 20,000 |
 | `output_format` (mp4/mov) | ✓ | ✗ | ✗ | ✗ |
-| `return_last_frame` | ✓ | ✗ | ✗ | ✗ |
+| `return_last_frame` | ✓ | deprecated | deprecated | ✗ |
 
 **Mutual exclusivity:** `reference_image_urls` and the first/last frames cannot be
-combined (the API rejects it; the playground shows them as separate tabs). The tool
-enforces this with an "Image source" toggle. Reference **video** and **audio** stay
-available alongside either choice.
+combined. The tool enforces this with an "Image source" toggle. On **2.5** the
+frames also exclude reference **video** and **audio**, and a last frame needs a
+first frame; on 2.0/Fast/Mini video and audio stay available alongside either
+choice.
 
-## Known discrepancies with the tool (as of 2026-08-18)
-
-Worth a look but **not yet changed** — recorded here so we don't lose track:
-
-1. **Resolution 1080p/4K.** Every documented Seedance video model (including 2.5)
-   lists only `480p` and `720p`. The tool's resolution dropdown also offers
-   `1080p`/`4K`, enabled for standard `bytedance/seedance-2`. That option set isn't
-   backed by any of these docs — verify whether standard 2.0 actually accepts it
-   before relying on it.
-2. **2.5 reference-media limits.** 2.5 allows larger/longer references than
-   2.0/Fast/Mini (video ≤200MB & total ≤30s; audio total ≤30s) but the tool's
-   dropzone hints show the 2.0 numbers (≤50MB, total ≤15s) for all models. Hints
-   understate 2.5's real limits.
+**`nsfw_checker`:** `false` turns off kie.ai's own content filter only — results are
+then "returned directly by the model itself", so the model provider's moderation can
+still reject a prompt. The API default is `false`; the tool always sends the
+checkbox's value explicitly.

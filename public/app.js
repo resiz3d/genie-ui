@@ -770,6 +770,7 @@ async function loadProjects() {
     activeProjectId = "default";
   renderProjectControls();
   loadSavedPrompts(); // project names in the cards (and a vanished active project) changed
+  loadVariables();
 }
 
 function renderProjectControls() {
@@ -810,6 +811,7 @@ function setActiveProject(id) {
   projectSelect.value = id;
   historyFilter.value = id;
   loadSavedPrompts();
+  loadVariables();
   renderGallery(galleryItems);
   historyPage = 1; // changing the filtered set starts back at the first page
   renderHistory(historyEntries);
@@ -1256,6 +1258,12 @@ function updateEstimate() {
   }
 
   const resolution = document.getElementById("resolution").value;
+  if (durationAuto()) {
+    estimateEl.textContent =
+      "No estimate — the model picks the duration (Auto).";
+    estimateEl.title = "";
+    return;
+  }
   const duration = Number(document.getElementById("duration").value) || 0;
   const audioOn =
     isH3() ? null : document.getElementById("generate_audio").checked;
@@ -1271,7 +1279,9 @@ function updateEstimate() {
   const refNote =
     refSecs > 0 ? ` (incl. ~${Math.round(refSecs)}s video ref)` : "";
   const overLimit =
-    refSecs > 15 ? ` ⚠ video refs exceed the 15s total limit` : "";
+    refSecs > refLimits().secs ?
+      ` ⚠ video refs exceed the ${refLimits().secs}s total limit`
+    : "";
   estimateEl.innerHTML = `Est. cost: ~<b>${est.toLocaleString()}</b> credits${refNote}${batchCostNote(est)}${overLimit}`;
   estimateEl.title = `Based on your ${r.n} most recent run${r.n > 1 ? "s" : ""} at this resolution/audio setting (median).`;
 }
@@ -1299,7 +1309,7 @@ const qualitySelect = document.getElementById("quality");
 const aspectSelect = document.getElementById("aspect_ratio");
 
 const VIDEO_ASPECTS = ["16:9", "4:3", "1:1", "3:4", "9:16", "21:9"];
-// Seedance 2.5 and 2.0 Mini add an "adaptive" ratio (2.0 and Fast don't).
+// The Seedance video models and H3 reference-to-video add an "adaptive" ratio.
 const VIDEO_ASPECTS_ADAPTIVE = [
   "adaptive",
   "16:9",
@@ -1374,7 +1384,10 @@ const usesFrames = () =>
 // Which reference fields the active model+mode actually sends. Image models take
 // neither; H3 takes video/audio only in reference-to-video, and takes reference
 // images in that mode alone too.
-const usesRefMedia = () => !isSeedream() && (!isH3() || isH3Ref());
+// Seedance 2.5 goes further than the other Seedance models: its first/last-frame
+// mode excludes reference video and audio too, not just reference images.
+const usesRefMedia = () =>
+  !isSeedream() && (!isH3() || isH3Ref()) && !(is25() && usesFrames());
 const usesRefImages = () => !isT2I() && !isH3T2V() && !usesFrames();
 const isI2I = () =>
   isSeedream() && modelSelect.value.endsWith("-image-to-image");
@@ -1395,15 +1408,35 @@ const MAX_RESOLUTION = {
   "bytedance/seedance-2-mini": "720p",
 };
 
-// Models whose aspect_ratio list includes "adaptive" (2.5 and 2.0 Mini per the
-// kie.ai docs; 2.0 and Fast do not offer it).
-// H3 reference-to-video offers it too (and defaults to it); H3 text-to-video does not.
-const ADAPTIVE_ASPECT_MODELS = new Set([
-  "bytedance/seedance-2-5",
-  "bytedance/seedance-2-mini",
-  "minimax-h3/reference-to-video",
-]);
-const hasAdaptiveAspect = () => ADAPTIVE_ASPECT_MODELS.has(modelSelect.value);
+// Models whose aspect_ratio list includes "adaptive": every Seedance video model per
+// the kie.ai docs, and H3 reference-to-video (which defaults to it); H3
+// text-to-video does not offer it.
+const hasAdaptiveAspect = () => isSeedanceVideo() || isH3Ref();
+
+// Reference-media limits per model: how many of each kind, the total seconds of
+// reference video (and of audio), and the per-video size. Seedance 2.5 is far
+// roomier than the rest, which all share the 2.0 numbers (H3 reference-to-video too).
+const REF_LIMITS_25 = { image: 30, video: 10, audio: 10, secs: 30, videoMB: 200 };
+const REF_LIMITS = { image: 9, video: 3, audio: 3, secs: 15, videoMB: 50 };
+const refLimits = () => (is25() ? REF_LIMITS_25 : REF_LIMITS);
+
+// "Auto" duration (the API's duration: -1) lets a Seedance model pick the length.
+const durationAutoEl = document.getElementById("duration_auto");
+const durationAuto = () => isSeedanceVideo() && durationAutoEl.checked;
+
+// Seedance 2 Fast and Mini only accept web_search for text-to-video, so it is left
+// off a run that carries any reference or keyframe.
+const webSearchT2VOnly = () =>
+  modelSelect.value === "bytedance/seedance-2-fast" ||
+  modelSelect.value === "bytedance/seedance-2-mini";
+function hasActiveMedia() {
+  const ready = (kind) => lists[kind].items.some((i) => i.status === "ready");
+  return (
+    (usesRefImages() && ready("image")) ||
+    (usesRefMedia() && (ready("video") || ready("audio"))) ||
+    (usesFrames() && (ready("firstFrame") || ready("lastFrame")))
+  );
+}
 // Index into RESOLUTION_ORDER of the current model's ceiling (default: 4k).
 const maxResolutionIndex = () =>
   RESOLUTION_ORDER.indexOf(MAX_RESOLUTION[modelSelect.value] || "4k");
@@ -1533,6 +1566,20 @@ function applyModelUI() {
     document.getElementById(id).classList.toggle("hidden", seedream || h3);
   }
   document.getElementById("nsfwField").classList.toggle("hidden", h3);
+  document.getElementById("webSearchField").title =
+    webSearchT2VOnly() ?
+      "Text-to-video only on this model — left off when references or frames are attached"
+    : "";
+  // The reference limits and the exclusivity rule differ by model (2.5 vs the rest).
+  const lim = refLimits();
+  document.getElementById("imageSourceHint").textContent =
+    is25() ?
+      "(references — images, video, audio — and first/last frames can't be combined)"
+    : "(reference images and first/last frames can't be combined)";
+  document.getElementById("videoHint").textContent =
+    `(up to ${lim.video}, total ≤ ${lim.secs}s, ≤ ${lim.videoMB}MB each)`;
+  document.getElementById("audioHint").textContent =
+    `(up to ${lim.audio}, total ≤ ${lim.secs}s, ≤ 15MB each)`;
   // H3 image-to-video takes no aspect_ratio — the frames decide it.
   document.getElementById("aspectField").classList.toggle("hidden", isH3I2V());
   // Seedance video models make reference images and first/last frames mutually
@@ -1587,6 +1634,10 @@ function applyModelUI() {
   durInput.max = frames ? 30 : 15;
   if (Number(durInput.value) > Number(durInput.max))
     durInput.value = durInput.max;
+  document
+    .getElementById("durationAutoField")
+    .classList.toggle("hidden", !seedanceVideo);
+  durInput.disabled = durationAuto();
   updatePromptCount(); // the cap depends on the selected model
   updateEstimate();
   updateModelChrome();
@@ -1840,6 +1891,10 @@ qualitySelect.addEventListener("change", updateEstimate);
 document
   .querySelectorAll('input[name="imageSource"]')
   .forEach((r) => r.addEventListener("change", applyModelUI));
+durationAutoEl.addEventListener("change", () => {
+  document.getElementById("duration").disabled = durationAuto();
+  updateEstimate();
+});
 
 // =========================================================================
 // ComfyUI: local workflows chosen from the model dropdown. Each workflow's
@@ -3679,7 +3734,7 @@ async function collectComfyValues(promptOverride = null) {
   const templates = {};
   const memo = new Map();
   for (const [name, v] of Object.entries(values)) {
-    if (typeof v !== "string" || !hasWildcards(v)) continue;
+    if (typeof v !== "string" || !hasPromptTokens(v)) continue;
     templates[name] = v;
     values[name] = resolveWildcards(v, memo);
   }
@@ -3920,6 +3975,7 @@ const promptCapHint = document.getElementById("promptCapHint");
 
 function promptCap() {
   if (isH3()) return 7000;
+  if (is25()) return 30000;
   if (!isSeedream()) return 20000;
   return isSeedreamPro() ? 5000 : 3000;
 }
@@ -3943,20 +3999,22 @@ updatePromptCount();
 // prompt means the same thing to a kie.ai model and a ComfyUI workflow.
 let savedPrompts = []; // the active project's, newest first
 let savedPromptsSeq = 0; // the latest load; a slower earlier one doesn't overwrite it
-// "prompt" | "saved" | "wildcards", shared by every prompt field; remembered per browser
-// across reloads. `promptSource` is the last of "prompt"/"saved" that was open: what
-// Generate uses — the Wildcards tab is a reference view and doesn't change it.
+// "prompt" | "saved" | "wildcards" | "variables", shared by every prompt field;
+// remembered per browser across reloads. `promptSource` is the last of "prompt"/"saved"
+// that was open: what Generate uses — the Wildcards and Variables tabs are reference
+// views and don't change it.
 const PROMPT_TAB_KEY = "genie_prompt_tab";
 const PROMPT_SOURCE_KEY = "genie_prompt_source";
 let promptTab = "prompt";
 let promptSource = "prompt";
 try {
   const t = localStorage.getItem(PROMPT_TAB_KEY);
-  if (t === "saved" || t === "wildcards") promptTab = t;
+  if (t === "saved" || t === "wildcards" || t === "variables") promptTab = t;
   promptSource =
     (
       t === "saved" ||
-      (t === "wildcards" && localStorage.getItem(PROMPT_SOURCE_KEY) === "saved")
+      ((t === "wildcards" || t === "variables") &&
+        localStorage.getItem(PROMPT_SOURCE_KEY) === "saved")
     ) ?
       "saved"
     : "prompt";
@@ -4595,9 +4653,10 @@ function wildcardPick(w, id, memo) {
 // text field of a workflow). Values may hold tokens of their own, one level deep: a
 // wildcard used inside another can't hold tokens itself (`parent` is the outer token),
 // which also rules out loops. Throws on a token with no list, an empty one, or one
-// nested too deep, so a run never sends a literal %…% to the model.
+// nested too deep, so a run never sends a literal %…% to the model. $variables are
+// filled in first (expandVariables), so this is the one call that readies a prompt.
 function resolveWildcards(text, memo = new Map(), parent = null) {
-  const s = String(text ?? "");
+  const s = expandVariables(text); // $variables first: their text may hold wildcards
   if (!s.includes("%")) return s;
   const missing = new Set();
   const out = s.replace(WILDCARD_RE, (m, c, k, flag) => {
@@ -4796,15 +4855,15 @@ function makeWildcardRow(w) {
   return row;
 }
 
-// Which text Generate uses, since the Wildcards tab hides both the Prompt and the
-// Saved Prompts view.
+// Which text Generate uses, since the Wildcards and Variables tabs hide both the
+// Prompt and the Saved Prompts view.
 function syncWildcardSource() {
-  const el = wildcardsPanel.querySelector(".wc-source");
   const p = activeSavedPrompt();
-  el.textContent =
-    promptSource === "saved" && p ?
-      `▶ Generate uses the saved prompt “${p.title}”.`
-    : "▶ Generate uses the Prompt tab's text.";
+  for (const panel of [wildcardsPanel, variablesPanel])
+    panel.querySelector(".wc-source").textContent =
+      promptSource === "saved" && p ?
+        `▶ Generate uses the saved prompt “${p.title}”.`
+      : "▶ Generate uses the Prompt tab's text.";
 }
 
 // --- wildcard editor ---
@@ -4982,6 +5041,291 @@ wildcardModal.addEventListener("keydown", (e) => {
   }
 });
 
+// --- variables ----------------------------------------------------------------------
+// Named blocks of text: a prompt writes $name and Generate swaps in the text (see
+// expandVariables, called from resolveWildcards, so every place a run resolves its
+// wildcards fills its variables too). Each project has its own; one marked global
+// (variables.json on the server) applies to every project, and a project variable
+// wins over a global of the same name. A value may hold wildcards and other
+// variables. Managed on the prompt field's fourth tab, edited in place.
+let variables = []; // the active project's and the globals: { id, name, value, global }
+let variablesFilter = "";
+let variablesSeq = 0;
+// "$5" is money, not a variable: a name starts with a letter or _.
+const VARIABLE_RE = /(?<![\p{L}\p{N}_$])\$([\p{L}_][\p{L}\p{N}_]*)/gu;
+const VARIABLE_MAX_DEPTH = 8;
+
+// As the server stores a name (normalizeVariableName).
+function variableName(v) {
+  return String(v ?? "")
+    .trim()
+    .replace(/^\$+/, "")
+    .replace(/\s+/g, "_")
+    .replace(/[^\p{L}\p{N}_]/gu, "")
+    .replace(/^\p{N}+/u, "")
+    .toLowerCase()
+    .slice(0, 60);
+}
+
+function findVariable(name) {
+  const n = String(name).toLowerCase();
+  return (
+    variables.find((v) => v.id && !v.global && v.name === n) ||
+    variables.find((v) => v.id && v.global && v.name === n) ||
+    null
+  );
+}
+
+const hasVariables = (text) =>
+  [...String(text ?? "").matchAll(VARIABLE_RE)].length > 0;
+// Anything Generate would fill in: a %wildcard% or a $variable.
+const hasPromptTokens = (text) => hasWildcards(text) || hasVariables(text);
+
+// Swap every $name for its text, including variables inside variables. Throws on an
+// unknown one, or a loop, so a run never sends a literal $name to the model.
+function expandVariables(text, stack = []) {
+  const s = String(text ?? "");
+  if (!s.includes("$")) return s;
+  const missing = new Set();
+  const out = s.replace(VARIABLE_RE, (m, name) => {
+    const v = findVariable(name);
+    if (!v) {
+      missing.add(m);
+      return m;
+    }
+    if (stack.includes(v.name) || stack.length >= VARIABLE_MAX_DEPTH) {
+      throw new Error(
+        `$${[...stack, v.name].join(" → $")} — a variable can't use itself.`,
+      );
+    }
+    return expandVariables(v.value, [...stack, v.name]);
+  });
+  if (missing.size) {
+    throw new Error(
+      `Unknown variable${missing.size > 1 ? "s" : ""}: ${[...missing].join(", ")} — add ${missing.size > 1 ? "them" : "it"} on the Variables tab.`,
+    );
+  }
+  return out;
+}
+
+async function loadVariables() {
+  const seq = ++variablesSeq;
+  await flushVariableSaves();
+  try {
+    const res = await fetch(
+      `/api/variables?projectId=${encodeURIComponent(activeProjectId)}`,
+    );
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.msg || "Failed to load variables");
+    if (seq !== variablesSeq) return;
+    variables = data.data || [];
+  } catch (err) {
+    console.error("Failed to load variables:", err);
+    if (seq !== variablesSeq) return;
+    variables = [];
+  }
+  renderVariables();
+  wcHlSyncAll(true);
+}
+
+const variablesPanel = document.createElement("div");
+variablesPanel.className = "saved-prompts variables hidden";
+variablesPanel.innerHTML =
+  `<input type="search" class="sp-filter" placeholder="Filter variables…" aria-label="Filter variables" />` +
+  `<div class="sp-toolbar"><button type="button" class="link-btn var-new">＋ New variable</button></div>` +
+  `<p class="sp-run-note wc-note">Write <code>$name</code> in a prompt and Generate swaps in its text. ` +
+  `Variables belong to this project; tick <b>Global</b> to share one with every project ` +
+  `(this project's own wins over a global of the same name). Changes save as you type.</p>` +
+  `<p class="sp-run-note wc-source"></p>` +
+  `<p class="dz-hint sp-empty var-empty"></p>` +
+  `<div class="var-list"></div>`;
+const varFilterEl = variablesPanel.querySelector(".sp-filter");
+const varListEl = variablesPanel.querySelector(".var-list");
+const varEmptyEl = variablesPanel.querySelector(".var-empty");
+varFilterEl.addEventListener("input", () => {
+  variablesFilter = varFilterEl.value.trim().toLowerCase();
+  renderVariables();
+});
+variablesPanel.querySelector(".var-new").addEventListener("click", () => {
+  variables.unshift({ id: null, name: "", value: "", global: false });
+  renderVariables();
+  varListEl.querySelector(".var-name")?.focus();
+});
+
+// This project's first, then the globals; A–Z by name, unsaved drafts on top.
+function renderVariables() {
+  syncPromptTabs(); // the tab's count
+  const q = variablesFilter;
+  const shown = variables
+    .filter(
+      (v) => !v.id || !q || `$${v.name}\n${v.value}`.toLowerCase().includes(q),
+    )
+    .sort(
+      (a, b) =>
+        !!a.id - !!b.id ||
+        a.global - b.global ||
+        a.name.localeCompare(b.name),
+    );
+  varFilterEl.classList.toggle("hidden", variables.length < 4 && !q);
+  varEmptyEl.textContent =
+    variables.length ?
+      "No variables match."
+    : "No variables yet — ＋ New variable to make one.";
+  varEmptyEl.classList.toggle("hidden", shown.length > 0);
+  varListEl.innerHTML = "";
+  for (const v of shown) varListEl.appendChild(makeVariableRow(v));
+  syncVariableShadows();
+  syncWildcardSource();
+}
+
+// Flag a global that this project's own variable of the same name hides.
+function syncVariableShadows() {
+  for (const row of varListEl.querySelectorAll(".var-row")) {
+    const v = row._variable;
+    const hidden =
+      v.global &&
+      variables.some((x) => x.id && !x.global && x.name === v.name);
+    row.classList.toggle("shadowed", !!hidden);
+    row.querySelector(".var-shadow").classList.toggle("hidden", !hidden);
+  }
+}
+
+// Saves waiting on the typing pause, so a project switch (or a rename) doesn't race them.
+const varPending = new Map(); // row → { timer, run }
+async function flushVariableSaves() {
+  const runs = [...varPending.values()];
+  for (const p of runs) {
+    clearTimeout(p.timer);
+    await p.run();
+  }
+}
+
+// One variable, edited in place: name, Global, and its text.
+function makeVariableRow(v) {
+  const projectId = activeProjectId; // pinned: a save lands in the project it was made in
+  const row = document.createElement("div");
+  row.className = "sp-card var-row" + (v.global ? " global" : "");
+  row._variable = v;
+  row.innerHTML =
+    `<div class="var-head">` +
+    `<label class="var-name-wrap"><span class="var-dollar">$</span>` +
+    `<input type="text" class="var-name" placeholder="name" spellcheck="false" autocomplete="off" aria-label="Variable name" /></label>` +
+    `<label class="var-global" title="Share this variable with every project"><input type="checkbox" /> Global</label>` +
+    `<span class="hint var-status"></span>` +
+    `<button type="button" class="link-btn wc-insert var-insert" title="Put the variable in the Prompt tab's text, at the cursor">＋ Insert</button>` +
+    `<button type="button" class="link-btn var-delete" title="Delete this variable" aria-label="Delete this variable">✕</button>` +
+    `</div>` +
+    `<p class="hint var-shadow hidden">This project has its own $${escapeHtmlJs(v.name)}, which is used instead.</p>` +
+    `<textarea class="var-value" rows="3" placeholder="The text this variable stands for…"></textarea>`;
+  const nameEl = row.querySelector(".var-name");
+  const globalEl = row.querySelector(".var-global input");
+  const valueEl = row.querySelector(".var-value");
+  const statusEl = row.querySelector(".var-status");
+  nameEl.value = v.name;
+  globalEl.checked = !!v.global;
+  valueEl.value = v.value || "";
+
+  const status = (text, bad = false) => {
+    statusEl.textContent = text;
+    statusEl.classList.toggle("var-status-bad", bad);
+  };
+
+  // A new variable is created once it has a name; after that, just what changed.
+  const save = async (fields) => {
+    const name = variableName(nameEl.value);
+    if (!v.id && !name) return false; // a draft waits for its name
+    status("Saving…");
+    try {
+      const saved = await promptsApi(
+        v.id ? `/api/variables/${encodeURIComponent(v.id)}` : "/api/variables",
+        v.id ? "PUT" : "POST",
+        v.id ?
+          { projectId, ...fields }
+        : { projectId, name, value: valueEl.value, global: globalEl.checked },
+      );
+      Object.assign(v, saved);
+      if (document.activeElement !== nameEl) nameEl.value = v.name;
+      row.classList.toggle("global", v.global);
+      status("✓ Saved");
+      syncPromptTabs();
+      syncVariableShadows();
+      wcHlSyncAll(true);
+      return true;
+    } catch (err) {
+      status(err.message || String(err), true);
+      return false;
+    }
+  };
+  const saveValueSoon = () => {
+    clearTimeout(varPending.get(row)?.timer);
+    const p = {
+      run: () => {
+        varPending.delete(row);
+        return save({ value: valueEl.value });
+      },
+    };
+    p.timer = setTimeout(p.run, 700);
+    varPending.set(row, p);
+  };
+
+  nameEl.addEventListener("change", async () => {
+    await flushVariableSaves();
+    nameEl.value = variableName(nameEl.value);
+    save({ name: nameEl.value });
+  });
+  valueEl.addEventListener("input", () => {
+    status("");
+    saveValueSoon();
+  });
+  valueEl.addEventListener("blur", () => {
+    const p = varPending.get(row);
+    if (p) {
+      clearTimeout(p.timer);
+      p.run();
+    }
+  });
+  globalEl.addEventListener("change", async () => {
+    await flushVariableSaves();
+    if (!v.id) return; // a draft is created with the box as it stands
+    if (await save({ global: globalEl.checked }))
+      renderVariables(); // it moves to the other group
+    else globalEl.checked = !!v.global;
+  });
+  row.querySelector(".var-insert").addEventListener("click", (e) => {
+    const btn = e.currentTarget;
+    const name = variableName(nameEl.value);
+    if (!name) return flashText(btn, "Name it first");
+    flashText(
+      btn,
+      insertIntoPrompt(`$${name}`) ? "✓ Inserted" : "No prompt field",
+    );
+  });
+  row.querySelector(".var-delete").addEventListener("click", async () => {
+    if (
+      v.id &&
+      !confirm(
+        `Delete ${v.global ? "the global " : ""}$${v.name}?\n\nPrompts that use it will stop at Generate until it's back.`,
+      )
+    )
+      return;
+    clearTimeout(varPending.get(row)?.timer);
+    varPending.delete(row);
+    try {
+      if (v.id)
+        await promptsApi(
+          `/api/variables/${encodeURIComponent(v.id)}?projectId=${encodeURIComponent(projectId)}`,
+          "DELETE",
+        );
+      variables = variables.filter((x) => x !== v);
+      renderVariables();
+      wcHlSyncAll(true);
+    } catch (err) {
+      status(err.message || String(err), true);
+    }
+  });
+  return row;
+}
+
 // --- wildcard autocomplete ---
 // In any textarea, typing % (not straight after a letter or digit, so "50%" and a
 // token's closing % don't count) opens a list of wildcards: categories first while
@@ -5073,19 +5417,42 @@ function wcAcItems(cat, key) {
     .slice(0, 12);
 }
 
+// $name: the variables in play (this project's, then globals it doesn't hide).
+const VAR_AC_FRAGMENT = /(^|[^\p{L}\p{N}_$])\$([\p{L}_][\p{L}\p{N}_]*)?$/u;
+function varAcItems(q = "") {
+  q = q.toLowerCase();
+  const rank = (name) =>
+    name.startsWith(q) ? 0
+    : name.includes(q) ? 1
+    : -1;
+  return [...new Set(variables.filter((v) => v.id).map((v) => v.name))]
+    .map((name) => ({ v: findVariable(name), r: rank(name) }))
+    .filter((x) => x.r >= 0)
+    .sort((a, b) => a.r - b.r || a.v.name.localeCompare(b.v.name))
+    .slice(0, 12)
+    .map(({ v }) => ({
+      label: `$${v.name}`,
+      insert: `$${v.name}`,
+      hint:
+        (v.global ? "global · " : "") +
+        v.value.replace(/\s+/g, " ").slice(0, 80),
+      rest: /^[\p{L}\p{N}_]*/u,
+    }));
+}
+
 function wcAcUpdate(ta) {
-  if (ta.selectionStart !== ta.selectionEnd || !wildcards.length)
-    return wcAcClose();
+  if (ta.selectionStart !== ta.selectionEnd) return wcAcClose();
   const before = ta.value.slice(0, ta.selectionStart);
-  const m = WC_AC_FRAGMENT.exec(before);
+  const vm = VAR_AC_FRAGMENT.exec(before);
+  const m = vm || WC_AC_FRAGMENT.exec(before);
   if (!m) return wcAcClose();
-  const items = wcAcItems(m[2], m[3]);
+  const items = vm ? varAcItems(vm[2]) : wcAcItems(m[2], m[3]);
   if (!items.length) return wcAcClose();
   const same =
     wcAc.ta === ta &&
     wcAc.items.map((x) => x.label).join() === items.map((x) => x.label).join();
   wcAc.ta = ta;
-  wcAc.start = before.length - m[0].length + m[1].length; // the % itself
+  wcAc.start = before.length - m[0].length + m[1].length; // the % (or $) itself
   wcAc.items = items;
   if (!same) wcAc.index = 0;
   wcAcRender();
@@ -5125,7 +5492,7 @@ function wcAcAccept(i) {
   const it = wcAc.items[i];
   const ta = wcAc.ta;
   if (!it || !ta) return;
-  const rest = /^[\p{L}\p{N}_:-]*%?/u.exec(
+  const rest = (it.rest || /^[\p{L}\p{N}_:-]*%?/u).exec(
     ta.value.slice(ta.selectionStart),
   )[0];
   ta.focus();
@@ -5285,11 +5652,20 @@ function wcHlAttach(ta) {
 function wcHlHtml(text) {
   let html = "";
   let last = 0;
-  for (const m of text.matchAll(WILDCARD_RE)) {
-    const w = findWildcard(m[1], m[2]);
-    const ok = !!w?.values?.length;
+  const marks = [
+    ...[...text.matchAll(WILDCARD_RE)].map((m) => ({
+      m,
+      cls: findWildcard(m[1], m[2])?.values?.length ? "ok" : "bad",
+    })),
+    ...[...text.matchAll(VARIABLE_RE)].map((m) => ({
+      m,
+      cls: findVariable(m[1]) ? "var ok" : "var bad",
+    })),
+  ].sort((a, b) => a.m.index - b.m.index);
+  for (const { m, cls } of marks) {
+    if (m.index < last) continue;
     html += escapeHtmlJs(text.slice(last, m.index));
-    html += `<mark class="${ok ? "ok" : "bad"}">${escapeHtmlJs(m[0])}</mark>`;
+    html += `<mark class="${cls}">${escapeHtmlJs(m[0])}</mark>`;
     last = m.index + m[0].length;
   }
   // A trailing newline needs something after it to take up its line.
@@ -5304,7 +5680,7 @@ function wcHlSync(ta, force = false) {
     wcHl.delete(ta);
     return;
   }
-  const on = hasWildcards(ta.value) && ta.offsetParent !== null;
+  const on = hasPromptTokens(ta.value) && ta.offsetParent !== null;
   ta.classList.toggle("wc-hl-on", on);
   st.back.classList.toggle("hidden", !on);
   if (!on) return;
@@ -5444,6 +5820,7 @@ function installPromptTools({
     prompt: mkTab("prompt", labelText),
     saved: mkTab("saved", "Saved Prompts"),
     wildcards: mkTab("wildcards", "Wildcards"),
+    variables: mkTab("variables", "Variables"),
   };
   for (const n of keep) tabsEl.appendChild(n);
   if (labelEl) labelEl.replaceWith(tabsEl);
@@ -5483,7 +5860,7 @@ function activePromptHost() {
 
 function setPromptTab(tab) {
   promptTab = tab;
-  if (tab !== "wildcards") promptSource = tab;
+  if (tab === "prompt" || tab === "saved") promptSource = tab;
   try {
     localStorage.setItem(PROMPT_TAB_KEY, tab);
     localStorage.setItem(PROMPT_SOURCE_KEY, promptSource);
@@ -5493,11 +5870,13 @@ function setPromptTab(tab) {
   syncPromptTabs();
   if (tab === "saved") loadSavedPrompts(); // pick up gallery moves/renames since the last load
   if (tab === "wildcards") loadWildcards();
+  if (tab === "variables") loadVariables();
 }
 
 // Paint every prompt field's tabs and put the cards panel in the one on screen.
 function syncPromptTabs() {
   const label = `Saved Prompts${savedPrompts.length ? ` (${savedPrompts.length})` : ""}`;
+  const nVars = variables.filter((v) => v.id).length;
   for (const h of promptHosts) {
     for (const [tab, btn] of Object.entries(h.tabs)) {
       btn.classList.toggle("active", tab === promptTab);
@@ -5505,6 +5884,7 @@ function syncPromptTabs() {
     }
     h.tabs.saved.textContent = label;
     h.tabs.wildcards.textContent = `Wildcards${wildcards.length ? ` (${wildcards.length})` : ""}`;
+    h.tabs.variables.textContent = `Variables${nVars ? ` (${nVars})` : ""}`;
     h.textarea.classList.toggle("hidden", promptTab !== "prompt");
   }
   const host = activePromptHost();
@@ -5513,7 +5893,10 @@ function syncPromptTabs() {
   if (host && wildcardsPanel.parentElement !== host.field)
     host.field.appendChild(wildcardsPanel);
   savedPanel.classList.toggle("hidden", promptTab !== "saved" || !host);
+  if (host && variablesPanel.parentElement !== host.field)
+    host.field.appendChild(variablesPanel);
   wildcardsPanel.classList.toggle("hidden", promptTab !== "wildcards" || !host);
+  variablesPanel.classList.toggle("hidden", promptTab !== "variables" || !host);
   syncGenerateLabel();
 }
 
@@ -5526,6 +5909,7 @@ installPromptTools({
 });
 
 loadWildcards();
+loadVariables();
 
 async function loadSavedPrompts() {
   const seq = ++savedPromptsSeq;
@@ -5649,6 +6033,7 @@ function currentDuration() {
   }
   if (document.getElementById("durationField").classList.contains("hidden"))
     return null;
+  if (durationAuto()) return null;
   const v = Number(document.getElementById("duration").value);
   return Number.isFinite(v) && v > 0 ? v : null;
 }
@@ -5665,6 +6050,8 @@ function setCurrentDuration(seconds) {
     return;
   }
   const el = document.getElementById("duration");
+  durationAutoEl.checked = false; // an explicit length replaces Auto
+  el.disabled = false;
   el.value = Math.min(
     Math.max(seconds, Number(el.min) || 1),
     Number(el.max) || seconds,
@@ -5866,9 +6253,15 @@ function loadSavedPromptMedia(p, promptText = null) {
 
 // A MiniMax prompt's text numbers its <Picture N> labels from its own reference list,
 // so generating from one sends those files, in that order: they're loaded into the
-// form's reference fields first. (A Default prompt stays text-only.)
+// form's reference fields first. A Default prompt with references of its own sends
+// them the same way (its <Picture N> tags point at them too); one with none stays
+// text-only and leaves the form's references alone. T2V takes no references.
+function savedPromptSendsRefs(p) {
+  if (!p || p.type === "minimax_t2v") return false;
+  return p.type === "minimax" || (p.refs || []).length > 0;
+}
 function loadRunMedia(p) {
-  return p?.type === "minimax" ? loadSavedPromptMedia(p) : [];
+  return savedPromptSendsRefs(p) ? loadSavedPromptMedia(p) : [];
 }
 
 // `confirmReplace: false` skips the unsaved-prompt check (a History Re-import, which
@@ -5926,7 +6319,7 @@ function renderSavedPrompts() {
   savedRunNoteEl.textContent =
     !savedPrompts.length ? ""
     : active ?
-      `▶ Generate uses “${active.title}” (${active.type === "minimax" ? "its prompt and its references, in order" : "its prompt text only"}) while this tab is open, and links the new History card to it.`
+      `▶ Generate uses “${active.title}” (${savedPromptSendsRefs(active) ? "its prompt and its references, in order" : "its prompt text only"}) while this tab is open, and links the new History card to it.`
     : "Press ▶ on a card to generate from it while this tab is open. Otherwise Generate uses the Prompt tab's text.";
   savedRunNoteEl.classList.toggle("hidden", !savedPrompts.length);
   syncWildcardSource();
@@ -7611,8 +8004,11 @@ function collectInput(resolved, prompt = promptEl.value) {
     generate_audio: document.getElementById("generate_audio").checked,
     resolution: document.getElementById("resolution").value,
     aspect_ratio: document.getElementById("aspect_ratio").value,
-    duration: Number(document.getElementById("duration").value),
-    web_search: document.getElementById("web_search").checked,
+    duration:
+      durationAuto() ? -1 : Number(document.getElementById("duration").value),
+    web_search:
+      document.getElementById("web_search").checked &&
+      !(webSearchT2VOnly() && hasActiveMedia()),
     nsfw_checker: document.getElementById("nsfw_checker").checked,
   };
   // Start/end keyframes — all Seedance video models. `resolved` is already
@@ -7667,6 +8063,33 @@ form.addEventListener("submit", async (e) => {
     );
     return;
   }
+  if (is25() && usesFrames() && ready("lastFrame") && !ready("firstFrame")) {
+    setError(
+      "Seedance 2.5 can't take a last frame on its own — add a first frame too.",
+    );
+    return;
+  }
+  // Too many references, or too much reference video, is rejected by the API.
+  if (isSeedanceVideo() || isH3Ref()) {
+    const lim = refLimits();
+    const count = (kind) =>
+      lists[kind].items.filter((i) => i.status === "ready").length;
+    const over = [
+      usesRefImages() && count("image") > lim.image && `${lim.image} images`,
+      usesRefMedia() && count("video") > lim.video && `${lim.video} videos`,
+      usesRefMedia() && count("audio") > lim.audio && `${lim.audio} audio files`,
+    ].filter(Boolean);
+    if (over.length) {
+      setError(`This model takes at most ${over.join(", ")} as references.`);
+      return;
+    }
+    if (usesRefMedia() && refVideoSeconds() > lim.secs) {
+      setError(
+        `Reference videos total ${Math.round(refVideoSeconds())}s — this model's limit is ${lim.secs}s.`,
+      );
+      return;
+    }
+  }
   // Pinned now, so switching tabs (or the active prompt) mid-upload can't change the run.
   const fromSaved = runSavedPrompt();
   const promptText =
@@ -7685,12 +8108,12 @@ form.addEventListener("submit", async (e) => {
   if (longest > promptCap()) {
     setError(
       `${fromSaved ? `Saved prompt “${fromSaved.title}”` : "Prompt"} is ${longest.toLocaleString()} characters` +
-        `${longest !== promptText.length ? " with its wildcards filled in" : ""} — ` +
+        `${longest !== promptText.length ? " with its wildcards and variables filled in" : ""} — ` +
         `this model's limit is ${promptCap().toLocaleString()}.`,
     );
     return;
   }
-  const templated = hasWildcards(promptText);
+  const templated = hasPromptTokens(promptText);
 
   hide(errorEl);
   if (mediaNotes.length) setError(mediaNotes.join("\n"));
@@ -8203,8 +8626,8 @@ function buildHistDetails(entry, input, comfyEntry, isImg) {
     push("Aspect ratio", input.aspect_ratio);
     push(
       "Duration",
-      input.duration != null && input.duration !== "" ?
-        `${input.duration}s`
+      input.duration === -1 ? "auto"
+      : input.duration != null && input.duration !== "" ? `${input.duration}s`
       : input.duration,
     );
     push("Seed", input.seed);
@@ -8563,7 +8986,7 @@ function renderHistory(entries) {
       const ratio = input.aspect_ratio ? ` · ${input.aspect_ratio}` : "";
       meta.textContent =
         `${date}${variant} · ${input.resolution || "?"}${ratio} · ` +
-        `${input.duration || "?"}s${cost}${rt}${proj}`;
+        `${input.duration === -1 ? "auto" : `${input.duration || "?"}s`}${cost}${rt}${proj}`;
     }
 
     const actions = document.createElement("div");
@@ -8941,8 +9364,10 @@ async function applyEntry(entry) {
   // override when the saved entry recorded one.
   if (input.output_format) outputFormatSelect.value = input.output_format;
   updatePromptCount();
-  if (input.duration)
+  durationAutoEl.checked = input.duration === -1;
+  if (input.duration > 0)
     document.getElementById("duration").value = input.duration;
+  document.getElementById("duration").disabled = durationAuto();
   document.getElementById("generate_audio").checked =
     input.generate_audio !== false;
   document.getElementById("web_search").checked = !!input.web_search;

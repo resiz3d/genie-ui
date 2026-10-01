@@ -10,7 +10,93 @@ heading for that version with the date, commit, then tag the commit `vX.Y.Z`.
 
 ## [Unreleased]
 
+### Added
+
+- **✨ Revise with AI**, in the saved-prompt editor. Say what to change ("make her
+  lines teasing", "add a cut at 00:06 to a close-up", "slow the pacing") and the LLM
+  rewrites the prompt as it stands in the editor, including unsaved edits, seeing
+  its reference images. Works on Default, MiniMax H3 and MiniMax T2V prompts. The
+  suggestion is shown as a word-level diff against the editor; **Apply to editor**
+  puts it in, **Save changes** keeps it, and **↶ Undo** or Cancel throws it away.
+  **Try again** asks for another take. **Follow my Rules** adds the project's
+  Build-with-AI rules. It runs through the same queue and GPU turn-taking as a
+  build, and a MiniMax section the reply leaves empty keeps its current text.
+
+### Changed
+
+- **Seedance form rules match kie.ai's current API docs** (re-read 2026-10-01).
+  - **Seedance 2.5:** first/last-frame mode now hides and leaves out reference video
+    and audio (the API treats frames and references as mutually exclusive), and a
+    last frame without a first frame is refused before submitting. Its reference
+    limits are shown and checked as 30 images, 10 videos and 10 audio files, 30s
+    total, 200MB per video; the prompt cap is 30,000 characters.
+  - **Seedance 2 and 2 Fast** offer the **adaptive** aspect ratio.
+  - **Auto duration** — a new checkbox on every Seedance video model sends
+    `duration: -1` so the model picks the length (no cost estimate for those runs).
+  - **Seedance 2 Fast / Mini:** Web search is left off a run that carries references
+    or frames, since those models only accept it for text-to-video.
+  - Reference counts and total reference-video seconds over a model's limit are
+    refused before anything is uploaded.
+  - The NSFW checker switch is unchanged: unchecked still sends
+    `nsfw_checker: false`, which turns off kie.ai's filter but not the model
+    provider's own moderation.
+- **Build with AI: a MiniMax reply that isn't MiniMax JSON is kept.** Instead of
+  "The LLM's reply wasn't the JSON the MiniMax format needs" and a retry, the text
+  is saved as a Default (plain) prompt with the same images, marked
+  `llm.savedAsPlain`, and the build's status says how many came back that way.
+
+### Added
+
+- **Build with AI: Rules, and a form that follows you between browsers.** A
+  **Rules** box sits under Theme for standing instructions (things to always do,
+  never do, how to write dialogue…). They're added to the system prompt as firm
+  rules that override the default guidance, and recorded on each saved prompt
+  (`llm.rules`). The whole form — format, images, description, theme, rules, count,
+  duration, title prefix — is now saved on the server per project
+  (`projects/<slug>/llm-builder.json`) as you type, so the phone and every other
+  browser open it as you left it; it no longer uses the browser's localStorage.
+  **↺ Recent builds** refills the form from any of the project's last 20 builds.
+  A project that has never had rules starts from the ones you used most recently.
+
+- **Build with AI: Format.** The build dialog can now write **MiniMax H3**
+  (reference-to-video) or **MiniMax T2V** (text-to-video) prompts as well as Default
+  ones. The MiniMax formats have their own instructions and fill the structured
+  fields — subjects, summary, retention, style, shots, soundscape, music — so each
+  result opens in the MiniMax editor; T2V hides the image picker and takes no
+  references. The last format picked is remembered.
+
+- **✨ Build with AI.** A vision LLM writes prompts for you: on the Saved Prompts
+  tab, pick images from the project's gallery (their click order becomes
+  `<Picture 1>`, `<Picture 2>`, …), describe what should happen and the theme, and
+  choose how many variations. Each one is saved as a Default prompt with the images
+  as its references, and a gallery file's key and definition are passed along.
+  Works with any OpenAI-compatible server. **⚙ LLM settings** has presets for
+  LM Studio, text-generation-webui and Ollama, a model list with vision marked 👁,
+  and an editable system prompt. Builds run on the server, so they survive a
+  closed tab and can be started from the phone. See [docs/LLM.md](docs/LLM.md).
+- **The LLM and ComfyUI take turns on the GPU.** A build waits for ComfyUI's queue
+  to empty (plus a grace period), checks free VRAM against the model's size, and
+  asks ComfyUI to unload its models when the LLM doesn't fit. A generation that
+  starts, whether from GENie or from ComfyUI's own UI, unloads the LLM first. The
+  build pauses and picks up the same prompt once ComfyUI is idle. The LLM is
+  unloaded when the build finishes.
+- **Variables.** A fourth tab beside Wildcards holds named blocks of text: write
+  `$name` in any prompt — kie.ai, ComfyUI (every text field) or a saved prompt —
+  and Generate swaps in its text. Each project has its own
+  (`projects/<slug>/variables.json`); tick **Global** on one to share it with every
+  project (`variables.json`), and a project's own variable wins over a global of
+  the same name. Rows edit in place and save as you type. A value can hold
+  `%wildcards%` and other `$variables`; an unknown variable, or one that uses
+  itself, stops the run before anything is sent. `$5` and the like are left
+  alone (a name starts with a letter or `_`). Typing `$` suggests variables, and
+  they're highlighted green in the text (red when unknown). A deleted project's
+  variables move to Default, like its saved prompts.
+
 ### Fixed
+
+- A Default saved prompt with references of its own now sends them when it's the
+  active prompt (loaded into the workflow's reference fields in order, like a MiniMax
+  prompt), instead of sending its text alone with whatever the form held.
 
 - **Wildcard highlighting and zoom on iPhone/iPad.** Highlights no longer drift
   off their words (iOS insets textarea text 3px, and enlarged other text in

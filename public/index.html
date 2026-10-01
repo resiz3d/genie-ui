@@ -84,7 +84,7 @@
 
         <div class="field hidden" id="imageSourceField">
           <div class="field-head">
-            <span>Image source <span class="hint">(reference images and first/last frames can't be combined)</span></span>
+            <span>Image source <span class="hint" id="imageSourceHint">(reference images and first/last frames can't be combined)</span></span>
           </div>
           <div class="checks">
             <label class="inline">
@@ -134,7 +134,7 @@
 
         <div class="field" id="videoField">
           <div class="field-head">
-            <span>Reference videos <span class="hint">(total ≤ 15s, ≤ 50MB each)</span></span>
+            <span>Reference videos <span class="hint" id="videoHint">(up to 3, total ≤ 15s, ≤ 50MB each)</span></span>
             <button type="button" id="clear-video" class="link-btn hidden">Clear all</button>
           </div>
           <div id="dz-video" class="dropzone">
@@ -146,7 +146,7 @@
 
         <div class="field" id="audioField">
           <div class="field-head">
-            <span>Reference audio <span class="hint">(total ≤ 15s, ≤ 15MB each)</span></span>
+            <span>Reference audio <span class="hint" id="audioHint">(up to 3, total ≤ 15s, ≤ 15MB each)</span></span>
             <button type="button" id="clear-audio" class="link-btn hidden">Clear all</button>
           </div>
           <div id="dz-audio" class="dropzone">
@@ -217,6 +217,9 @@
         <div class="checks" id="checksRow">
           <label class="inline" id="genAudioField">
             <input id="generate_audio" type="checkbox" checked /> Generate audio
+          </label>
+          <label class="inline hidden" id="durationAutoField" title="Let the model pick the length (sends duration: -1)">
+            <input id="duration_auto" type="checkbox" /> Auto duration
           </label>
           <label class="inline" id="webSearchField">
             <input id="web_search" type="checkbox" /> Web search
@@ -432,5 +435,6 @@
     </div>
 
     <script src="app.js"></script>
+    <script src="llm.js?v=4"></script>
   </body>
 </html>
