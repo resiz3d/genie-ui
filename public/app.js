@@ -29,28 +29,57 @@ const newProjectBtn = document.getElementById("newProject");
 const renameProjectBtn = document.getElementById("renameProject");
 const deleteProjectBtn = document.getElementById("deleteProject");
 
+// --- shared settings ---
+// Every remembered choice lives on the server (settings/app.json), shared by all the
+// browsers that open it — phone and desktop pick up where the other left off. The
+// page loads them as settings.js before this script; changes go back through
+// /api/settings. A value an older version kept in this browser's localStorage is
+// moved up the first time it's read.
+const serverSettings = window.GENIE_SETTINGS || {};
+const prefs = serverSettings.prefs || {}; // key → string
+function getPref(key, fallback = null) {
+  if (key in prefs) return prefs[key];
+  let legacy = null;
+  try {
+    legacy = localStorage.getItem(key);
+  } catch {
+    /* storage blocked */
+  }
+  if (legacy == null) return fallback;
+  setPref(key, legacy);
+  return legacy;
+}
+function setPref(key, value) {
+  prefs[key] = String(value);
+  fetch("/api/settings", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ prefs: { [key]: String(value) } }),
+  }).catch(() => {});
+}
+
 const PROJECT_KEY = "seedance_project";
 let projects = [];
-let activeProjectId = localStorage.getItem(PROJECT_KEY) || "default";
+let activeProjectId = getPref(PROJECT_KEY) || "default";
 
-// Which tags to hide from the History list — a per-browser view preference (a set
-// of "video"/"image"/"draft"/"favorite"). The auto-draft MP threshold is a server
-// setting (so the server-side sweep applies the same rule as the client).
+// Which tags to hide from the History list (a set of "video"/"image"/"draft"/
+// "favorite"). The auto-draft MP threshold is a server setting too (so the
+// server-side sweep applies the same rule as the client).
 const HIDE_TAGS_KEY = "genie_hist_hide_tags";
 let hiddenTags = new Set(
   (() => {
     try {
-      return JSON.parse(localStorage.getItem(HIDE_TAGS_KEY) || "[]");
+      return JSON.parse(getPref(HIDE_TAGS_KEY, "[]"));
     } catch {
       return [];
     }
   })(),
 );
 
-// Live latent previews during a local ComfyUI run (per-browser). "off" also skips
-// opening the preview stream entirely.
+// Live latent previews during a local ComfyUI run. "off" also skips opening the
+// preview stream entirely.
 const PREVIEW_KEY = "genie_preview_method";
-let previewMethod = localStorage.getItem(PREVIEW_KEY) || "auto";
+let previewMethod = getPref(PREVIEW_KEY) || "auto";
 
 const POLL_INTERVAL_MS = 5000;
 
@@ -807,7 +836,7 @@ function renderProjectControls() {
 
 function setActiveProject(id) {
   activeProjectId = id;
-  localStorage.setItem(PROJECT_KEY, id);
+  setPref(PROJECT_KEY, id);
   projectSelect.value = id;
   historyFilter.value = id;
   loadSavedPrompts();
@@ -835,7 +864,7 @@ for (const el of hideTagEls) {
   el.addEventListener("change", () => {
     if (el.checked) hiddenTags.add(el.value);
     else hiddenTags.delete(el.value);
-    localStorage.setItem(HIDE_TAGS_KEY, JSON.stringify([...hiddenTags]));
+    setPref(HIDE_TAGS_KEY, JSON.stringify([...hiddenTags]));
     historyPage = 1;
     renderHistory(historyEntries);
   });
@@ -861,7 +890,7 @@ const previewMethodEl = document.getElementById("previewMethod");
 previewMethodEl.value = previewMethod;
 previewMethodEl.addEventListener("change", () => {
   previewMethod = previewMethodEl.value;
-  localStorage.setItem(PREVIEW_KEY, previewMethod);
+  setPref(PREVIEW_KEY, previewMethod);
   if (previewMethod === "off") closePreviewStream();
 });
 
@@ -1490,6 +1519,19 @@ function ratePerSec(model, resolution, audioOn) {
   return rates.length ? { rate: median(rates), n: rates.length } : null;
 }
 
+// The runs Generate would make from an active sectioned saved prompt (see
+// savedPromptRuns), or null for one ordinary run. Set further down, once the
+// saved-prompt state it reads exists.
+let sectionRuns = () => null;
+
+// A prompt section's length as the duration its run is sent with: whole seconds,
+// within what the model allows.
+function sectionRunDuration(seconds) {
+  const el = document.getElementById("duration");
+  const s = Math.ceil(seconds);
+  return Math.min(Math.max(s, Number(el.min) || 1), Number(el.max) || s);
+}
+
 function updateEstimate() {
   const model = modelSelect.value;
 
@@ -1514,31 +1556,47 @@ function updateEstimate() {
   }
 
   const resolution = document.getElementById("resolution").value;
-  if (durationAuto()) {
+  // A sectioned saved prompt makes a run per section, each at its own length.
+  const runs = sectionRuns();
+  if (!runs && durationAuto()) {
     estimateEl.textContent =
       "No estimate — the model picks the duration (Auto).";
     estimateEl.title = "";
     return;
   }
-  const duration = Number(document.getElementById("duration").value) || 0;
+  const durations =
+    runs ?
+      runs.map((x) => sectionRunDuration(x.duration))
+    : [Number(document.getElementById("duration").value) || 0];
   const audioOn =
     isH3() ? null : document.getElementById("generate_audio").checked;
   const r = ratePerSec(model, resolution, audioOn);
-  if (!r || !duration) {
+  if (!r || !durations.every((d) => d > 0)) {
     const label = `${videoModelLabel(model)} at ${resolution}`;
     estimateEl.textContent = `No estimate yet for ${label} — will measure after a run.`;
     estimateEl.title = "";
     return;
   }
   const refSecs = usesRefMedia() ? refVideoSeconds() : 0;
-  const est = Math.round(r.rate * (duration + refSecs));
+  // (the reference video is sent with — and billed on — every section's run)
+  const est = durations.reduce(
+    (a, d) => a + Math.round(r.rate * (d + refSecs)),
+    0,
+  );
+  const sectionNote =
+    !runs ? ""
+    : runs.length > 1 ?
+      ` for ${runs.length} sections (${durations.map((d) => `${d}s`).join(" + ")})`
+    : ` for section ${runs[0].section} (${durations[0]}s)`;
   const refNote =
-    refSecs > 0 ? ` (incl. ~${Math.round(refSecs)}s video ref)` : "";
+    refSecs > 0 ?
+      ` (incl. ~${Math.round(refSecs)}s video ref${durations.length > 1 ? " each" : ""})`
+    : "";
   const overLimit =
     refSecs > refLimits().secs ?
       ` ⚠ video refs exceed the ${refLimits().secs}s total limit`
     : "";
-  estimateEl.innerHTML = `Est. cost: ~<b>${est.toLocaleString()}</b> credits${refNote}${batchCostNote(est)}${overLimit}`;
+  estimateEl.innerHTML = `Est. cost: ~<b>${est.toLocaleString()}</b> credits${sectionNote}${refNote}${batchCostNote(est)}${overLimit}`;
   estimateEl.title = `Based on your ${r.n} most recent run${r.n > 1 ? "s" : ""} at this resolution/audio setting (median).`;
 }
 
@@ -1783,6 +1841,83 @@ const KIE_FIELDS = [
   "checksRow",
 ];
 
+// The kie.ai form's choices, remembered per model. Each model family has its own
+// resolutions and aspect ratios, so without this a reload — or a trip to another model
+// and back — puts them back to the defaults. Kept on the server (/api/settings), so
+// the phone and every other browser open the form as it was left.
+const KIE_FORM_FIELDS = [
+  "resolution",
+  "aspect_ratio",
+  "quality",
+  "output_format",
+  "duration",
+];
+let kieForm = serverSettings.kieForm || {}; // model id → { field id: value }
+let kieFormModel = null; // the model the form was last restored for
+function putAppSettings(body) {
+  fetch("/api/settings", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  }).catch(() => {});
+}
+function saveKieForm() {
+  if (isComfy()) return;
+  const values = Object.fromEntries(
+    KIE_FORM_FIELDS.map((id) => [id, document.getElementById(id).value]),
+  );
+  if (JSON.stringify(kieForm[modelSelect.value]) === JSON.stringify(values))
+    return;
+  kieForm[modelSelect.value] = values;
+  putAppSettings({ kieForm: { [modelSelect.value]: values } });
+}
+// The server's copy of the shared settings, again, whenever this tab is looked at
+// (settings.js gave the first) — they may have been changed from another device
+// meanwhile. The form is refilled only if the current model's choices changed there.
+async function loadAppSettings() {
+  let d;
+  try {
+    d = (await (await fetch("/api/settings")).json()).data || {};
+  } catch {
+    return; // offline or signed out — keep what we have
+  }
+  const model = modelSelect.value;
+  const changed =
+    JSON.stringify(d.kieForm?.[model]) !== JSON.stringify(kieForm[model]);
+  kieForm = d.kieForm || {};
+  runSectionChoice = d.runSections || {};
+  Object.assign(prefs, d.prefs || {}); // read on the next load (the open tab keeps its own view)
+  if (changed && !isComfy()) {
+    kieFormModel = null;
+    applyModelUI();
+  }
+  syncRunSection();
+  updateEstimate();
+}
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) loadAppSettings();
+});
+// On arriving at a model: its remembered choices, where the model still offers them.
+function restoreKieForm() {
+  if (kieFormModel === modelSelect.value) return;
+  kieFormModel = modelSelect.value;
+  const saved = kieForm[modelSelect.value];
+  if (!saved) return;
+  for (const id of KIE_FORM_FIELDS) {
+    const el = document.getElementById(id);
+    const v = saved[id];
+    if (v == null || v === "") continue;
+    if (
+      el.tagName === "SELECT" &&
+      ![...el.options].some((o) => o.value === v && !o.disabled)
+    )
+      continue;
+    el.value = v;
+  }
+}
+for (const id of KIE_FORM_FIELDS)
+  document.getElementById(id).addEventListener("change", saveKieForm);
+
 function applyModelUI() {
   const comfy = isComfy();
   const cc = document.getElementById("comfyControls");
@@ -1796,6 +1931,7 @@ function applyModelUI() {
     for (const id of KIE_FIELDS)
       document.getElementById(id).classList.add("hidden");
     estimateEl.classList.add("hidden");
+    kieFormModel = null; // coming back to a kie.ai model restores its choices
     comfyRenderPromise = renderComfyControls(); // async (fetches ComfyUI options); awaited on re-import
     comfyRenderPromise.then(syncPromptTabs, () => {}); // saved-prompts panel → the workflow's prompt
     syncPromptTabs(); // meanwhile, off the (now hidden) kie.ai prompt
@@ -1885,6 +2021,7 @@ function applyModelUI() {
       resolutionSelect.value = RESOLUTION_ORDER[maxResIdx];
     }
   }
+  restoreKieForm();
   // Seedance 2.5 allows up to 30s; the other video models cap at 15s.
   const durInput = document.getElementById("duration");
   durInput.max = frames ? 30 : 15;
@@ -1988,12 +2125,7 @@ function armContinuation(state, parentValues) {
 // (the default), a switch copies them into the newly shown form. Only these travel:
 // resolution, duration, etc. mean different things per model/workflow.
 const CARRY_KEY = "genie_carry_on_switch";
-let carryOnSwitch = true;
-try {
-  carryOnSwitch = localStorage.getItem(CARRY_KEY) !== "0";
-} catch {
-  /* storage blocked — default on */
-}
+let carryOnSwitch = getPref(CARRY_KEY) !== "0";
 const CARRY_KINDS = ["image", "video", "audio"];
 let carrySeq = 0; // the latest switch; an older one's late ComfyUI render doesn't apply
 
@@ -2018,11 +2150,7 @@ function makeCarryLock(btn = document.createElement("button")) {
   paintCarryLock(btn);
   btn.addEventListener("click", () => {
     carryOnSwitch = !carryOnSwitch;
-    try {
-      localStorage.setItem(CARRY_KEY, carryOnSwitch ? "1" : "0");
-    } catch {
-      /* storage blocked — non-fatal */
-    }
+    setPref(CARRY_KEY, carryOnSwitch ? "1" : "0");
     document.querySelectorAll(".carry-lock").forEach(paintCarryLock);
   });
   return btn;
@@ -2135,11 +2263,7 @@ modelSelect.addEventListener("change", async () => {
     if (seq === carrySeq) applyCarry(snap);
   }
   scheduleComfyStats(0); // show/hide the host-stats strip promptly on model switch
-  try {
-    localStorage.setItem(MODEL_KEY, modelSelect.value);
-  } catch {
-    /* storage blocked — non-fatal */
-  }
+  setPref(MODEL_KEY, modelSelect.value);
 });
 qualitySelect.addEventListener("change", updateEstimate);
 
@@ -2209,12 +2333,7 @@ async function loadWorkflows() {
 
 // Reselect the last-used model (base or comfy:) if it's still a valid option.
 function restoreLastModel() {
-  let last = null;
-  try {
-    last = localStorage.getItem(MODEL_KEY);
-  } catch {
-    /* storage blocked */
-  }
+  const last = getPref(MODEL_KEY);
   if (!last || last === modelSelect.value) return;
   const opt = [...modelSelect.options].find(
     (o) => o.value === last && !o.disabled,
@@ -4027,10 +4146,18 @@ async function submitComfy() {
   const bypass = comfyBypassControl ? comfyBypassControl.getDisabled() : [];
   const fromSaved =
     comfyFields.some((f) => f.isPrompt) ? runSavedPrompt() : null;
-  const promptOverride = fromSaved ? exportSavedPromptText(fromSaved) : null;
+  // One run, or one per section of a sectioned saved prompt (each with its own text
+  // and length). Redoing a run in place takes just the first.
+  const plan =
+    fromSaved ? savedPromptRuns(fromSaved) : [{ text: null, duration: null }];
+  if (cont?.into) plan.length = 1;
+  const formDuration = currentDuration();
   const mediaNotes = loadRunMedia(fromSaved); // before the fields are read below
   if (mediaNotes.length) setError(mediaNotes.join("\n"));
   try {
+    for (const run of plan) {
+    const promptOverride = run.text;
+    if (run.duration > 0) setCurrentDuration(Math.ceil(run.duration));
     for (let i = 0; i < count; i++) {
       const { values, prune, tails, references, templates } =
         await collectComfyValues(promptOverride);
@@ -4053,7 +4180,7 @@ async function submitComfy() {
       if (fromSaved) {
         if (!input.prompt && promptOverride.trim())
           input.prompt = resolveWildcards(promptOverride).trim();
-        input.savedPrompt = savedPromptStamp(fromSaved); // History only, not sent to ComfyUI
+        input.savedPrompt = savedPromptStamp(fromSaved, run); // History only, not sent to ComfyUI
       }
       await queueComfyRun(
         wf,
@@ -4072,6 +4199,9 @@ async function submitComfy() {
       for (const f of comfyFields)
         if (typeof f.advance === "function") f.advance();
     }
+    }
+    // A section's length was only for its run — put the form's own duration back.
+    if (plan.some((r) => r.duration > 0)) setCurrentDuration(formDuration);
     saveComfySettings(wf.file); // remember the final values + LoRAs (server-side)
     disarmContinuation(); // one arm, one submit
   } catch (err) {
@@ -4263,19 +4393,17 @@ const PROMPT_TAB_KEY = "genie_prompt_tab";
 const PROMPT_SOURCE_KEY = "genie_prompt_source";
 let promptTab = "prompt";
 let promptSource = "prompt";
-try {
-  const t = localStorage.getItem(PROMPT_TAB_KEY);
+{
+  const t = getPref(PROMPT_TAB_KEY);
   if (t === "saved" || t === "wildcards" || t === "variables") promptTab = t;
   promptSource =
     (
       t === "saved" ||
       ((t === "wildcards" || t === "variables") &&
-        localStorage.getItem(PROMPT_SOURCE_KEY) === "saved")
+        getPref(PROMPT_SOURCE_KEY) === "saved")
     ) ?
       "saved"
     : "prompt";
-} catch {
-  /* storage blocked — start on the Prompt tab */
 }
 let savedPromptsFilter = "";
 const promptHosts = []; // [{ field, textarea, tabs: { prompt, saved } }]
@@ -4285,27 +4413,19 @@ const promptHosts = []; // [{ field, textarea, tabs: { prompt, saved } }]
 // Prompts tab is showing, Generate sends that prompt's exported text in place of the
 // textarea's — nothing else in the form changes, and the textarea keeps your draft —
 // and the run records it (input.savedPrompt), so the server links the new History
-// card to the prompt once it has an output. Remembered per project, per browser.
+// card to the prompt once it has an output. Remembered per project (a shared setting).
 const ACTIVE_PROMPT_KEY = "genie_active_saved_prompt";
 let activeSavedPromptIds = {}; // projectId → saved prompt id
 try {
-  activeSavedPromptIds =
-    JSON.parse(localStorage.getItem(ACTIVE_PROMPT_KEY) || "{}") || {};
+  activeSavedPromptIds = JSON.parse(getPref(ACTIVE_PROMPT_KEY, "{}")) || {};
 } catch {
-  /* storage blocked or corrupt — start empty */
+  /* corrupt — start empty */
 }
 
 function setActiveSavedPrompt(id) {
   if (id) activeSavedPromptIds[activeProjectId] = id;
   else delete activeSavedPromptIds[activeProjectId];
-  try {
-    localStorage.setItem(
-      ACTIVE_PROMPT_KEY,
-      JSON.stringify(activeSavedPromptIds),
-    );
-  } catch {
-    /* non-fatal */
-  }
+  setPref(ACTIVE_PROMPT_KEY, JSON.stringify(activeSavedPromptIds));
   renderSavedPrompts();
 }
 
@@ -4318,11 +4438,46 @@ function activeSavedPrompt() {
 // What a saved prompt contributes to a run's prompt field: its text, or — for a
 // structured format — the text compiled from its fields. The one place every run,
 // import and preview gets a saved prompt's text from.
-function exportSavedPromptText(p) {
-  if (p.type === "minimax") return compileMinimax(p.minimax, p.refs || []);
-  if (p.type === "minimax_t2v") return compileMinimaxT2V(p.minimax);
+// `section` picks one section of a structured prompt (see minimaxSections).
+function exportSavedPromptText(p, section = null) {
+  if (p.type === "minimax")
+    return compileMinimax(p.minimax, p.refs || [], section);
+  if (p.type === "minimax_t2v") return compileMinimaxT2V(p.minimax, section);
   return p.prompt || "";
 }
+
+// Which section of a sectioned saved prompt Generate renders: "all" (a run for each,
+// in order) or one section's index. Per prompt, kept on the server with the other
+// shared settings (see loadAppSettings).
+let runSectionChoice = serverSettings.runSections || {}; // saved prompt id → "all" | index
+function setRunSection(id, value) {
+  runSectionChoice[id] = value;
+  putAppSettings({ runSections: { [id]: value } });
+}
+
+// The runs Generate makes from a saved prompt: [{ text, duration, section, sections }].
+// One, unless the prompt is split into sections — then the chosen section, or each in
+// turn. A section's length is its run's duration (null: the form's, for a prompt
+// without sections); `section` is 1-based, null for a prompt without sections.
+function savedPromptRuns(p) {
+  const secs = isMmType(p.type) ? minimaxSections(p.minimax) : [];
+  if (secs.length < 2)
+    return [{ text: exportSavedPromptText(p), duration: null, section: null }];
+  const pick = runSectionChoice[p.id];
+  const which =
+    Number.isInteger(pick) && pick < secs.length ? [pick] : secs.map((_, i) => i);
+  return which.map((i) => ({
+    text: exportSavedPromptText(p, i),
+    duration: sectionSeconds(secs[i]),
+    section: i + 1,
+    sections: secs.length,
+  }));
+}
+sectionRuns = () => {
+  const p = runSavedPrompt();
+  const runs = p ? savedPromptRuns(p) : [];
+  return runs.some((r) => r.section) ? runs : null;
+};
 
 // The structured formats: both keep their fields in p.minimax (the same shape), and
 // differ only in what's compiled from them and which parts the form shows.
@@ -4340,10 +4495,11 @@ const MM_TYPE_LABEL = { minimax: "MiniMax H3", minimax_t2v: "MiniMax T2V" };
 //                          form; "(appears in [Shot N])" is added from which shots
 //                          mention the subject's <label>
 //   detailed_description — a style opening, then [Shot 1] and each cut as
-//                          "[Shot N] At MM:SS.mmm, …"
+//                          "[Shot N] At MM:SS.mmm, …" — the time is worked out from
+//                          the order and how long the shots before it last
 //   overall_soundscape, non_diegetic_music
 // Stored shape (p.minimax):
-//   { summary, style, shots: [{ at: seconds|null, text }],
+//   { summary, style, shots: [{ len: seconds|null, text }],
 //     subjects: [{ key, definition }], retention: { "<label>": "fully_preserved - …" },
 //     soundscape, music }
 const MM_SECTIONS = [
@@ -4361,7 +4517,7 @@ function blankMinimax() {
   return {
     summary: "",
     style: "",
-    shots: [{ at: null, text: "" }],
+    shots: [{ len: null, text: "" }],
     subjects: [],
     retention: {},
     soundscape: "",
@@ -4371,8 +4527,18 @@ function blankMinimax() {
 
 // A MiniMax prompt in the current shape. Earlier ones kept the summary's task types as
 // checkboxes (summaryTypes) and retention as { marker, note }; both fold into text.
+// Earlier shots held their start time (`at`) rather than their length.
 function normalizeMinimax(mmIn) {
   const mm = { ...blankMinimax(), ...(mmIn || {}) };
+  const list = Array.isArray(mm.shots) && mm.shots.length ? mm.shots : [{}];
+  mm.shots =
+    list.some((s) => s?.at != null) && !list.some((s) => s?.len != null) ?
+      shotsFromStarts(list)
+    : list.map((s, i) => ({
+        len: s?.len ?? null,
+        text: s?.text || "",
+        ...(i > 0 && s?.brk ? { brk: true } : {}),
+      }));
   const types =
     Array.isArray(mm.summaryTypes) ? mm.summaryTypes.filter(Boolean) : [];
   if (
@@ -4424,18 +4590,82 @@ function parseShotTime(v) {
   return Number(m[1] || 0) * 60 + Number(m[2]);
 }
 
-// Cuts in playback order: Shot 1 (the opening, no time) stays first; the rest sort by
-// time, untimed ones last, ties keeping their order. Returns the sorted array — the
-// same one if it was already in order.
-function sortedShots(shots) {
+// Shots that carry start times (`at` — an earlier prompt, or pasted text) as shots
+// with lengths. Shot 1 stays first and the rest go in time order (untimed ones last,
+// ties keeping their order); a shot lasts until the next one starts, and the last
+// one's length isn't known.
+function shotsFromStarts(shots) {
   const [first, ...cuts] = shots || [];
   if (!first) return [];
   const key = (s) => (s.at == null ? Infinity : s.at);
-  const sorted = cuts
-    .map((s, i) => [s, i])
-    .sort((a, b) => key(a[0]) - key(b[0]) || a[1] - b[1])
-    .map((x) => x[0]);
-  return sorted.every((s, i) => s === cuts[i]) ? shots : [first, ...sorted];
+  const sorted = [
+    first,
+    ...cuts
+      .map((s, i) => [s, i])
+      .sort((a, b) => key(a[0]) - key(b[0]) || a[1] - b[1])
+      .map((x) => x[0]),
+  ];
+  return sorted.map((s, i) => {
+    const from = i === 0 ? 0 : s.at;
+    const to = sorted[i + 1]?.at;
+    return {
+      len:
+        from == null || to == null ?
+          null
+        : Math.max(0, Math.round((to - from) * 1000) / 1000),
+      text: s.text || "",
+    };
+  });
+}
+
+// A prompt's sections: runs of shots, split at each shot marked `brk`. A section is
+// generated as a clip of its own, so its shot numbers and times start over.
+const SECTION_MAX_SECONDS = 15; // most models' longest clip — longer only warns
+function minimaxSections(mmIn) {
+  const out = [];
+  normalizeMinimax(mmIn).shots.forEach((s, i) => {
+    if (i === 0 || s.brk) out.push([]);
+    out[out.length - 1].push(s);
+  });
+  return out;
+}
+
+// How long a run of shots lasts, or null when one of them has no length.
+function shotsSeconds(shots) {
+  return shots.some((s) => s.len == null) ? null : (
+      Math.round(shots.reduce((a, s) => a + s.len, 0) * 1000) / 1000
+    );
+}
+
+// How long one section of a sectioned prompt runs. When its last shot is left open
+// ("rest"), that shot takes what remains of a full clip (SECTION_MAX_SECONDS).
+function sectionSeconds(shots) {
+  const sum = shots.reduce((a, s) => a + (Number(s.len) || 0), 0);
+  return (
+    shotsSeconds(shots) ??
+    Math.round(Math.max(sum, SECTION_MAX_SECONDS) * 1000) / 1000
+  );
+}
+
+// A structured prompt's length, from its shots: its sections added up. One without
+// sections whose last shot is left open has no length of its own — `fallback` then.
+function minimaxDuration(mm, fallback = null) {
+  const secs = minimaxSections(mm);
+  if (secs.length > 1)
+    return (
+      Math.round(secs.reduce((a, s) => a + sectionSeconds(s), 0) * 1000) / 1000
+    );
+  return shotsSeconds(secs[0]) || fallback || null;
+}
+
+// When each shot starts, in seconds: the lengths of the shots before it, added up.
+function shotStarts(shots) {
+  let t = 0;
+  return (shots || []).map((s) => {
+    const at = t;
+    t += Number(s.len) || 0;
+    return at;
+  });
 }
 
 const joinList = (a) =>
@@ -4615,17 +4845,19 @@ function appearsText(r) {
     : "not in any shot yet";
 }
 
-function compileMinimax(mmIn, refs) {
+// `only`: compile just that section's shots (0-based); otherwise every shot.
+function compileMinimax(mmIn, refs, only = null) {
   const mm = normalizeMinimax(mmIn);
+  if (only != null) mm.shots = minimaxSections(mm)[only] || mm.shots;
   const subjects = minimaxSubjects(mm, refs);
   const tokens = minimaxMediaTokens(refs);
   const tok = (t) => resolveMediaTokens(String(t || "").trim(), tokens);
-  mm.shots = sortedShots(mm.shots);
+  const starts = shotStarts(mm.shots);
   const shots = mm.shots.map((s, i) => {
     const text = tok(s.text);
     return i === 0 ?
         `[Shot 1] ${text}`
-      : `[Shot ${i + 1}] At ${fmtShotTime(s.at)}, ${text}`;
+      : `[Shot ${i + 1}] At ${fmtShotTime(starts[i])}, ${text}`;
   });
   const section = (name, body) =>
     `${name}:\n${String(body || "").trim() || "N/A"}`;
@@ -4657,13 +4889,15 @@ function compileMinimax(mmIn, refs) {
 //   integrated_multimodal_description — "[Shot 1] <style> <opening>" then each cut as
 //                                       "[Shot N] At MM:SS.mmm, …", all in one run
 //   overall_soundscape, non_diegetic_music ("N/A" when empty)
-function compileMinimaxT2V(mmIn) {
+function compileMinimaxT2V(mmIn, only = null) {
   const mm = normalizeMinimax(mmIn);
+  if (only != null) mm.shots = minimaxSections(mm)[only] || mm.shots;
   const t = (x) => String(x || "").trim();
-  const shots = sortedShots(mm.shots).map((s, i) =>
+  const starts = shotStarts(mm.shots);
+  const shots = mm.shots.map((s, i) =>
     i === 0 ?
       ["[Shot 1]", t(mm.style), t(s.text)].filter(Boolean).join(" ")
-    : `[Shot ${i + 1}] At ${fmtShotTime(s.at)}, ${t(s.text)}`,
+    : `[Shot ${i + 1}] At ${fmtShotTime(starts[i])}, ${t(s.text)}`,
   );
   const field = (name, body) => `${name}: ${t(body) || "N/A"}`;
   return [
@@ -4774,7 +5008,7 @@ function parseMinimax(text, refs = []) {
   }
   mm.soundscape = na(parts.overall_soundscape);
   mm.music = na(parts.non_diegetic_music);
-  mm.shots = sortedShots(mm.shots);
+  mm.shots = shotsFromStarts(mm.shots); // the text gave start times; the fields keep lengths
   return mm;
 }
 
@@ -4787,8 +5021,13 @@ function runSavedPrompt() {
 
 // Stamped on the stored History input (never sent to a model) — what the server's
 // auto-link reads.
-function savedPromptStamp(p) {
-  return { id: p.id, projectId: activeProjectId, title: p.title };
+function savedPromptStamp(p, run = null) {
+  return {
+    id: p.id,
+    projectId: activeProjectId,
+    title: p.title,
+    ...(run?.section ? { section: run.section, sections: run.sections } : {}),
+  };
 }
 
 const savedPanel = document.createElement("div");
@@ -4798,11 +5037,49 @@ savedPanel.innerHTML =
   `<div class="sp-toolbar"><button type="button" class="link-btn sp-new-mm">＋ New MiniMax prompt</button>` +
   `<button type="button" class="link-btn sp-new-t2v">＋ New MiniMax T2V prompt</button></div>` +
   `<p class="sp-run-note"></p>` +
+  `<label class="sp-run-section hidden">Render <select></select><span class="hint"></span></label>` +
   `<p class="dz-hint sp-empty"></p>` +
   `<div class="sp-list"></div>`;
 const savedFilterEl = savedPanel.querySelector(".sp-filter");
 const savedEmptyEl = savedPanel.querySelector(".sp-empty");
 const savedRunNoteEl = savedPanel.querySelector(".sp-run-note");
+// Which section of the active prompt Generate renders (shown when it has several).
+const savedRunSectionEl = savedPanel.querySelector(".sp-run-section");
+const savedRunSectionSelect = savedRunSectionEl.querySelector("select");
+savedRunSectionSelect.addEventListener("change", () => {
+  const p = activeSavedPrompt();
+  if (!p) return;
+  const v = savedRunSectionSelect.value;
+  setRunSection(p.id, v === "all" ? "all" : Number(v));
+  syncRunSection();
+  updateEstimate();
+});
+function syncRunSection() {
+  const p = activeSavedPrompt();
+  const secs = p && isMmType(p.type) ? minimaxSections(p.minimax) : [];
+  savedRunSectionEl.classList.toggle("hidden", secs.length < 2);
+  if (secs.length < 2) return;
+  const len = (shots) => `, ${sectionSeconds(shots)}s`;
+  savedRunSectionSelect.innerHTML = "";
+  savedRunSectionSelect.appendChild(
+    new Option(`All ${secs.length} sections — one after another`, "all"),
+  );
+  secs.forEach((shots, i) =>
+    savedRunSectionSelect.appendChild(
+      new Option(
+        `Section ${i + 1} — ${shots.length} shot${shots.length === 1 ? "" : "s"}${len(shots)}`,
+        String(i),
+      ),
+    ),
+  );
+  const pick = runSectionChoice[p.id];
+  const one = Number.isInteger(pick) && pick < secs.length;
+  savedRunSectionSelect.value = one ? String(pick) : "all";
+  savedRunSectionEl.querySelector(".hint").textContent =
+    one ?
+      "— Generate makes this section's clip."
+    : `— Generate makes ${secs.length} clips, a History card for each, in order.`;
+}
 // A blank MiniMax prompt with the form's current references and duration, opened for editing.
 savedPanel.querySelector(".sp-new-mm").addEventListener("click", async () => {
   try {
@@ -5587,7 +5864,8 @@ function makeVariableRow(v) {
 // token's closing % don't count) opens a list of wildcards: categories first while
 // there's no colon ("modern:" → keep typing), then category:key matches, prefix
 // matches first. ↑/↓ move, Enter or Tab takes one, Esc closes. Taking a list writes
-// the whole %category:key%, replacing what was typed of it.
+// the whole %category:key%, replacing what was typed of it. The same list serves
+// $variables and <tags> (see varAcItems, tagAcItems).
 const wcAc = { el: null, ta: null, start: 0, items: [], index: 0 };
 const WC_AC_FRAGMENT =
   /(^|[^\p{L}\p{N}_%])%([\p{L}\p{N}_-]*)(?::([\p{L}\p{N}_-]*))?$/u;
@@ -5696,13 +5974,74 @@ function varAcItems(q = "") {
     }));
 }
 
+// <…: the subjects and reference labels the prompt can name — <witch>, <Picture 1> —
+// from the references beside the textarea (the saved-prompt editor's, or the form's),
+// and "dialogue", which writes <d>[English] </d> with the caret inside it.
+const TAG_AC_FRAGMENT = /()<([\p{L}\p{N}_ -]{0,24})$/u;
+function tagAcItems(ta, q) {
+  q = q.toLowerCase();
+  const inEditor = !!editing && promptEditModal.contains(ta);
+  const refs =
+    inEditor ?
+      editing.type === "minimax_t2v" ?
+        [] // text-to-video takes no references
+      : editorLiveRefs()
+    : currentPromptDraft().refs.map((r) => {
+        const g = galleryItems.find((x) => x.id === r.id);
+        return { ...r, key: g?.key, definition: g?.definition };
+      });
+  const mm = inEditor && isMmType(editing.type) ? editing.mm : blankMinimax();
+  const items = [];
+  const seen = new Set();
+  const add = (label, hint) => {
+    if (!label || seen.has(label)) return;
+    seen.add(label);
+    items.push({ label, insert: label, hint, name: label.slice(1, -1).toLowerCase() });
+  };
+  const brief = (t) => String(t || "").replace(/\s+/g, " ").slice(0, 80);
+  for (const s of minimaxSubjects(mm, refs))
+    if (!/^<(Picture|Video|Audio|Subject) \d+>$/.test(s.label || ""))
+      add(s.label, brief(s.definition));
+  for (const [key, src] of minimaxMediaTokens(refs))
+    add(`<${key}>`, joinList(src)); // a keyed reference without a definition
+  const n = { image: 0, video: 0, audio: 0 };
+  for (const r of refs) {
+    if (r.missing) continue;
+    const key = normKey(r.key);
+    add(
+      `<${MM_REF_LABEL[r.kind] || "Picture"} ${++n[r.kind]}>`,
+      brief([key && `<${key}>`, r.name].filter(Boolean).join(" · ")),
+    );
+  }
+  items.push({
+    label: "<d>[English] </d>",
+    insert: "<d>[English] </d>",
+    hint: "dialogue — a spoken line",
+    name: "dialogue",
+    back: "</d>".length, // the caret goes before the closing tag
+  });
+  const rank = (name) =>
+    name.startsWith(q) ? 0
+    : name.includes(q) ? 1
+    : -1;
+  return items
+    .map((it, i) => ({ ...it, r: rank(it.name), i, rest: /^[\p{L}\p{N}_-]*>?/u }))
+    .filter((x) => x.r >= 0)
+    .sort((a, b) => a.r - b.r || a.i - b.i)
+    .slice(0, 12);
+}
+
 function wcAcUpdate(ta) {
   if (ta.selectionStart !== ta.selectionEnd) return wcAcClose();
   const before = ta.value.slice(0, ta.selectionStart);
-  const vm = VAR_AC_FRAGMENT.exec(before);
-  const m = vm || WC_AC_FRAGMENT.exec(before);
+  const tm = TAG_AC_FRAGMENT.exec(before);
+  const vm = tm ? null : VAR_AC_FRAGMENT.exec(before);
+  const m = tm || vm || WC_AC_FRAGMENT.exec(before);
   if (!m) return wcAcClose();
-  const items = vm ? varAcItems(vm[2]) : wcAcItems(m[2], m[3]);
+  const items =
+    tm ? tagAcItems(ta, tm[2])
+    : vm ? varAcItems(vm[2])
+    : wcAcItems(m[2], m[3]);
   if (!items.length) return wcAcClose();
   const same =
     wcAc.ta === ta &&
@@ -5760,6 +6099,8 @@ function wcAcAccept(i) {
     ta.setRangeText(it.insert, ta.selectionStart, ta.selectionEnd, "end");
     ta.dispatchEvent(new Event("input", { bubbles: true }));
   }
+  if (it.back)
+    ta.setSelectionRange(ta.selectionStart - it.back, ta.selectionStart - it.back);
   if (it.more)
     wcAcUpdate(ta); // a category: go on to its lists
   else wcAcClose();
@@ -6117,12 +6458,8 @@ function activePromptHost() {
 function setPromptTab(tab) {
   promptTab = tab;
   if (tab === "prompt" || tab === "saved") promptSource = tab;
-  try {
-    localStorage.setItem(PROMPT_TAB_KEY, tab);
-    localStorage.setItem(PROMPT_SOURCE_KEY, promptSource);
-  } catch {
-    /* non-fatal */
-  }
+  setPref(PROMPT_TAB_KEY, tab);
+  setPref(PROMPT_SOURCE_KEY, promptSource);
   syncPromptTabs();
   if (tab === "saved") loadSavedPrompts(); // pick up gallery moves/renames since the last load
   if (tab === "wildcards") loadWildcards();
@@ -6578,6 +6915,7 @@ function renderSavedPrompts() {
       `▶ Generate uses “${active.title}” (${savedPromptSendsRefs(active) ? "its prompt and its references, in order" : "its prompt text only"}) while this tab is open, and links the new History card to it.`
     : "Press ▶ on a card to generate from it while this tab is open. Otherwise Generate uses the Prompt tab's text.";
   savedRunNoteEl.classList.toggle("hidden", !savedPrompts.length);
+  syncRunSection();
   syncWildcardSource();
   syncGenerateLabel();
 }
@@ -6589,6 +6927,7 @@ function syncGenerateLabel() {
     runSavedPrompt() ?
       `Generate from the saved prompt “${runSavedPrompt().title}”`
     : "";
+  updateEstimate(); // a sectioned prompt costs a run per section
 }
 
 // --- manual order ---
@@ -6718,6 +7057,9 @@ function makeSavedPromptCard(p) {
   meta.className = "sp-meta";
   meta.textContent = [
     p.duration ? `${p.duration}s` : null,
+    isMmType(p.type) && minimaxSections(p.minimax).length > 1 ?
+      `${minimaxSections(p.minimax).length} sections`
+    : null,
     refSummary(refs) || null,
     `weight ${p.weight ?? 0}`,
     new Date(p.updatedAt || p.createdAt).toLocaleDateString(),
@@ -6933,6 +7275,8 @@ function renderEditorBody() {
   const mm = isMmType(editing.type);
   document.getElementById("peDefault").classList.toggle("hidden", mm);
   peMinimax.classList.toggle("hidden", !mm);
+  // A MiniMax prompt's length comes from its shots (see minimaxDuration).
+  document.getElementById("peDurationField").classList.toggle("hidden", mm);
   // Text-to-video takes no references, so the reference list and picker are hidden.
   document
     .getElementById("peRefsHome")
@@ -6961,7 +7305,10 @@ function editorValues() {
     // server that doesn't know the format yet keeps the text rather than blanking it.
     prompt: isMmType(editing.type) ? undefined : pePrompt.value,
     minimax: isMmType(editing.type) ? editing.mm : null,
-    duration: Number.isFinite(d) && d > 0 ? d : null,
+    duration:
+      isMmType(editing.type) ? minimaxDuration(editing.mm, editing.p.duration)
+      : Number.isFinite(d) && d > 0 ? d
+      : null,
     weight:
       peWeight.value.trim() !== "" && Number.isFinite(w) ? Math.round(w) : 0,
     historyId: editing.historyId,
@@ -6980,7 +7327,8 @@ function editorDirty() {
       JSON.stringify(v.minimax) !==
       JSON.stringify(p.minimax ? normalizeMinimax(p.minimax) : null)
     : v.prompt !== (p.prompt || "")) ||
-    v.duration !== (p.duration || null) ||
+    // (a MiniMax prompt's duration follows its shots, which are compared above)
+    (!isMmType(v.type) && v.duration !== (p.duration || null)) ||
     v.weight !== (p.weight ?? 0) ||
     v.historyId !== (p.historyId || null) ||
     v.refs.map((r) => r.id).join() !== (p.refs || []).map((r) => r.id).join() ||
@@ -7520,49 +7868,170 @@ function renderMinimaxRefParts(mm) {
   peMinimax.appendChild(sum);
 }
 
-// The shot cards and ＋ Add cut, into `desc`.
+// The shot cards and ＋ Add cut, into `desc`. A shot holds how long it lasts; its start
+// time comes from the order, which the grip (drag) and ▲ ▼ change. ✂ starts a new
+// section at a shot (see minimaxSections); each section gets a header.
+const MM_SHOT_TYPE = "application/x-genie-shot";
 function renderMinimaxShots(mm, desc, t2v) {
   const shots = mmEl("div", "pe-mm-shots");
+  // The shots with every section break as an item of its own, so a move can carry a
+  // shot across a break: ▲ on a section's first shot puts it at the end of the one above.
+  const BRK = {};
+  const items = () =>
+    mm.shots.flatMap((s, i) => (i > 0 && s.brk ? [BRK, s] : [s]));
+  // Back to shots (a break that's first, last or doubled is dropped), then redraw and
+  // show where `s` went.
+  const apply = (list, s) => {
+    const out = [];
+    let brk = false;
+    for (const x of list) {
+      if (x === BRK) {
+        brk = true;
+        continue;
+      }
+      if (brk && out.length) x.brk = true;
+      else delete x.brk;
+      brk = false;
+      out.push(x);
+    }
+    mm.shots = out;
+    renderMinimaxForm();
+    if (!s) return;
+    const moved =
+      peMinimax.querySelectorAll(".pe-mm-shot")[mm.shots.indexOf(s)];
+    moved?.classList.add("pe-mm-moved");
+    moved?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  };
+  const step = (s, delta) => {
+    const list = items();
+    const a = list.indexOf(s);
+    if (a + delta < 0 || a + delta >= list.length) return;
+    [list[a], list[a + delta]] = [list[a + delta], list[a]];
+    apply(list, s);
+  };
+  const sectionCount = mm.shots.filter((s, i) => i === 0 || s.brk).length;
+  let section = -1;
   mm.shots.forEach((s, i) => {
+    if (i === 0 || s.brk) {
+      section++;
+      if (sectionCount > 1) {
+        const bar = mmEl("div", "pe-mm-section");
+        const info = mmEl("span", "hint pe-mm-section-info");
+        info.dataset.section = String(section);
+        bar.append(mmEl("span", "pe-mm-section-name", `Section ${section + 1}`), info);
+        if (i > 0) {
+          const merge = mmEl("button", "link-btn", "Merge with section above");
+          merge.type = "button";
+          merge.addEventListener("click", () => {
+            delete s.brk;
+            renderMinimaxForm();
+          });
+          bar.appendChild(merge);
+        }
+        shots.appendChild(bar);
+      }
+    }
+    const lastInSection = i === mm.shots.length - 1 || !!mm.shots[i + 1].brk;
+    const pos = items().indexOf(s);
     const card = mmEl("div", "pe-mm-shot");
     const head = mmEl("div", "pe-mm-shot-head");
-    head.appendChild(mmEl("span", "pe-mm-shot-name", `[Shot ${i + 1}]`));
-    if (i > 0) {
-      head.appendChild(mmEl("span", "hint", "At"));
-      const at = mmEl("input", "pe-mm-at");
-      at.type = "text";
-      at.inputMode = "decimal";
-      at.value = s.at == null ? "" : fmtShotTime(s.at);
-      at.placeholder = "00:05.000";
-      at.title = "When this cut happens — seconds (5) or MM:SS.mmm (00:05.000)";
-      at.addEventListener("input", () => {
-        s.at = parseShotTime(at.value);
-        refreshMinimaxDerived();
-      });
-      at.addEventListener("change", () => {
-        if (s.at != null) at.value = fmtShotTime(s.at);
-        const sorted = sortedShots(mm.shots);
-        if (sorted === mm.shots) return;
-        mm.shots = sorted;
+    const grip = mmEl("span", "pe-mm-grip", "⠿");
+    grip.title = "Drag to re-order";
+    grip.draggable = true;
+    grip.addEventListener("dragstart", (e) => {
+      e.dataTransfer.setData(MM_SHOT_TYPE, String(i));
+      e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setDragImage(card, 12, 12);
+      card.classList.add("dragging");
+    });
+    grip.addEventListener("dragend", () => {
+      card.classList.remove("dragging");
+      shots
+        .querySelectorAll(".drop-before, .drop-after")
+        .forEach((c) => c.classList.remove("drop-before", "drop-after"));
+    });
+    // Dropping on the top half of a card puts the dragged one above it, bottom half below.
+    const lowerHalf = (e) => {
+      const r = card.getBoundingClientRect();
+      return e.clientY > r.top + r.height / 2;
+    };
+    card.addEventListener("dragover", (e) => {
+      if (![...e.dataTransfer.types].includes(MM_SHOT_TYPE)) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+      const after = lowerHalf(e);
+      card.classList.toggle("drop-after", after);
+      card.classList.toggle("drop-before", !after);
+    });
+    card.addEventListener("dragleave", (e) => {
+      if (!card.contains(e.relatedTarget))
+        card.classList.remove("drop-before", "drop-after");
+    });
+    card.addEventListener("drop", (e) => {
+      if (![...e.dataTransfer.types].includes(MM_SHOT_TYPE)) return;
+      e.preventDefault();
+      const moved = mm.shots[Number(e.dataTransfer.getData(MM_SHOT_TYPE))];
+      if (!moved || moved === s) return;
+      const list = items().filter((x) => x !== moved);
+      list.splice(list.indexOf(s) + (lowerHalf(e) ? 1 : 0), 0, moved);
+      apply(list, moved);
+    });
+
+    head.append(
+      grip,
+      mmEl("span", "pe-mm-shot-name", `[Shot ${i + 1}]`),
+      mmEl("span", "hint", "Length"),
+    );
+    const len = mmEl("input", "pe-mm-at");
+    len.type = "text";
+    len.inputMode = "decimal";
+    len.value = s.len == null ? "" : String(s.len);
+    len.placeholder = lastInSection ? "rest" : "5";
+    len.title =
+      "How long this shot lasts — seconds (5) or MM:SS (00:05.5). Its start time is worked out from the shots before it. A section's last shot can be left empty: it runs to the end.";
+    len.addEventListener("input", () => {
+      s.len = parseShotTime(len.value);
+      refreshMinimaxDerived();
+    });
+    len.addEventListener("change", () => {
+      if (s.len != null) len.value = String(s.len);
+    });
+    const start = mmEl("span", "hint pe-mm-start");
+    const warn = mmEl("span", "pe-mm-warn");
+    warn.dataset.shot = String(i);
+    const tools = mmEl("span", "pe-mm-shot-tools");
+    if (i > 0 && !s.brk) {
+      const split = mmEl("button", "link-btn", "✂");
+      split.type = "button";
+      split.title =
+        "Start a new section at this shot — each section is generated as a clip of its own";
+      split.addEventListener("click", () => {
+        s.brk = true;
         renderMinimaxForm();
-        const moved =
-          peMinimax.querySelectorAll(".pe-mm-shot")[mm.shots.indexOf(s)];
-        moved?.classList.add("pe-mm-moved");
-        moved?.scrollIntoView({ block: "nearest", behavior: "smooth" });
       });
-      const warn = mmEl("span", "pe-mm-warn");
-      warn.dataset.shot = String(i);
+      tools.appendChild(split);
+    }
+    for (const [text, delta, title] of [
+      ["▲", -1, "Move up"],
+      ["▼", 1, "Move down"],
+    ]) {
+      const b = mmEl("button", "link-btn", text);
+      b.type = "button";
+      b.title = title;
+      b.disabled = pos + delta < 0 || pos + delta >= items().length;
+      b.addEventListener("click", () => step(s, delta));
+      tools.appendChild(b);
+    }
+    if (mm.shots.length > 1) {
       const rm = mmEl("button", "link-btn pe-mm-remove", "×");
       rm.type = "button";
-      rm.title = "Remove this cut";
-      rm.addEventListener("click", () => {
-        mm.shots.splice(i, 1);
-        renderMinimaxForm();
-      });
-      head.append(at, warn, rm);
-    } else {
-      head.appendChild(mmEl("span", "hint", "opening shot — no time"));
+      rm.title = "Remove this shot";
+      rm.addEventListener("click", () =>
+        apply(items().filter((x) => x !== s)),
+      );
+      tools.appendChild(rm);
     }
+    head.append(len, mmEl("span", "hint", "s"), start, warn, tools);
     card.append(
       head,
       mmText(s, "text", {
@@ -7583,13 +8052,19 @@ function renderMinimaxShots(mm, desc, t2v) {
   const addCut = mmEl("button", "btn-secondary pe-mm-add-cut", "＋ Add cut");
   addCut.type = "button";
   addCut.addEventListener("click", () => {
-    const last = Math.max(0, ...mm.shots.slice(1).map((x) => x.at || 0));
-    mm.shots.push({ at: last + 5, text: "" });
+    // The shot that was running to the end now needs a length; the new one runs on.
+    const prev = mm.shots[mm.shots.length - 1];
+    if (prev && prev.len == null) prev.len = 5;
+    mm.shots.push({ len: null, text: "" });
     renderMinimaxForm();
     const tas = peMinimax.querySelectorAll(".pe-mm-shot textarea");
     tas[tas.length - 1]?.focus();
   });
-  desc.appendChild(addCut);
+  const foot = mmEl("div", "pe-mm-shots-foot");
+  const total = mmEl("span", "hint");
+  total.id = "mmShotTotal";
+  foot.append(addCut, total);
+  desc.appendChild(foot);
 }
 
 // Everything computed from the fields: the reference subject lines, retention rows,
@@ -7648,25 +8123,70 @@ function refreshMinimaxDerived() {
     w.querySelector("textarea").disabled = !label;
   });
 
-  // Cut-time notes: missing, out of order while typing, or a duplicate time. (Past the
-  // duration is fine.)
-  peMinimax.querySelectorAll(".pe-mm-warn").forEach((w) => {
-    const i = Number(w.dataset.shot);
-    const at = mm.shots[i]?.at;
-    const prevAt = i > 1 ? (mm.shots[i - 1]?.at ?? 0) : 0;
-    w.textContent =
-      at == null ? "⚠ needs a time"
-      : at < prevAt ? "↕ moves into place when you're done"
-      : at === prevAt && i > 1 ? "⚠ same time as the previous cut"
-      : "";
+  // Each shot's start time within its section, a note on a missing length (only a
+  // section's last shot may leave it empty), each section's length, and the shots'
+  // total.
+  const secs = (n) => `${+n.toFixed(3)}s`;
+  const lastShot = mm.shots.length - 1;
+  const opens = (i) => i === 0 || !!mm.shots[i].brk; // the first shot of a section
+  const starts = [];
+  mm.shots.forEach((s, i) => {
+    starts[i] = opens(i) ? 0 : starts[i - 1] + (Number(mm.shots[i - 1].len) || 0);
   });
+  peMinimax.querySelectorAll(".pe-mm-shot .pe-mm-warn").forEach((w) => {
+    const i = Number(w.dataset.shot);
+    const len = mm.shots[i]?.len;
+    w.textContent =
+      len == null && i < lastShot && !opens(i + 1) ? "⚠ needs a length"
+      : len === 0 ? "⚠ no length"
+      : "";
+    w.previousElementSibling.textContent =
+      opens(i) ? "opening shot" : `starts ${fmtShotTime(starts[i])}`;
+  });
+  const sections = minimaxSections(mm);
+  peMinimax.querySelectorAll(".pe-mm-section-info").forEach((el) => {
+    const shots = sections[Number(el.dataset.section)] || [];
+    const sum = shots.reduce((a, s) => a + (Number(s.len) || 0), 0);
+    const open = shotsSeconds(shots) == null;
+    const rest = SECTION_MAX_SECONDS - sum; // what an open last shot gets
+    const over = sum > SECTION_MAX_SECONDS;
+    el.textContent =
+      `— ${shots.length} shot${shots.length === 1 ? "" : "s"}, ${secs(sectionSeconds(shots))}` +
+      (open && rest > 0 ? ` (the last shot takes the remaining ${secs(rest)})` : "") +
+      (over ?
+        ` ⚠ over ${SECTION_MAX_SECONDS}s — longer than most models make in one clip`
+      : open && rest <= 0 ? " ⚠ no time left for the last shot"
+      : "");
+    el.classList.toggle("pe-mm-over", over || (open && rest <= 0));
+  });
+  const totalEl = document.getElementById("mmShotTotal");
+  if (totalEl) {
+    if (sections.length > 1) {
+      // Every section has a length of its own (an open one fills a full clip).
+      const sum = sections.reduce((a, shots) => a + sectionSeconds(shots), 0);
+      totalEl.textContent = `${sections.length} sections — shots total ${secs(sum)}`;
+    } else {
+      const sum = mm.shots.reduce((a, s) => a + (Number(s.len) || 0), 0);
+      totalEl.textContent =
+        mm.shots[lastShot].len == null ?
+          `${secs(sum)} of shots, then the last runs to the end`
+        : `Shots total ${secs(sum)}`;
+    }
+  }
 
   const out = document.getElementById("mmCompiled");
   if (out) {
-    const text =
+    // A sectioned prompt compiles to one prompt per section, as each is generated.
+    const compile = (k) =>
       editing.type === "minimax_t2v" ?
-        compileMinimaxT2V(mm)
-      : compileMinimax(mm, refs);
+        compileMinimaxT2V(mm, k)
+      : compileMinimax(mm, refs, k);
+    const text =
+      sections.length > 1 ?
+        sections
+          .map((_, k) => `── Section ${k + 1} ──\n${compile(k)}`)
+          .join("\n\n")
+      : compile(null);
     out.textContent = text;
     const sum = out.parentElement.querySelector("summary");
     if (sum)
@@ -8211,8 +8731,12 @@ function closePreviewStream() {
 }
 
 // `prompt`: the text to send — the textarea's, or an active saved prompt's export.
-function collectInput(resolved, prompt = promptEl.value) {
+// `seconds`: a prompt section's own length, in place of the form's duration — as whole
+// seconds within what the model allows.
+function collectInput(resolved, prompt = promptEl.value, seconds = null) {
   prompt = String(prompt).trim();
+  const durEl = document.getElementById("duration");
+  const sectionDuration = seconds > 0 ? sectionRunDuration(seconds) : null;
   if (isSeedream()) {
     const input = {
       model: modelSelect.value,
@@ -8233,7 +8757,7 @@ function collectInput(resolved, prompt = promptEl.value) {
     const input = {
       model: modelSelect.value,
       prompt,
-      duration: Number(document.getElementById("duration").value),
+      duration: sectionDuration ?? Number(durEl.value),
       resolution: resolutionSelect.value,
     };
     if (isH3I2V()) {
@@ -8260,8 +8784,7 @@ function collectInput(resolved, prompt = promptEl.value) {
     generate_audio: document.getElementById("generate_audio").checked,
     resolution: document.getElementById("resolution").value,
     aspect_ratio: document.getElementById("aspect_ratio").value,
-    duration:
-      durationAuto() ? -1 : Number(document.getElementById("duration").value),
+    duration: sectionDuration ?? (durationAuto() ? -1 : Number(durEl.value)),
     web_search:
       document.getElementById("web_search").checked &&
       !(webSearchT2VOnly() && hasActiveMedia()),
@@ -8290,6 +8813,7 @@ form.addEventListener("submit", async (e) => {
     submitComfy();
     return;
   }
+  saveKieForm(); // also what a Re-import or a saved prompt filled in, not just edits
   // An active MiniMax prompt brings its own references (before they're checked below).
   const mediaNotes = loadRunMedia(runSavedPrompt());
 
@@ -8348,28 +8872,35 @@ form.addEventListener("submit", async (e) => {
   }
   // Pinned now, so switching tabs (or the active prompt) mid-upload can't change the run.
   const fromSaved = runSavedPrompt();
-  const promptText =
-    fromSaved ? exportSavedPromptText(fromSaved) : promptEl.value;
-  // Wildcards: each run of a ×N batch gets its own picks.
-  let runPrompts;
+  // What to render: the textarea, or the saved prompt — one run, or one per section
+  // of a sectioned prompt (each with its own text and length).
+  const plan =
+    fromSaved ?
+      savedPromptRuns(fromSaved)
+    : [{ text: promptEl.value, duration: null, section: null }];
+  // Wildcards: each run of a ×N batch gets its own picks. A sectioned prompt runs
+  // section by section: ×N of the first, then ×N of the next.
+  let runs;
   try {
-    runPrompts = Array.from({ length: queueCount() }, () =>
-      resolveWildcards(promptText),
+    runs = plan.flatMap((r) =>
+      Array.from({ length: queueCount() }, () => ({
+        ...r,
+        prompt: resolveWildcards(r.text),
+      })),
     );
   } catch (err) {
     setError(err.message || String(err));
     return;
   }
-  const longest = Math.max(...runPrompts.map((t) => t.length));
-  if (longest > promptCap()) {
+  const longest = runs.reduce((a, r) => (r.prompt.length > a.prompt.length ? r : a));
+  if (longest.prompt.length > promptCap()) {
     setError(
-      `${fromSaved ? `Saved prompt “${fromSaved.title}”` : "Prompt"} is ${longest.toLocaleString()} characters` +
-        `${longest !== promptText.length ? " with its wildcards and variables filled in" : ""} — ` +
+      `${fromSaved ? `Saved prompt “${fromSaved.title}”${longest.section ? ` (section ${longest.section})` : ""}` : "Prompt"} is ${longest.prompt.length.toLocaleString()} characters` +
+        `${longest.prompt.length !== longest.text.length ? " with its wildcards and variables filled in" : ""} — ` +
         `this model's limit is ${promptCap().toLocaleString()}.`,
     );
     return;
   }
-  const templated = hasPromptTokens(promptText);
 
   hide(errorEl);
   if (mediaNotes.length) setError(mediaNotes.join("\n"));
@@ -8390,14 +8921,15 @@ form.addEventListener("submit", async (e) => {
 
   // ×N: one batch of identical requests. Each run gets its own job, History card and
   // kie.ai task, but the reference media is uploaded once and shared by all of them.
-  const count = runPrompts.length;
+  const count = runs.length;
   const storedInputFor = (i) => {
     const s = collectInput(
       { image: [], video: [], audio: [], firstFrame: [], lastFrame: [] },
-      runPrompts[i],
+      runs[i].prompt,
+      runs[i].duration,
     );
-    if (fromSaved) s.savedPrompt = savedPromptStamp(fromSaved); // History only, not sent to kie.ai
-    if (templated) s.promptTemplate = promptText; // History only: Re-import restores the %tokens%
+    if (fromSaved) s.savedPrompt = savedPromptStamp(fromSaved, runs[i]); // History only, not sent to kie.ai
+    if (hasPromptTokens(runs[i].text)) s.promptTemplate = runs[i].text; // History only: Re-import restores the %tokens%
     return s;
   };
   const projectId = activeProjectId; // pin now so a mid-run project switch can't misfile it
@@ -8475,7 +9007,7 @@ form.addEventListener("submit", async (e) => {
       try {
         // The real input (hosted URLs, this run's wildcard picks) for the API call.
         job.taskId = await createTask(
-          collectInput(resolved, runPrompts[i]),
+          collectInput(resolved, runs[i].prompt, runs[i].duration),
           job.live,
         );
         job.live.setStatus("Generating… this can take a few minutes.");

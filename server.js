@@ -520,6 +520,17 @@ if (AUTH_ENABLED) {
   });
 }
 
+// The shared settings as a script the page loads before app.js, so they're there
+// from the first line (no flash of defaults while a fetch is in flight).
+app.get("/settings.js", (req, res) => {
+  res
+    .type("js")
+    .set("Cache-Control", "no-store")
+    .send(
+      `window.GENIE_SETTINGS = ${JSON.stringify(publicAppSettings(readAppSettings())).replace(/</g, "\\u003c")};\n`,
+    );
+});
+
 app.use(express.static(path.join(__dirname, "public")));
 app.use("/output", express.static(OUTPUT_DIR)); // generated results (per-project subfolders)
 app.use("/input", express.static(INPUT_DIR)); // saved reference media (per-project subfolders)
@@ -3536,7 +3547,9 @@ const PROMPT_TYPES = new Set(["default", "minimax", "minimax_t2v"]);
 // The types whose text is compiled from `minimax` fields.
 const STRUCTURED_PROMPT_TYPES = new Set(["minimax", "minimax_t2v"]);
 
-// The fields of a "minimax" prompt, validated and capped. Shot 1 never has a time.
+// The fields of a "minimax" prompt, validated and capped. A shot keeps how long it
+// lasts (`len`); earlier prompts kept each cut's start time (`at`), which becomes
+// lengths here — a shot lasts until the next one starts.
 function sanitizeMinimax(mm) {
   const o = mm && typeof mm === "object" ? mm : {};
   const str = (v, n = 20000) => String(v ?? "").slice(0, n);
@@ -3548,6 +3561,9 @@ function sanitizeMinimax(mm) {
   };
   const shots =
     Array.isArray(o.shots) && o.shots.length ? o.shots.slice(0, 100) : [{}];
+  const fromStarts =
+    shots.some((s) => s?.at != null) && !shots.some((s) => s?.len != null);
+  const starts = shots.map((s, i) => (i === 0 ? 0 : time(s?.at)));
   const retention =
     o.retention && typeof o.retention === "object" ? o.retention : {};
   // Earlier prompts kept the summary's task types as a list — fold them into the text.
@@ -3562,8 +3578,12 @@ function sanitizeMinimax(mm) {
     summary,
     style: str(o.style, 4000),
     shots: shots.map((s, i) => ({
-      at: i === 0 ? null : time(s?.at),
+      len:
+        !fromStarts ? time(s?.len)
+        : starts[i] == null || starts[i + 1] == null ? null
+        : Math.max(0, Math.round((starts[i + 1] - starts[i]) * 1000) / 1000),
       text: str(s?.text),
+      ...(i > 0 && s?.brk ? { brk: true } : {}), // a new section starts at this shot
     })),
     subjects: (Array.isArray(o.subjects) ? o.subjects : [])
       .slice(0, 50)
@@ -4562,24 +4582,58 @@ app.put("/api/history/:id", (req, res) => {
   res.json({ code: 200, msg: "updated", data: entry });
 });
 
-// --- global app settings (auto-draft MP threshold) ------------------------
+// --- global app settings ---------------------------------------------------
+// Shared by every browser that opens this server (settings/app.json):
+//   autoDraftMaxMP — the auto-draft megapixel threshold
+//   kieForm        — the kie.ai form's choices per model: { model: { field: value } }
+//   runSections    — which section of a sectioned saved prompt Generate renders:
+//                    { promptId: "all" | index }
+//   prefs          — the UI's other remembered choices (active project, last model,
+//                    prompt tab, active saved prompts, hidden History tags, preview
+//                    method, carry lock): { key: string }
+function plainObject(v) {
+  return v && typeof v === "object" && !Array.isArray(v) ? v : {};
+}
+function publicAppSettings(s) {
+  return {
+    autoDraftMaxMP: Number(s.autoDraftMaxMP) || 0,
+    kieForm: plainObject(s.kieForm),
+    runSections: plainObject(s.runSections),
+    prefs: plainObject(s.prefs),
+  };
+}
 app.get("/api/settings", (req, res) => {
-  res.json({
-    code: 200,
-    msg: "success",
-    data: { autoDraftMaxMP: Number(readAppSettings().autoDraftMaxMP) || 0 },
-  });
+  res.json({ code: 200, msg: "success", data: publicAppSettings(readAppSettings()) });
 });
+// A PUT merges: only the models / prompts it names are replaced.
 app.put("/api/settings", (req, res) => {
   const s = readAppSettings();
   if (req.body?.autoDraftMaxMP != null)
     s.autoDraftMaxMP = Math.max(0, Number(req.body.autoDraftMaxMP) || 0);
+  const kieForm = plainObject(req.body?.kieForm);
+  for (const [model, fields] of Object.entries(kieForm).slice(0, 50)) {
+    s.kieForm = plainObject(s.kieForm);
+    s.kieForm[String(model).slice(0, 100)] = Object.fromEntries(
+      Object.entries(plainObject(fields))
+        .slice(0, 20)
+        .map(([k, v]) => [String(k).slice(0, 40), String(v ?? "").slice(0, 40)]),
+    );
+  }
+  const runSections = plainObject(req.body?.runSections);
+  for (const [id, v] of Object.entries(runSections).slice(0, 50)) {
+    s.runSections = plainObject(s.runSections);
+    s.runSections[String(id).slice(0, 100)] =
+      Number.isInteger(v) && v >= 0 ? v : "all";
+  }
+  const prefs = plainObject(req.body?.prefs);
+  for (const [k, v] of Object.entries(prefs).slice(0, 50)) {
+    s.prefs = plainObject(s.prefs);
+    const key = String(k).slice(0, 60);
+    if (v === null) delete s.prefs[key];
+    else s.prefs[key] = String(v).slice(0, 20000);
+  }
   writeAppSettings(s);
-  res.json({
-    code: 200,
-    msg: "updated",
-    data: { autoDraftMaxMP: Number(s.autoDraftMaxMP) || 0 },
-  });
+  res.json({ code: 200, msg: "updated", data: publicAppSettings(s) });
 });
 
 // --- toggle an entry's tags (hidden / draft / favorite) -------------------

@@ -88,7 +88,7 @@
       <label>How many
         <input type="number" class="llm-count" min="1" max="20" step="1" value="3" />
       </label>
-      <label>Duration (s)
+      <label title="The whole video's length. Over 15 seconds, a MiniMax prompt is written as sections of up to 15 seconds, each generated as its own clip.">Duration (s)
         <input type="number" class="llm-dur" min="1" step="1" placeholder="—" />
       </label>
       <label>Title prefix
@@ -940,7 +940,7 @@
     for (const [k, v] of Object.entries(mm.retention || {})) sec(`Retention ${k.startsWith("<") ? k : `<${k}>`}`, v);
     sec("Style", mm.style);
     (mm.shots || []).forEach((x, i) =>
-      sec(i === 0 || x.at == null ? `Shot ${i + 1}` : `Shot ${i + 1} (at ${x.at}s)`, x.text),
+      sec(x.len == null ? `Shot ${i + 1}` : `Shot ${i + 1} (${x.len}s)`, x.text),
     );
     sec("Soundscape", mm.soundscape);
     sec("Music", mm.music);
@@ -958,6 +958,9 @@
       mm.retention = structuredClone(cur.retention);
     if (!(mm.subjects || []).length && (cur.subjects || []).length)
       mm.subjects = structuredClone(cur.subjects);
+    // A reply that dropped the section numbers: with the same number of shots, keep the breaks.
+    if (!mm.shots.some((x) => x.brk) && (cur.shots || []).length === mm.shots.length)
+      mm.shots.forEach((x, i) => cur.shots[i].brk && i > 0 && (x.brk = true));
     return mm;
   }
   const resultText = (res) => (res.minimax ? mmText(mergedMm(res.minimax)) : res.prompt || "");

@@ -60,27 +60,27 @@ Fields:
 - summary: the task type in square brackets, then one short paragraph on what the video shows and what each reference is for, e.g. "[reference generation] <hulk> strides down a desert road toward the camera …".
 - retention: for each subject key, how closely the video must match its references: a marker, " - ", then what is kept, e.g. {"hulk": "fully_preserved - face, hair, build and skin colour"}. Markers: fully_preserved, partially_preserved, attribute_transfer, weak_reference.
 - style: one sentence opening the description with the visual style, e.g. "The target video uses a live action cinematic style."
-- shots: the shots in order. The first has "at": null. A cut to a new shot has "at" set to the time in seconds it starts. Each "text" is concrete, filmable action in the present tense: who does what and in what order, how the camera moves and frames them, the lighting and mood. Pace the action to fit the clip's length; use one shot unless the action needs a cut.
+- shots: the shots in order, each with "seconds": how many seconds it lasts. The seconds of all the shots add up to the clip's length. Each "text" is concrete, filmable action in the present tense: who does what and in what order, how the camera moves and frames them, the lighting and mood. Pace the action to fit the clip's length; use one shot unless the action needs a cut.
 - soundscape: the diegetic sound — ambience, footsteps, voices, effects.
 - music: the non-diegetic music, or "None".
 
 Plain text in every field — no markdown, no bullet points, no notes to the reader.
 
 Reply with only a JSON object and nothing else:
-{"title": "a short title, at most 8 words", "subjects": [{"key": "…", "definition": "…"}], "summary": "…", "retention": {"key": "…"}, "style": "…", "shots": [{"at": null, "text": "…"}], "soundscape": "…", "music": "…"}`;
+{"title": "a short title, at most 8 words", "subjects": [{"key": "…", "definition": "…"}], "summary": "…", "retention": {"key": "…"}, "style": "…", "shots": [{"seconds": 5, "text": "…"}], "soundscape": "…", "music": "…"}`;
 
 export const MINIMAX_T2V_INSTRUCTIONS = `You write structured prompts for MiniMax Hailuo H3 text-to-video. There are no reference images: the prompt alone describes everything on screen, so describe each person, character and place fully the first time it appears — build, clothing, hair, expression, setting, lighting and colours.
 
 Fields:
 - style: one sentence with the visual style, e.g. "The target video uses a live action cinematic style."
-- shots: the shots in order. The first has "at": null. A cut to a new shot has "at" set to the time in seconds it starts. Each "text" is concrete, filmable action in the present tense: who does what and in what order, how the camera moves and frames them, the lighting and mood. Pace the action to fit the clip's length; use one shot unless the action needs a cut.
+- shots: the shots in order, each with "seconds": how many seconds it lasts. The seconds of all the shots add up to the clip's length. Each "text" is concrete, filmable action in the present tense: who does what and in what order, how the camera moves and frames them, the lighting and mood. Pace the action to fit the clip's length; use one shot unless the action needs a cut.
 - soundscape: the diegetic sound — ambience, footsteps, voices, effects.
 - music: the non-diegetic music, or "None".
 
 Plain text in every field — no markdown, no bullet points, no notes to the reader.
 
 Reply with only a JSON object and nothing else:
-{"title": "a short title, at most 8 words", "style": "…", "shots": [{"at": null, "text": "…"}], "soundscape": "…", "music": "…"}`;
+{"title": "a short title, at most 8 words", "style": "…", "shots": [{"seconds": 5, "text": "…"}], "soundscape": "…", "music": "…"}`;
 
 const DEFAULT_SETTINGS = {
   activeSourceId: "lmstudio",
@@ -1091,8 +1091,14 @@ export function createLlm(deps) {
         state.request = controller;
         let result;
         try {
-          result = await writePrompt(job, src, imageParts, controller.signal, (chars) =>
-            setJob(job, undefined, `${doing}… (${chars} characters)`),
+          result = await writePrompt(job, src, imageParts, controller.signal, (chars, fix) =>
+            setJob(
+              job,
+              undefined,
+              fix ?
+                `${doing}… fixing the reply's JSON, attempt ${fix} of ${REPAIR_ATTEMPTS} (${chars} characters)`
+              : `${doing}… (${chars} characters)`,
+            ),
           );
         } catch (err) {
           const reason = controller.signal.reason;
@@ -1115,7 +1121,6 @@ export function createLlm(deps) {
         }
         const saved = savePrompt(job, result, n);
         job.created.push({ id: saved.id, title: saved.title, llmTitle: result.title });
-        if (result.plain) job.plainCount = (job.plainCount || 0) + 1;
         job.done++;
       }
       if (job.kind === "revise") {
@@ -1125,10 +1130,7 @@ export function createLlm(deps) {
       setJob(
         job,
         "done",
-        `Saved ${job.count} prompt${job.count === 1 ? "" : "s"} to Saved Prompts.` +
-          (job.plainCount ?
-            ` ${job.plainCount} came back without the MiniMax structure and ${job.plainCount === 1 ? "was" : "were"} saved as plain prompt${job.plainCount === 1 ? "" : "s"}.`
-          : ""),
+        `Saved ${job.count} prompt${job.count === 1 ? "" : "s"} to Saved Prompts.`,
       );
     } finally {
       clearInterval(watch);
@@ -1162,7 +1164,13 @@ export function createLlm(deps) {
       );
     }
     o.style = mm.style || "";
-    o.shots = (mm.shots || []).map((x, i) => ({ at: i === 0 ? null : (x?.at ?? null), text: x?.text || "" }));
+    // A sectioned prompt's shots carry their section number (see sectionLengths).
+    const sectioned = (mm.shots || []).some((x, i) => i > 0 && x?.brk);
+    let section = 1;
+    o.shots = (mm.shots || []).map((x, i) => {
+      if (i > 0 && x?.brk) section++;
+      return { ...(sectioned ? { section } : {}), seconds: x?.len ?? null, text: x?.text || "" };
+    });
     o.soundscape = mm.soundscape || "";
     o.music = mm.music || "";
     return o;
@@ -1194,6 +1202,11 @@ export function createLlm(deps) {
       lines.push("");
     }
     if (job.duration) lines.push(`Clip length: ${job.duration} seconds.`, "");
+    if (job.format !== "default" && (job.current?.shots || []).some((x, i) => i > 0 && x?.brk))
+      lines.push(
+        `The shots are grouped into sections by their "section" number. Each section is generated as a separate clip of at most ${SECTION_MAX_SECONDS} seconds. Keep every shot's "section" unless the changes call for moving it.`,
+        "",
+      );
     lines.push("The current prompt:", "```json", JSON.stringify(currentAsJson(job), null, 2), "```", "");
     lines.push(`Changes to make: ${job.instruction}`, "");
     lines.push("Reply with only the complete revised JSON object.");
@@ -1230,7 +1243,16 @@ export function createLlm(deps) {
     if (job.description) lines.push(`What should happen: ${job.description}`);
     if (job.theme) lines.push(`Theme / style: ${job.theme}`);
     if (job.rules) lines.push("", "Follow the rules in the system prompt.");
-    if (job.duration) lines.push(`Clip length: ${job.duration} seconds.`);
+    const sections = job.format !== "default" ? sectionLengths(job.duration) : [];
+    if (sections.length > 1)
+      lines.push(
+        `Video length: ${job.duration} seconds, generated as ${sections.length} separate clips ("sections"): ${sections
+          .map((s, i) => `section ${i + 1} is ${s} seconds`)
+          .join(", ")}.`,
+        `Give every shot a "section" number, like {"section": 1, "seconds": 5, "text": "…"}. Within a section, the shots' seconds add up to that section's length.`,
+        "Each section is generated on its own from the same references and never sees the others. Open each section with a shot that re-establishes who is where, and keep the subjects, setting and style consistent from one section to the next.",
+      );
+    else if (job.duration) lines.push(`Clip length: ${job.duration} seconds.`);
     if (job.count > 1) {
       lines.push("");
       lines.push(
@@ -1274,9 +1296,75 @@ export function createLlm(deps) {
   // 5-minute header timeout).
   async function writePrompt(job, src, imageParts, signal, onProgress) {
     const opts = readSettings().options;
+    const text = await complete(
+      job,
+      src,
+      buildMessages(job, imageParts, job.done + 1),
+      opts.temperature,
+      imageParts.length > 0,
+      signal,
+      onProgress,
+    );
+    if (!job.format || job.format === "default") return parseReply(text);
+    // A MiniMax reply that isn't its JSON goes back to the model to be fixed — a
+    // text-only request, so the images aren't processed again. After REPAIR_ATTEMPTS
+    // the reply is thrown away: the error makes runJob write the prompt afresh.
+    let reply = text;
+    for (let fix = 1; ; fix++) {
+      try {
+        // A build longer than one clip is split into sections even if the reply didn't.
+        return parseStructuredReply(reply, job.format, {
+          split: job.kind !== "revise" && job.duration > SECTION_MAX_SECONDS,
+        });
+      } catch (err) {
+        if (fix > REPAIR_ATTEMPTS || !stripThinking(text)) throw err;
+        log.warn?.(`LLM: ${err.message} Asking it to fix the JSON (${fix} of ${REPAIR_ATTEMPTS}).`);
+        onProgress?.(0, fix);
+        reply = await complete(
+          job,
+          src,
+          buildRepairMessages(job, text, err.message),
+          0.2,
+          false,
+          signal,
+          (chars) => onProgress?.(chars, fix),
+        );
+      }
+    }
+  }
+
+  // Ask the model to turn its own malformed reply into the JSON the format needs.
+  function buildRepairMessages(job, text, problem) {
+    const shape = (job.format === "minimax" ? MINIMAX_INSTRUCTIONS : MINIMAX_T2V_INSTRUCTIONS)
+      .split("\n")
+      .pop();
+    return [
+      {
+        role: "system",
+        content:
+          "You repair malformed JSON. Reply with only the corrected JSON object and nothing else — no commentary, no markdown.",
+      },
+      {
+        role: "user",
+        content: [
+          `The reply below should be one JSON object in this shape, but it can't be used: ${problem}`,
+          shape,
+          "",
+          "Rewrite it as valid JSON in that shape. Keep the wording as it is and change only what is needed: quotes, commas, brackets, escaping, field names. If it is prose without the structure, sort the text into the fields.",
+          "",
+          "The reply:",
+          stripThinking(text),
+        ].join("\n"),
+      },
+    ];
+  }
+
+  // One streamed chat completion → the reply text.
+  async function complete(job, src, messages, temperature, hasImages, signal, onProgress) {
+    const opts = readSettings().options;
     const body = {
-      messages: buildMessages(job, imageParts, job.done + 1),
-      temperature: opts.temperature,
+      messages,
+      temperature,
       max_tokens: opts.maxTokens,
       stream: true,
     };
@@ -1305,7 +1393,7 @@ export function createLlm(deps) {
         } catch {
           /* raw text */
         }
-        if (/image|vision|multimodal|mmproj/i.test(String(msg)) && imageParts.length)
+        if (/image|vision|multimodal|mmproj/i.test(String(msg)) && hasImages)
           msg += " — is this a vision model? (LM Studio shows an eye icon on vision models.)";
         throw new Error(`HTTP ${r.status} — ${msg}`);
       }
@@ -1353,18 +1441,7 @@ export function createLlm(deps) {
     } finally {
       clearTimeout(idleTimer);
     }
-    if (!job.format || job.format === "default") return parseReply(text);
-    // A revision replaces fields the user already has — prose can't stand in for them,
-    // so a reply that isn't the JSON is an error (and retried) rather than kept.
-    if (job.kind === "revise") return parseStructuredReply(text, job.format);
-    try {
-      return parseStructuredReply(text, job.format);
-    } catch (err) {
-      // Not the MiniMax JSON: keep what the model wrote as a plain (Default) prompt
-      // rather than throwing it away and asking again.
-      log.warn?.(`LLM: ${err.message} Saving it as a plain prompt.`);
-      return { ...parseReply(text), plain: true };
-    }
+    return text;
   }
 
   function savePrompt(job, result, n) {
@@ -1372,8 +1449,7 @@ export function createLlm(deps) {
     if (!proj) throw new Error("The project was deleted.");
     let title = result.title || `Prompt ${n}`;
     if (job.titlePrefix) title = `${job.titlePrefix} — ${title}`;
-    // `plain`: a MiniMax reply that wasn't its JSON, saved as a Default prompt.
-    const structured = job.format && job.format !== "default" && !result.plain;
+    const structured = job.format && job.format !== "default";
     const fields = sanitizePromptFields({
       title,
       type: structured ? job.format : "default",
@@ -1382,7 +1458,7 @@ export function createLlm(deps) {
       duration: job.duration,
       weight: 0,
       refs:
-        job.format === "minimax_t2v" && !result.plain ? [] : (
+        job.format === "minimax_t2v" ? [] : (
           job.images.map((g) => ({ id: g.id, kind: "image", name: g.name }))
         ),
     });
@@ -1396,7 +1472,6 @@ export function createLlm(deps) {
         description: job.description,
         theme: job.theme,
         rules: job.rules || undefined,
-        savedAsPlain: result.plain ? job.format : undefined, // asked for MiniMax, got prose
         jobId: job.id,
       },
       createdAt: now,
@@ -1448,13 +1523,42 @@ export function createLlm(deps) {
   };
 }
 
-// The model's reply → { title, prompt }. Tolerates <think> blocks, ``` fences and
-// chatter around the JSON; a reply that isn't JSON at all becomes the prompt itself.
-export function parseReply(raw) {
-  let t = String(raw || "")
+// How many times a malformed MiniMax reply goes back to the model to be fixed.
+const REPAIR_ATTEMPTS = 3;
+
+// A MiniMax prompt longer than this is written as sections, each generated as a clip
+// of its own (the UI's SECTION_MAX_SECONDS).
+const SECTION_MAX_SECONDS = 15;
+const SECTION_MIN_SECONDS = 4; // the shortest clip the video models make
+
+// The lengths of the sections a video of `total` seconds is made of: full clips, then
+// the remainder — topped up from the clip before it when too short to generate.
+// [] when one clip is enough.
+export function sectionLengths(total) {
+  const t = Math.round(Number(total) || 0);
+  if (t <= SECTION_MAX_SECONDS) return [];
+  const out = Array(Math.floor(t / SECTION_MAX_SECONDS)).fill(SECTION_MAX_SECONDS);
+  const rest = t % SECTION_MAX_SECONDS;
+  if (rest) {
+    const last = Math.max(rest, SECTION_MIN_SECONDS);
+    out[out.length - 1] -= last - rest;
+    out.push(last);
+  }
+  return out;
+}
+
+// A reply without its <think> block.
+function stripThinking(raw) {
+  return String(raw || "")
     .replace(/<think>[\s\S]*?<\/think>/gi, "")
     .replace(/^[\s\S]*<\/think>/i, "")
     .trim();
+}
+
+// The model's reply → { title, prompt }. Tolerates <think> blocks, ``` fences and
+// chatter around the JSON; a reply that isn't JSON at all becomes the prompt itself.
+export function parseReply(raw) {
+  let t = stripThinking(raw);
   const fence = /```(?:json)?\s*([\s\S]*?)```/i.exec(t);
   if (fence) t = fence[1].trim();
   const a = t.indexOf("{");
@@ -1482,11 +1586,11 @@ export function parseReply(raw) {
 // A MiniMax build's reply → { title, minimax } in the stored shape (see app.js,
 // "Stored shape (p.minimax)"). Throws when there's no usable JSON, so the build
 // retries; a reply with only a "prompt" string becomes a single shot.
-export function parseStructuredReply(raw, format) {
-  let t = String(raw || "")
-    .replace(/<think>[\s\S]*?<\/think>/gi, "")
-    .replace(/^[\s\S]*<\/think>/i, "")
-    .trim();
+// A shot whose "section" number differs from the one before starts a new section
+// (`brk`). `split`: shots that came without section numbers are packed into sections
+// of at most SECTION_MAX_SECONDS.
+export function parseStructuredReply(raw, format, { split = false } = {}) {
+  let t = stripThinking(raw);
   const fence = /```(?:json)?\s*([\s\S]*?)```/i.exec(t);
   if (fence) t = fence[1].trim();
   const a = t.indexOf("{");
@@ -1519,12 +1623,39 @@ export function parseStructuredReply(raw, format) {
     return m ? Number(m[1] || 0) * 60 + Number(m[2]) : null;
   };
   let shots = (Array.isArray(j.shots) ? j.shots : [])
-    .map((x) => (typeof x === "string" ? { at: null, text: x } : x || {}))
-    .map((x) => ({ at: secs(x.at ?? x.time), text: str(x.text ?? x.description) }))
+    .map((x) => (typeof x === "string" ? { text: x } : x || {}))
+    .map((x) => ({
+      len: secs(x.seconds ?? x.len ?? x.length ?? x.duration),
+      at: secs(x.at ?? x.time),
+      section: x.section ?? x.clip ?? null,
+      text: str(x.text ?? x.description),
+    }))
     .filter((x) => x.text);
-  if (!shots.length && str(j.prompt)) shots = [{ at: null, text: str(j.prompt) }];
+  if (!shots.length && str(j.prompt)) shots = [{ len: null, text: str(j.prompt) }];
   if (!shots.length) throw new Error("The LLM's reply had no shots.");
-  shots[0].at = null;
+  // A reply that gave start times instead of lengths: a shot lasts until the next starts.
+  if (!shots.some((x) => x.len != null) && shots.some((x) => x.at != null))
+    shots.forEach((x, i) => {
+      const from = i === 0 ? 0 : x.at;
+      const to = shots[i + 1]?.at;
+      x.len = from == null || to == null ? null : Math.max(0, Math.round((to - from) * 1000) / 1000);
+    });
+  shots.forEach((x, i) => {
+    const prev = shots[i - 1];
+    if (prev && x.section != null && prev.section != null && String(x.section) !== String(prev.section))
+      x.brk = true;
+  });
+  if (split && !shots.some((x) => x.brk)) {
+    let t = 0;
+    for (const x of shots) {
+      if (t > 0 && t + (x.len || 0) > SECTION_MAX_SECONDS) {
+        x.brk = true;
+        t = 0;
+      }
+      t += x.len || 0;
+    }
+  }
+  shots = shots.map(({ len, text, brk }) => ({ len, text, ...(brk ? { brk: true } : {}) }));
   const mm = {
     summary: format === "minimax" ? str(j.summary) : "",
     style: str(j.style),

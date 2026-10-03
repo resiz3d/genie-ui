@@ -2145,15 +2145,19 @@ img.zoomable {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  gap: 0.75rem;
+  flex-wrap: wrap; /* a long meta line drops below the title rather than squeezing it */
+  gap: 0.2rem 0.75rem;
 }
 .sp-title {
   font-weight: 600;
   overflow-wrap: anywhere;
 }
 .sp-title {
-  flex: 1;
+  flex: 1 1 12rem;
   min-width: 0;
+}
+.sp-title .sp-type {
+  white-space: nowrap;
 }
 .sp-meta {
   color: var(--muted);
@@ -2936,7 +2940,76 @@ textarea.wc-hl-on {
   border-radius: 6px;
   background: var(--panel);
 }
-/* A cut that just moved into time order. */
+.pe-mm-shot.dragging {
+  opacity: 0.4;
+}
+/* Where a dragged shot will land. */
+.pe-mm-shot.drop-before {
+  box-shadow: 0 -3px 0 var(--accent);
+}
+.pe-mm-shot.drop-after {
+  box-shadow: 0 3px 0 var(--accent);
+}
+.pe-mm-grip {
+  cursor: grab;
+  color: var(--muted);
+  font-size: 1rem;
+  line-height: 1;
+  padding: 0.2rem 0.1rem;
+  user-select: none;
+}
+.pe-mm-grip:hover {
+  color: var(--text);
+}
+.pe-mm-shot-tools {
+  display: flex;
+  align-items: center;
+  gap: 0.15rem;
+  margin-left: auto;
+}
+.pe-mm-section {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin-top: 0.4rem;
+  padding-bottom: 0.2rem;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.8rem;
+}
+.pe-mm-section:first-child {
+  margin-top: 0;
+}
+.pe-mm-section-name {
+  font-weight: 600;
+}
+.pe-mm-section .link-btn {
+  margin-left: auto;
+  font-size: 0.75rem;
+}
+.hint.pe-mm-over {
+  color: #e0b060;
+}
+.sp-run-section {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0;
+  font-size: 0.8rem;
+}
+.sp-run-section select {
+  width: auto;
+  max-width: 100%;
+}
+.pe-mm-shots-foot {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+/* A shot that was just moved. */
 .pe-mm-shot.pe-mm-moved {
   animation: pe-mm-moved 1.2s ease-out;
 }
@@ -2961,7 +3034,7 @@ textarea.wc-hl-on {
   font-size: 0.75rem;
 }
 .pe-mm input[type="text"].pe-mm-at {
-  width: 6.2em; /* just fits 00:00.000 */
+  width: 4.2em; /* a length in seconds */
   flex: 0 0 auto;
   padding: 0.15rem 0.35rem;
   text-align: center;
@@ -2969,9 +3042,6 @@ textarea.wc-hl-on {
 .pe-mm-warn {
   font-size: 0.75rem;
   color: #e0b060;
-}
-.pe-mm-shot-head .pe-mm-remove {
-  margin-left: auto;
 }
 .pe-mm-add-cut {
   align-self: flex-start;

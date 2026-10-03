@@ -50,10 +50,56 @@ heading for that version with the date, commit, then tag the commit `vX.Y.Z`.
   - The NSFW checker switch is unchanged: unchecked still sends
     `nsfw_checker: false`, which turns off kie.ai's filter but not the model
     provider's own moderation.
-- **Build with AI: a MiniMax reply that isn't MiniMax JSON is kept.** Instead of
-  "The LLM's reply wasn't the JSON the MiniMax format needs" and a retry, the text
-  is saved as a Default (plain) prompt with the same images, marked
-  `llm.savedAsPlain`, and the build's status says how many came back that way.
+- **MiniMax shots hold a length, not a start time, and can be re-ordered.** Each
+  shot in the saved-prompt editor — Shot 1 included — has a **Length** in seconds;
+  the "At MM:SS.mmm" cut times in the compiled prompt are worked out from the order
+  and the lengths before each shot. Drag a shot by its **⠿** grip or use **▲ ▼** to
+  move it, and **×** removes any shot. The last shot's length can be left empty (it
+  runs to the end), each card shows when it starts, and the shots' total is shown
+  under the list. The editor's **Duration** field is gone for MiniMax prompts: the
+  saved duration now follows the shots. Existing prompts are converted from their
+  cut times when opened, and Build / Revise with AI now asks the LLM for each
+  shot's seconds.
+- **MiniMax shots can be grouped into sections, each generated as its own clip.**
+  **✂** on a shot starts a new section there; a section's header shows its length,
+  with a warning past 15s (it is still allowed), and **Merge with section above**
+  removes the break. ▲ ▼ and dragging carry a shot across a break. Each section
+  compiles to a prompt of its own, with shot numbers and times starting over. When
+  a sectioned prompt is **▶ Active**, a **Render** picker by the cards chooses one
+  section or **All sections**: All makes a run and History card per section, in
+  order. A section's length sets that run's duration, rounded up and kept within
+  the model's limits; a section whose last shot is left empty fills a full 15s.
+  The cost estimate beside Generate adds up the sections that will run.
+- **The kie.ai form remembers each model's settings.** Resolution, aspect ratio,
+  duration, quality and output format are kept per model on the server
+  (`settings/app.json`), so a page reload, or switching to a local workflow or
+  another model and back, no longer resets them to the defaults — and the phone and
+  every other browser see the same choices. A sectioned prompt's **Render** pick is
+  kept there too. An open tab picks up changes made elsewhere when it is looked at
+  again.
+- **Every remembered choice is now shared across browsers.** The active project,
+  last-used model, open prompt tab, each project's ▶ Active saved prompt, hidden
+  History tags, live preview method and the prompt-carry lock moved from the
+  browser's storage to the server (`settings/app.json`), so the phone and desktop
+  open where the other left off. The page loads them as `settings.js` before the
+  app starts; a value an older version stored in the browser is moved up the first
+  time it's read.
+- **Typing `<` in a prompt offers its tags.** The list under the caret (the one `%`
+  and `$` open) shows the subjects in play (`<witch>`), the reference labels
+  (`<Picture 1>`) and **dialogue**, which writes `<d>[English] </d>` and leaves the
+  caret inside. In the saved-prompt editor it reads that prompt's references and
+  subjects; in the Prompt tab, the form's references.
+- **Build with AI writes long MiniMax prompts in sections.** With a **Duration**
+  over 15 seconds, the LLM is told the video is made as separate clips of up to 15
+  seconds (25s → 15 + 10) and numbers each shot's section; it is asked to open
+  every section by re-establishing the scene, since each clip is generated on its
+  own. A reply without section numbers is split automatically. Revise with AI
+  keeps a prompt's sections.
+- **Build / Revise with AI: a MiniMax reply that isn't MiniMax JSON is sent back to
+  be fixed.** The LLM gets its own reply and is asked to repair the JSON — a
+  text-only request, so the reference images aren't processed again — up to 3
+  times. If it still can't be read, the reply is discarded and the prompt is
+  written again; nothing malformed is saved.
 
 ### Added
 
