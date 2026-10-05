@@ -1149,6 +1149,41 @@ app.get("/api/comfy/probe", async (req, res) => {
   res.json({ code: 200, msg: "success", data: probe });
 });
 
+// Frame rate / count of any served video (/output/… or /input/…), for the frame
+// picker's frame-accurate stepping. The path must stay inside its media folder.
+app.get("/api/video/probe", async (req, res) => {
+  const url = String(req.query.url || "").split("?")[0];
+  let file = null;
+  for (const [prefix, dir] of [
+    ["/output/", OUTPUT_DIR],
+    ["/input/", INPUT_DIR],
+  ]) {
+    if (!url.startsWith(prefix)) continue;
+    let rel;
+    try {
+      rel = decodeURIComponent(url.slice(prefix.length));
+    } catch {
+      break;
+    }
+    const full = path.resolve(dir, rel);
+    if (full.startsWith(dir + path.sep)) file = full;
+    break;
+  }
+  if (!file || !fs.existsSync(file))
+    return res.status(404).json({ code: 404, msg: "video not found" });
+  const probe = await probeVideo(file);
+  if (!probe) {
+    return res.status(422).json({
+      code: 422,
+      msg:
+        ffprobeMissing ?
+          "ffprobe was not found on PATH"
+        : "Could not read the video's frame rate",
+    });
+  }
+  res.json({ code: 200, msg: "success", data: probe });
+});
+
 // True if any of a node's input strings contains a token with the given name.
 function nodeHasToken(node, name) {
   for (const v of Object.values(node?.inputs || {})) {
@@ -3537,6 +3572,10 @@ app.delete("/api/images/:id", (req, res) => {
 // (VIDEO_PROMPT_WRITING_GUIDE_base_en: shots, soundscape and music; no references).
 // `historyId` links the prompt to one History entry — the take that represents it —
 // whose output becomes the card's thumbnail (POST /api/prompts/link sets it).
+// `group` ({ id, name } or absent) puts the prompt in a named group with others: a
+// sequence of whole prompts, each generated as its own clip with its own summary,
+// subjects and references. Members are kept next to each other in the list order
+// (see keepGroupsTogether); the group exists only while it has members.
 // Ordered Drupal-style by `weight`, an integer (default 0): lighter floats to the top,
 // heavier sinks. Equal weights keep their stored order (a new prompt goes first among
 // its weight). Dragging in the UI rewrites the weights (POST /api/prompts/reorder).
@@ -3583,7 +3622,6 @@ function sanitizeMinimax(mm) {
         : starts[i] == null || starts[i + 1] == null ? null
         : Math.max(0, Math.round((starts[i + 1] - starts[i]) * 1000) / 1000),
       text: str(s?.text),
-      ...(i > 0 && s?.brk ? { brk: true } : {}), // a new section starts at this shot
     })),
     subjects: (Array.isArray(o.subjects) ? o.subjects : [])
       .slice(0, 50)
@@ -3617,12 +3655,88 @@ const byPromptWeight = (list) =>
   [...list].sort((a, b) => promptWeight(a) - promptWeight(b));
 
 function readPrompts(proj) {
-  const list = readJson(promptsFile(proj));
-  return Array.isArray(list) ? byPromptWeight(list) : [];
+  const raw = readJson(promptsFile(proj));
+  if (!Array.isArray(raw)) return [];
+  const { list, changed } = splitSectionedPrompts(byPromptWeight(raw));
+  if (changed) {
+    writePrompts(proj, list);
+    console.log(`Split ${changed} sectioned saved prompt(s) in "${proj.name || proj.slug}" into prompt groups.`);
+  }
+  return list;
 }
 function writePrompts(proj, list) {
   fs.mkdirSync(path.dirname(promptsFile(proj)), { recursive: true });
-  writeJson(promptsFile(proj), byPromptWeight(list));
+  writeJson(promptsFile(proj), keepGroupsTogether(byPromptWeight(list)));
+}
+
+// A group's members sit together, where its first member is, in their own order. When
+// that moves anything, the weights are renumbered 0, 1, 2… so the order sticks.
+function keepGroupsTogether(list) {
+  const out = [];
+  const placed = new Set();
+  for (const p of list) {
+    const gid = p.group?.id;
+    if (!gid) out.push(p);
+    else if (!placed.has(gid)) {
+      placed.add(gid);
+      out.push(...list.filter((x) => x.group?.id === gid));
+    }
+  }
+  if (out.some((p, i) => p !== list[i])) out.forEach((p, i) => (p.weight = i));
+  return out;
+}
+
+// Shots could once be split into sections inside one prompt, each generated as its own
+// clip. Every clip needs its own summary and references, so a sectioned prompt becomes
+// a group of prompts instead: one per section, each starting as a full copy of the
+// original (subjects, summary, retention, references…) with only that section's shots.
+// The first keeps the original's id and History link.
+const SPLIT_OPEN_SECTION_SECONDS = 15; // a section whose last shot had no length ran a full clip
+function splitSectionedPrompts(list) {
+  let changed = 0;
+  const out = [];
+  for (const p of list) {
+    const shots = Array.isArray(p.minimax?.shots) ? p.minimax.shots : [];
+    if (!shots.some((s, i) => i > 0 && s?.brk)) {
+      out.push(p);
+      continue;
+    }
+    changed++;
+    const sections = [];
+    shots.forEach((s, i) => {
+      if (i === 0 || s?.brk) sections.push([]);
+      const { brk, ...shot } = s || {};
+      sections[sections.length - 1].push(shot);
+    });
+    const group = p.group?.id ? p.group : { id: randomUUID(), name: p.title };
+    const now = new Date().toISOString();
+    sections.forEach((secShots, k) => {
+      const open = secShots.some((x) => x.len == null);
+      const sum = secShots.reduce((a, x) => a + (Number(x.len) || 0), 0);
+      const seconds =
+        open ? Math.max(sum, SPLIT_OPEN_SECTION_SECONDS) : Math.round(sum * 1000) / 1000;
+      out.push({
+        ...p,
+        id: k === 0 ? p.id : randomUUID(),
+        title: `${p.title} — ${k + 1}/${sections.length}`.slice(0, 200),
+        group,
+        minimax: { ...p.minimax, shots: secShots },
+        duration: seconds > 0 ? seconds : p.duration ?? null,
+        refs: (p.refs || []).map((r) => ({ ...r })),
+        historyId: k === 0 ? p.historyId ?? null : null,
+        updatedAt: now,
+      });
+    });
+  }
+  return { list: out, changed };
+}
+
+// A group as stored on its members: { id, name }, or null for none.
+function sanitizeGroup(g) {
+  if (!g || typeof g !== "object") return null;
+  const id = String(g.id ?? "").trim().slice(0, 100);
+  const name = String(g.name ?? "").trim().slice(0, 200);
+  return id && name ? { id, name } : null;
 }
 
 // Strict lookup (no fallback to Default): a typo'd id must not write into Default.
@@ -3664,6 +3778,7 @@ function sanitizePromptFields(body = {}) {
         body.historyId.slice(0, 100)
       : null;
   }
+  if (body.group !== undefined) out.group = sanitizeGroup(body.group);
   if (body.weight !== undefined) {
     const w = Number(body.weight);
     out.weight =
@@ -4042,6 +4157,7 @@ app.post("/api/prompts", (req, res) => {
   }
   const now = new Date().toISOString();
   const entry = { id: randomUUID(), ...fields, createdAt: now, updatedAt: now };
+  if (!entry.group) delete entry.group;
   writePrompts(proj, [entry, ...readPrompts(proj)]);
   res.json({ code: 200, msg: "saved", data: withRefDetails([entry])[0] });
 });
@@ -4124,7 +4240,25 @@ app.put("/api/prompts/:id", (req, res) => {
   }
   if (STRUCTURED_PROMPT_TYPES.has(fields.type)) fields.prompt = ""; // its text is compiled from the fields
   if (fields.type === "default") fields.minimax = null; // converted back to plain text
+  // Joining an existing group: it keeps that group's current name (the client's copy
+  // may be from before a rename).
+  if (fields.group?.id) {
+    const other = list.find((p) => p !== entry && p.group?.id === fields.group.id);
+    if (other) fields.group = { ...other.group };
+  }
+  const joins =
+    fields.group?.id && fields.group.id !== entry.group?.id && !req.body?.keepPlace;
   Object.assign(entry, fields, { updatedAt: new Date().toISOString() });
+  if (entry.group === null) delete entry.group;
+  if (joins) {
+    // Joining a group from the editor: it goes after the group's last prompt.
+    const others = list.filter((p) => p !== entry && p.group?.id === entry.group.id);
+    if (others.length) {
+      list.splice(list.indexOf(entry), 1);
+      list.splice(list.indexOf(others[others.length - 1]) + 1, 0, entry);
+      list.forEach((p, i) => (p.weight = i));
+    }
+  }
   writePrompts(proj, list);
   res.json({ code: 200, msg: "updated", data: withRefDetails([entry])[0] });
 });
@@ -4184,6 +4318,7 @@ app.post("/api/prompts/:id/transfer", (req, res) => {
     mode === "move" ?
       { ...entry, updatedAt: new Date().toISOString() }
     : copyOfPrompt(entry);
+  delete moved.group; // a group belongs to its project
   writePrompts(to, [
     moved,
     ...readPrompts(to).filter((p) => p.id !== moved.id),
@@ -4198,6 +4333,89 @@ app.post("/api/prompts/:id/transfer", (req, res) => {
     msg: mode === "move" ? "moved" : "copied",
     data: withRefDetails([moved])[0],
   });
+});
+
+// --- prompt groups (per project) ---------------------------------------------
+// Stored on the members (see `group` above); these only change several at once.
+
+// New group from `promptIds` (in list order), named `name`. The members are pulled
+// together where the first of them is.
+app.post("/api/prompt-groups", (req, res) => {
+  const proj = findProject(req.body?.projectId);
+  if (!proj)
+    return res.status(400).json({ code: 400, msg: "unknown projectId" });
+  const name = String(req.body?.name ?? "").trim().slice(0, 200);
+  if (!name) return res.status(400).json({ code: 400, msg: "a group needs a name" });
+  const ids = new Set((Array.isArray(req.body?.promptIds) ? req.body.promptIds : []).map(String));
+  const list = readPrompts(proj);
+  const members = list.filter((p) => ids.has(p.id));
+  if (!members.length)
+    return res.status(400).json({ code: 400, msg: "pick at least one prompt for the group" });
+  const group = { id: randomUUID(), name };
+  const now = new Date().toISOString();
+  for (const p of members) Object.assign(p, { group, updatedAt: now });
+  writePrompts(proj, list);
+  res.json({ code: 200, msg: "grouped", data: { group, prompts: withRefDetails(readPrompts(proj)) } });
+});
+
+app.put("/api/prompt-groups/:id", (req, res) => {
+  const proj = findProject(req.body?.projectId);
+  if (!proj)
+    return res.status(400).json({ code: 400, msg: "unknown projectId" });
+  const name = String(req.body?.name ?? "").trim().slice(0, 200);
+  if (!name) return res.status(400).json({ code: 400, msg: "a group needs a name" });
+  const list = readPrompts(proj);
+  const members = list.filter((p) => p.group?.id === req.params.id);
+  if (!members.length) return res.status(404).json({ code: 404, msg: "group not found" });
+  const now = new Date().toISOString();
+  for (const p of members) Object.assign(p, { group: { id: req.params.id, name }, updatedAt: now });
+  writePrompts(proj, list);
+  res.json({ code: 200, msg: "renamed", data: withRefDetails(readPrompts(proj)) });
+});
+
+// Ungroup: the prompts stay, in place, without the group. With ?withPrompts=1 the
+// group's prompts are deleted too (their gallery files and History stay).
+app.delete("/api/prompt-groups/:id", (req, res) => {
+  const proj = findProject(req.query.projectId);
+  if (!proj)
+    return res.status(400).json({ code: 400, msg: "unknown projectId" });
+  const list = readPrompts(proj);
+  const members = list.filter((p) => p.group?.id === req.params.id);
+  if (!members.length) return res.status(404).json({ code: 404, msg: "group not found" });
+  const withPrompts = ["1", "true"].includes(String(req.query.withPrompts));
+  if (withPrompts) {
+    writePrompts(proj, list.filter((p) => p.group?.id !== req.params.id));
+    return res.json({
+      code: 200,
+      msg: `deleted the group and its ${members.length} prompt${members.length === 1 ? "" : "s"}`,
+      data: withRefDetails(readPrompts(proj)),
+    });
+  }
+  for (const p of members) delete p.group;
+  writePrompts(proj, list);
+  res.json({ code: 200, msg: "ungrouped", data: withRefDetails(readPrompts(proj)) });
+});
+
+// The next prompt of a group: a copy of its last member — subjects, references, style,
+// sound, retention — with the summary and shots left blank for the new clip.
+app.post("/api/prompt-groups/:id/next", (req, res) => {
+  const proj = findProject(req.body?.projectId);
+  if (!proj)
+    return res.status(400).json({ code: 400, msg: "unknown projectId" });
+  const list = readPrompts(proj);
+  const members = list.filter((p) => p.group?.id === req.params.id);
+  if (!members.length) return res.status(404).json({ code: 404, msg: "group not found" });
+  const last = members[members.length - 1];
+  const copy = copyOfPrompt(last);
+  copy.title = `${last.group.name} — ${members.length + 1}`.slice(0, 200);
+  if (STRUCTURED_PROMPT_TYPES.has(copy.type)) {
+    copy.minimax = { ...sanitizeMinimax(last.minimax), summary: "", shots: [{ len: null, text: "" }] };
+    copy.duration = null;
+  }
+  delete copy.llm;
+  list.splice(list.indexOf(last) + 1, 0, copy);
+  writePrompts(proj, list);
+  res.json({ code: 200, msg: "added", data: withRefDetails([copy])[0] });
 });
 
 // Download a finished result into a project's video folder; returns the served
@@ -4586,8 +4804,8 @@ app.put("/api/history/:id", (req, res) => {
 // Shared by every browser that opens this server (settings/app.json):
 //   autoDraftMaxMP — the auto-draft megapixel threshold
 //   kieForm        — the kie.ai form's choices per model: { model: { field: value } }
-//   runSections    — which section of a sectioned saved prompt Generate renders:
-//                    { promptId: "all" | index }
+//   groupRender    — what Generate renders from an active prompt group: every member
+//                    in order, or one of them: { groupId: "all" | promptId }
 //   prefs          — the UI's other remembered choices (active project, last model,
 //                    prompt tab, active saved prompts, hidden History tags, preview
 //                    method, carry lock): { key: string }
@@ -4598,7 +4816,7 @@ function publicAppSettings(s) {
   return {
     autoDraftMaxMP: Number(s.autoDraftMaxMP) || 0,
     kieForm: plainObject(s.kieForm),
-    runSections: plainObject(s.runSections),
+    groupRender: plainObject(s.groupRender),
     prefs: plainObject(s.prefs),
   };
 }
@@ -4619,11 +4837,11 @@ app.put("/api/settings", (req, res) => {
         .map(([k, v]) => [String(k).slice(0, 40), String(v ?? "").slice(0, 40)]),
     );
   }
-  const runSections = plainObject(req.body?.runSections);
-  for (const [id, v] of Object.entries(runSections).slice(0, 50)) {
-    s.runSections = plainObject(s.runSections);
-    s.runSections[String(id).slice(0, 100)] =
-      Number.isInteger(v) && v >= 0 ? v : "all";
+  delete s.runSections; // the shot sections it chose between are gone (prompt groups instead)
+  const groupRender = plainObject(req.body?.groupRender);
+  for (const [id, v] of Object.entries(groupRender).slice(0, 50)) {
+    s.groupRender = plainObject(s.groupRender);
+    s.groupRender[String(id).slice(0, 100)] = v ? String(v).slice(0, 100) : "all";
   }
   const prefs = plainObject(req.body?.prefs);
   for (const [k, v] of Object.entries(prefs).slice(0, 50)) {

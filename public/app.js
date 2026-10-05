@@ -1306,6 +1306,13 @@ function makeGalleryCard(item) {
         iconOnly: true,
       }),
     );
+    if (typeof makeFramesButton === "function") {
+      actions.appendChild(
+        makeFramesButton(item.localUrl, item.name, item.projectId || "default", {
+          iconOnly: true,
+        }),
+      );
+    }
   }
 
   // move to another project (file physically moves)
@@ -1519,14 +1526,14 @@ function ratePerSec(model, resolution, audioOn) {
   return rates.length ? { rate: median(rates), n: rates.length } : null;
 }
 
-// The runs Generate would make from an active sectioned saved prompt (see
-// savedPromptRuns), or null for one ordinary run. Set further down, once the
-// saved-prompt state it reads exists.
-let sectionRuns = () => null;
+// The runs Generate would make from an active prompt group (see savedRunPlan), or
+// null for one ordinary run. Set further down, once the saved-prompt state it reads
+// exists.
+let groupRuns = () => null;
 
-// A prompt section's length as the duration its run is sent with: whole seconds,
-// within what the model allows.
-function sectionRunDuration(seconds) {
+// A group member's length as the duration its run is sent with: whole seconds, within
+// what the model allows.
+function runDuration(seconds) {
   const el = document.getElementById("duration");
   const s = Math.ceil(seconds);
   return Math.min(Math.max(s, Number(el.min) || 1), Number(el.max) || s);
@@ -1556,8 +1563,8 @@ function updateEstimate() {
   }
 
   const resolution = document.getElementById("resolution").value;
-  // A sectioned saved prompt makes a run per section, each at its own length.
-  const runs = sectionRuns();
+  // An active prompt group makes a run per member, each at its own length.
+  const runs = groupRuns();
   if (!runs && durationAuto()) {
     estimateEl.textContent =
       "No estimate — the model picks the duration (Auto).";
@@ -1566,7 +1573,11 @@ function updateEstimate() {
   }
   const durations =
     runs ?
-      runs.map((x) => sectionRunDuration(x.duration))
+      runs.map((x) =>
+        x.duration > 0 ?
+          runDuration(x.duration)
+        : Number(document.getElementById("duration").value) || 0,
+      )
     : [Number(document.getElementById("duration").value) || 0];
   const audioOn =
     isH3() ? null : document.getElementById("generate_audio").checked;
@@ -1578,16 +1589,16 @@ function updateEstimate() {
     return;
   }
   const refSecs = usesRefMedia() ? refVideoSeconds() : 0;
-  // (the reference video is sent with — and billed on — every section's run)
+  // (a reference video is billed on every run it's sent with)
   const est = durations.reduce(
     (a, d) => a + Math.round(r.rate * (d + refSecs)),
     0,
   );
-  const sectionNote =
+  const groupNote =
     !runs ? ""
     : runs.length > 1 ?
-      ` for ${runs.length} sections (${durations.map((d) => `${d}s`).join(" + ")})`
-    : ` for section ${runs[0].section} (${durations[0]}s)`;
+      ` for ${runs.length} prompts of “${escapeHtmlJs(runs[0].group.name)}” (${durations.map((d) => `${d}s`).join(" + ")})`
+    : ` for part ${runs[0].part} of “${escapeHtmlJs(runs[0].group.name)}” (${durations[0]}s)`;
   const refNote =
     refSecs > 0 ?
       ` (incl. ~${Math.round(refSecs)}s video ref${durations.length > 1 ? " each" : ""})`
@@ -1596,7 +1607,7 @@ function updateEstimate() {
     refSecs > refLimits().secs ?
       ` ⚠ video refs exceed the ${refLimits().secs}s total limit`
     : "";
-  estimateEl.innerHTML = `Est. cost: ~<b>${est.toLocaleString()}</b> credits${sectionNote}${refNote}${batchCostNote(est)}${overLimit}`;
+  estimateEl.innerHTML = `Est. cost: ~<b>${est.toLocaleString()}</b> credits${groupNote}${refNote}${batchCostNote(est)}${overLimit}`;
   estimateEl.title = `Based on your ${r.n} most recent run${r.n > 1 ? "s" : ""} at this resolution/audio setting (median).`;
 }
 
@@ -1885,13 +1896,13 @@ async function loadAppSettings() {
   const changed =
     JSON.stringify(d.kieForm?.[model]) !== JSON.stringify(kieForm[model]);
   kieForm = d.kieForm || {};
-  runSectionChoice = d.runSections || {};
+  groupRenderChoice = d.groupRender || {};
   Object.assign(prefs, d.prefs || {}); // read on the next load (the open tab keeps its own view)
   if (changed && !isComfy()) {
     kieFormModel = null;
     applyModelUI();
   }
-  syncRunSection();
+  syncGroupRender();
   updateEstimate();
 }
 document.addEventListener("visibilitychange", () => {
@@ -4144,20 +4155,26 @@ async function submitComfy() {
   const allLoras = comfyLoraControl ? comfyLoraControl.getLoras() : [];
   const wfMedia = comfyMediaControl ? comfyMediaControl.getMedia() : [];
   const bypass = comfyBypassControl ? comfyBypassControl.getDisabled() : [];
-  const fromSaved =
-    comfyFields.some((f) => f.isPrompt) ? runSavedPrompt() : null;
-  // One run, or one per section of a sectioned saved prompt (each with its own text
-  // and length). Redoing a run in place takes just the first.
-  const plan =
-    fromSaved ? savedPromptRuns(fromSaved) : [{ text: null, duration: null }];
+  // One run, or one per member of an active prompt group (each with its own text,
+  // references and length). Redoing a run in place takes just the first.
+  const plan = (comfyFields.some((f) => f.isPrompt) && savedRunPlan()) || [
+    { prompt: null, text: null, duration: null },
+  ];
   if (cont?.into) plan.length = 1;
   const formDuration = currentDuration();
-  const mediaNotes = loadRunMedia(fromSaved); // before the fields are read below
-  if (mediaNotes.length) setError(mediaNotes.join("\n"));
+  const mediaNotes = [];
   try {
     for (const run of plan) {
+    const fromSaved = run.prompt;
+    // This prompt's references go into the form's fields before they're read below.
+    for (const note of loadPlanRunMedia(run))
+      mediaNotes.push(plan.length > 1 ? `${fromSaved.title}: ${note}` : note);
+    if (mediaNotes.length) setError(mediaNotes.join("\n"));
     const promptOverride = run.text;
+    // A member's own length; one without a length runs at the form's duration (not
+    // the member before it's).
     if (run.duration > 0) setCurrentDuration(Math.ceil(run.duration));
+    else if (run.group && formDuration) setCurrentDuration(formDuration);
     for (let i = 0; i < count; i++) {
       const { values, prune, tails, references, templates } =
         await collectComfyValues(promptOverride);
@@ -4200,7 +4217,7 @@ async function submitComfy() {
         if (typeof f.advance === "function") f.advance();
     }
     }
-    // A section's length was only for its run — put the form's own duration back.
+    // A member's length was only for its run — put the form's own duration back.
     if (plan.some((r) => r.duration > 0)) setCurrentDuration(formDuration);
     saveComfySettings(wf.file); // remember the final values + LoRAs (server-side)
     disarmContinuation(); // one arm, one submit
@@ -4438,45 +4455,76 @@ function activeSavedPrompt() {
 // What a saved prompt contributes to a run's prompt field: its text, or — for a
 // structured format — the text compiled from its fields. The one place every run,
 // import and preview gets a saved prompt's text from.
-// `section` picks one section of a structured prompt (see minimaxSections).
-function exportSavedPromptText(p, section = null) {
-  if (p.type === "minimax")
-    return compileMinimax(p.minimax, p.refs || [], section);
-  if (p.type === "minimax_t2v") return compileMinimaxT2V(p.minimax, section);
+function exportSavedPromptText(p) {
+  if (p.type === "minimax") return compileMinimax(p.minimax, p.refs || []);
+  if (p.type === "minimax_t2v") return compileMinimaxT2V(p.minimax);
   return p.prompt || "";
 }
 
-// Which section of a sectioned saved prompt Generate renders: "all" (a run for each,
-// in order) or one section's index. Per prompt, kept on the server with the other
-// shared settings (see loadAppSettings).
-let runSectionChoice = serverSettings.runSections || {}; // saved prompt id → "all" | index
-function setRunSection(id, value) {
-  runSectionChoice[id] = value;
-  putAppSettings({ runSections: { [id]: value } });
+// --- prompt groups ---
+// A group is a named sequence of whole saved prompts — { id, name } on each member,
+// kept next to each other in the list by the server. ▶ on a group's header makes it
+// what Generate uses: every member in order, a run and History card each, with that
+// prompt's own text, references and length — or just the member picked in Render.
+const GROUP_ACTIVE_PREFIX = "group:"; // in activeSavedPromptIds, for an active group
+function savedGroupMembers(gid) {
+  return savedPrompts.filter((p) => p.group?.id === gid);
+}
+function activeGroupId() {
+  const v = activeSavedPromptIds[activeProjectId];
+  return typeof v === "string" && v.startsWith(GROUP_ACTIVE_PREFIX) ?
+      v.slice(GROUP_ACTIVE_PREFIX.length)
+    : null;
+}
+function activeGroup() {
+  const gid = activeGroupId();
+  const members = gid ? savedGroupMembers(gid) : [];
+  return members.length ? { id: gid, name: members[0].group.name, members } : null;
+}
+function setActiveGroup(gid) {
+  setActiveSavedPrompt(gid ? GROUP_ACTIVE_PREFIX + gid : null);
 }
 
-// The runs Generate makes from a saved prompt: [{ text, duration, section, sections }].
-// One, unless the prompt is split into sections — then the chosen section, or each in
-// turn. A section's length is its run's duration (null: the form's, for a prompt
-// without sections); `section` is 1-based, null for a prompt without sections.
-function savedPromptRuns(p) {
-  const secs = isMmType(p.type) ? minimaxSections(p.minimax) : [];
-  if (secs.length < 2)
-    return [{ text: exportSavedPromptText(p), duration: null, section: null }];
-  const pick = runSectionChoice[p.id];
-  const which =
-    Number.isInteger(pick) && pick < secs.length ? [pick] : secs.map((_, i) => i);
-  return which.map((i) => ({
-    text: exportSavedPromptText(p, i),
-    duration: sectionSeconds(secs[i]),
-    section: i + 1,
-    sections: secs.length,
-  }));
+// What an active group renders: "all" (each member in turn) or one member's id. Per
+// group, kept on the server with the other shared settings (see loadAppSettings).
+let groupRenderChoice = serverSettings.groupRender || {}; // group id → "all" | prompt id
+function setGroupRender(gid, value) {
+  groupRenderChoice[gid] = value;
+  putAppSettings({ groupRender: { [gid]: value } });
 }
-sectionRuns = () => {
-  const p = runSavedPrompt();
-  const runs = p ? savedPromptRuns(p) : [];
-  return runs.some((r) => r.section) ? runs : null;
+
+// How long a saved prompt's clip is: a MiniMax prompt's shots, else its saved duration.
+function savedPromptSeconds(p) {
+  return (
+    (isMmType(p.type) ? minimaxDuration(p.minimax, p.duration) : p.duration) || null
+  );
+}
+
+// The runs Generate makes from the Saved Prompts tab right now, in order:
+// [{ prompt, text, duration, group?, part?, parts? }] — or null when it uses the
+// Prompt tab's text. A single active prompt runs at the form's duration (null); a
+// group's members each run at their own length.
+function savedRunPlan() {
+  if (promptSource !== "saved" || !activePromptHost()) return null;
+  const g = activeGroup();
+  if (g) {
+    const pick = groupRenderChoice[g.id];
+    const one = pick && pick !== "all" && g.members.find((p) => p.id === pick);
+    return (one ? [one] : g.members).map((p) => ({
+      prompt: p,
+      text: exportSavedPromptText(p),
+      duration: savedPromptSeconds(p),
+      group: g,
+      part: g.members.indexOf(p) + 1,
+      parts: g.members.length,
+    }));
+  }
+  const p = activeSavedPrompt();
+  return p ? [{ prompt: p, text: exportSavedPromptText(p), duration: null }] : null;
+}
+groupRuns = () => {
+  const runs = savedRunPlan();
+  return runs?.[0]?.group ? runs : null;
 };
 
 // The structured formats: both keep their fields in p.minimax (the same shape), and
@@ -4537,7 +4585,6 @@ function normalizeMinimax(mmIn) {
     : list.map((s, i) => ({
         len: s?.len ?? null,
         text: s?.text || "",
-        ...(i > 0 && s?.brk ? { brk: true } : {}),
       }));
   const types =
     Array.isArray(mm.summaryTypes) ? mm.summaryTypes.filter(Boolean) : [];
@@ -4618,17 +4665,9 @@ function shotsFromStarts(shots) {
   });
 }
 
-// A prompt's sections: runs of shots, split at each shot marked `brk`. A section is
-// generated as a clip of its own, so its shot numbers and times start over.
-const SECTION_MAX_SECONDS = 15; // most models' longest clip — longer only warns
-function minimaxSections(mmIn) {
-  const out = [];
-  normalizeMinimax(mmIn).shots.forEach((s, i) => {
-    if (i === 0 || s.brk) out.push([]);
-    out[out.length - 1].push(s);
-  });
-  return out;
-}
+// Most models' longest clip. A prompt's shots may run longer (the editor only warns);
+// a longer video is a prompt group, one whole prompt per clip.
+const CLIP_MAX_SECONDS = 15;
 
 // How long a run of shots lasts, or null when one of them has no length.
 function shotsSeconds(shots) {
@@ -4637,25 +4676,10 @@ function shotsSeconds(shots) {
     );
 }
 
-// How long one section of a sectioned prompt runs. When its last shot is left open
-// ("rest"), that shot takes what remains of a full clip (SECTION_MAX_SECONDS).
-function sectionSeconds(shots) {
-  const sum = shots.reduce((a, s) => a + (Number(s.len) || 0), 0);
-  return (
-    shotsSeconds(shots) ??
-    Math.round(Math.max(sum, SECTION_MAX_SECONDS) * 1000) / 1000
-  );
-}
-
-// A structured prompt's length, from its shots: its sections added up. One without
-// sections whose last shot is left open has no length of its own — `fallback` then.
+// A structured prompt's length, from its shots. One whose last shot is left open has
+// no length of its own — `fallback` then.
 function minimaxDuration(mm, fallback = null) {
-  const secs = minimaxSections(mm);
-  if (secs.length > 1)
-    return (
-      Math.round(secs.reduce((a, s) => a + sectionSeconds(s), 0) * 1000) / 1000
-    );
-  return shotsSeconds(secs[0]) || fallback || null;
+  return shotsSeconds(normalizeMinimax(mm).shots) || fallback || null;
 }
 
 // When each shot starts, in seconds: the lengths of the shots before it, added up.
@@ -4845,10 +4869,8 @@ function appearsText(r) {
     : "not in any shot yet";
 }
 
-// `only`: compile just that section's shots (0-based); otherwise every shot.
-function compileMinimax(mmIn, refs, only = null) {
+function compileMinimax(mmIn, refs) {
   const mm = normalizeMinimax(mmIn);
-  if (only != null) mm.shots = minimaxSections(mm)[only] || mm.shots;
   const subjects = minimaxSubjects(mm, refs);
   const tokens = minimaxMediaTokens(refs);
   const tok = (t) => resolveMediaTokens(String(t || "").trim(), tokens);
@@ -4889,9 +4911,8 @@ function compileMinimax(mmIn, refs, only = null) {
 //   integrated_multimodal_description — "[Shot 1] <style> <opening>" then each cut as
 //                                       "[Shot N] At MM:SS.mmm, …", all in one run
 //   overall_soundscape, non_diegetic_music ("N/A" when empty)
-function compileMinimaxT2V(mmIn, only = null) {
+function compileMinimaxT2V(mmIn) {
   const mm = normalizeMinimax(mmIn);
-  if (only != null) mm.shots = minimaxSections(mm)[only] || mm.shots;
   const t = (x) => String(x || "").trim();
   const starts = shotStarts(mm.shots);
   const shots = mm.shots.map((s, i) =>
@@ -5026,7 +5047,9 @@ function savedPromptStamp(p, run = null) {
     id: p.id,
     projectId: activeProjectId,
     title: p.title,
-    ...(run?.section ? { section: run.section, sections: run.sections } : {}),
+    ...(run?.group ?
+      { group: { id: run.group.id, name: run.group.name }, part: run.part, parts: run.parts }
+    : {}),
   };
 }
 
@@ -5037,48 +5060,41 @@ savedPanel.innerHTML =
   `<div class="sp-toolbar"><button type="button" class="link-btn sp-new-mm">＋ New MiniMax prompt</button>` +
   `<button type="button" class="link-btn sp-new-t2v">＋ New MiniMax T2V prompt</button></div>` +
   `<p class="sp-run-note"></p>` +
-  `<label class="sp-run-section hidden">Render <select></select><span class="hint"></span></label>` +
+  `<label class="sp-run-group hidden">Render <select></select><span class="hint"></span></label>` +
   `<p class="dz-hint sp-empty"></p>` +
   `<div class="sp-list"></div>`;
 const savedFilterEl = savedPanel.querySelector(".sp-filter");
 const savedEmptyEl = savedPanel.querySelector(".sp-empty");
 const savedRunNoteEl = savedPanel.querySelector(".sp-run-note");
-// Which section of the active prompt Generate renders (shown when it has several).
-const savedRunSectionEl = savedPanel.querySelector(".sp-run-section");
-const savedRunSectionSelect = savedRunSectionEl.querySelector("select");
-savedRunSectionSelect.addEventListener("change", () => {
-  const p = activeSavedPrompt();
-  if (!p) return;
-  const v = savedRunSectionSelect.value;
-  setRunSection(p.id, v === "all" ? "all" : Number(v));
-  syncRunSection();
+// Which members of the active group Generate renders (shown while a group is active).
+const savedRunGroupEl = savedPanel.querySelector(".sp-run-group");
+const savedRunGroupSelect = savedRunGroupEl.querySelector("select");
+savedRunGroupSelect.addEventListener("change", () => {
+  const g = activeGroup();
+  if (!g) return;
+  setGroupRender(g.id, savedRunGroupSelect.value);
+  syncGroupRender();
   updateEstimate();
 });
-function syncRunSection() {
-  const p = activeSavedPrompt();
-  const secs = p && isMmType(p.type) ? minimaxSections(p.minimax) : [];
-  savedRunSectionEl.classList.toggle("hidden", secs.length < 2);
-  if (secs.length < 2) return;
-  const len = (shots) => `, ${sectionSeconds(shots)}s`;
-  savedRunSectionSelect.innerHTML = "";
-  savedRunSectionSelect.appendChild(
-    new Option(`All ${secs.length} sections — one after another`, "all"),
+function syncGroupRender() {
+  const g = activeGroup();
+  savedRunGroupEl.classList.toggle("hidden", !g);
+  if (!g) return;
+  const len = (p) => (savedPromptSeconds(p) ? `, ${savedPromptSeconds(p)}s` : "");
+  savedRunGroupSelect.innerHTML = "";
+  savedRunGroupSelect.appendChild(
+    new Option(`All ${g.members.length} prompts — one after another`, "all"),
   );
-  secs.forEach((shots, i) =>
-    savedRunSectionSelect.appendChild(
-      new Option(
-        `Section ${i + 1} — ${shots.length} shot${shots.length === 1 ? "" : "s"}${len(shots)}`,
-        String(i),
-      ),
-    ),
+  g.members.forEach((p, i) =>
+    savedRunGroupSelect.appendChild(new Option(`${i + 1}. ${p.title}${len(p)}`, p.id)),
   );
-  const pick = runSectionChoice[p.id];
-  const one = Number.isInteger(pick) && pick < secs.length;
-  savedRunSectionSelect.value = one ? String(pick) : "all";
-  savedRunSectionEl.querySelector(".hint").textContent =
+  const pick = groupRenderChoice[g.id];
+  const one = pick && pick !== "all" && g.members.some((p) => p.id === pick);
+  savedRunGroupSelect.value = one ? pick : "all";
+  savedRunGroupEl.querySelector(".hint").textContent =
     one ?
-      "— Generate makes this section's clip."
-    : `— Generate makes ${secs.length} clips, a History card for each, in order.`;
+      "— Generate makes this prompt's clip."
+    : `— Generate makes ${g.members.length} clips, each from its own prompt and references, a History card for each, in order.`;
 }
 // A blank MiniMax prompt with the form's current references and duration, opened for editing.
 savedPanel.querySelector(".sp-new-mm").addEventListener("click", async () => {
@@ -5392,9 +5408,11 @@ function makeWildcardRow(w) {
 // Prompt and the Saved Prompts view.
 function syncWildcardSource() {
   const p = activeSavedPrompt();
+  const g = activeGroup();
   for (const panel of [wildcardsPanel, variablesPanel])
     panel.querySelector(".wc-source").textContent =
-      promptSource === "saved" && p ?
+      promptSource === "saved" && g ? `▶ Generate uses the prompt group “${g.name}”.`
+      : promptSource === "saved" && p ?
         `▶ Generate uses the saved prompt “${p.title}”.`
       : "▶ Generate uses the Prompt tab's text.";
 }
@@ -6856,6 +6874,14 @@ function savedPromptSendsRefs(p) {
 function loadRunMedia(p) {
   return savedPromptSendsRefs(p) ? loadSavedPromptMedia(p) : [];
 }
+// One run of a plan (see savedRunPlan). A group's member that sends no references
+// (T2V, or a plain prompt without any) gets empty reference fields — not whatever
+// the member before it loaded.
+function loadPlanRunMedia(run) {
+  if (run.group && !savedPromptSendsRefs(run.prompt))
+    return loadSavedPromptMedia({ refs: [] });
+  return loadRunMedia(run.prompt);
+}
 
 // `confirmReplace: false` skips the unsaved-prompt check (a History Re-import, which
 // has already replaced the form).
@@ -6906,28 +6932,44 @@ function renderSavedPrompts() {
     : `No saved prompts in ${projectName(activeProjectId)} yet — write one and click 💾 Save prompt.`;
   savedEmptyEl.classList.toggle("hidden", shown.length > 0);
   savedListEl.innerHTML = "";
-  for (const p of shown) savedListEl.appendChild(makeSavedPromptCard(p));
+  // A group's members are drawn together in a block, where its first member is.
+  const drawn = new Set();
+  for (const p of shown) {
+    const gid = p.group?.id;
+    if (!gid) savedListEl.appendChild(makeSavedPromptCard(p));
+    else if (!drawn.has(gid)) {
+      drawn.add(gid);
+      savedListEl.appendChild(
+        makeSavedGroupBlock(gid, shown.filter((x) => x.group?.id === gid)),
+      );
+    }
+  }
   const active = activeSavedPrompt();
-  savedRunNoteEl.classList.toggle("on", !!active);
+  const group = activeGroup();
+  savedRunNoteEl.classList.toggle("on", !!(active || group));
   savedRunNoteEl.textContent =
     !savedPrompts.length ? ""
+    : group ?
+      `▶ Generate uses the group “${group.name}” while this tab is open: each prompt with its own references and length, and links each new History card to its prompt.`
     : active ?
       `▶ Generate uses “${active.title}” (${savedPromptSendsRefs(active) ? "its prompt and its references, in order" : "its prompt text only"}) while this tab is open, and links the new History card to it.`
-    : "Press ▶ on a card to generate from it while this tab is open. Otherwise Generate uses the Prompt tab's text.";
+    : "Press ▶ on a card — or on a group, to make a clip from each of its prompts — to generate from it while this tab is open. Otherwise Generate uses the Prompt tab's text.";
   savedRunNoteEl.classList.toggle("hidden", !savedPrompts.length);
-  syncRunSection();
+  syncGroupRender();
   syncWildcardSource();
   syncGenerateLabel();
 }
 
-// Say on the Generate button when a saved prompt will be used.
+// Say on the Generate button when a saved prompt (or group) will be used.
 function syncGenerateLabel() {
-  submitBtn.classList.toggle("from-saved", !!runSavedPrompt());
+  const plan = savedRunPlan();
+  submitBtn.classList.toggle("from-saved", !!plan);
   submitBtn.title =
-    runSavedPrompt() ?
-      `Generate from the saved prompt “${runSavedPrompt().title}”`
-    : "";
-  updateEstimate(); // a sectioned prompt costs a run per section
+    !plan ? ""
+    : plan[0].group ?
+      `Generate ${plan.length === 1 ? `part ${plan[0].part}` : `${plan.length} clips`} from the group “${plan[0].group.name}”`
+    : `Generate from the saved prompt “${plan[0].prompt.title}”`;
+  updateEstimate(); // an active group costs a run per prompt
 }
 
 // --- manual order ---
@@ -6944,11 +6986,17 @@ async function moveSavedPrompt(id, toIndex) {
   if (from === toIndex) return;
   const [moved] = savedPrompts.splice(from, 1);
   savedPrompts.splice(toIndex, 0, moved);
+  await saveSavedOrder(`[data-id="${CSS.escape(id)}"]`);
+}
+
+// The list's current order as the weights 0, 1, 2…, drawn at once and saved in the
+// background. `focus`: a selector to focus afterwards.
+async function saveSavedOrder(focus = null) {
   savedPrompts.forEach((p, i) => {
     p.weight = i;
   });
   renderSavedPrompts();
-  savedListEl.querySelector(`[data-id="${CSS.escape(id)}"]`)?.focus();
+  if (focus) savedListEl.querySelector(focus)?.focus();
   try {
     await promptsApi("/api/prompts/reorder", "POST", {
       projectId: activeProjectId,
@@ -6960,13 +7008,62 @@ async function moveSavedPrompt(id, toIndex) {
   }
 }
 
+// The list as units that move as one: an ungrouped prompt, or a whole group.
+function savedUnits() {
+  const units = [];
+  for (const p of savedPrompts) {
+    const gid = p.group?.id;
+    const last = units[units.length - 1];
+    if (gid && last?.gid === gid) last.items.push(p);
+    else units.push({ gid: gid || null, id: gid || p.id, items: [p] });
+  }
+  return units;
+}
+// Move a unit (a prompt id, or a group id) one place up or down past its neighbour —
+// an ungrouped prompt steps over a whole group rather than into it.
+function moveSavedUnit(unitId, delta) {
+  const units = savedUnits();
+  const i = units.findIndex((u) => u.id === unitId);
+  if (i < 0 || i + delta < 0 || i + delta >= units.length) return;
+  [units[i], units[i + delta]] = [units[i + delta], units[i]];
+  savedPrompts = units.flatMap((u) => u.items);
+  const sel = units[i + delta].gid ?
+      `.sp-group[data-group="${CSS.escape(unitId)}"] .sp-group-head`
+    : `[data-id="${CSS.escape(unitId)}"]`;
+  saveSavedOrder(sel);
+}
+
+// Put a prompt in a group (null: out of any), at index `toIndex` of the list.
+async function regroupSavedPrompt(id, group, toIndex) {
+  const p = savedPrompts.find((x) => x.id === id);
+  if (!p) return;
+  const from = savedPrompts.indexOf(p);
+  savedPrompts.splice(from, 1);
+  savedPrompts.splice(Math.max(0, Math.min(savedPrompts.length, toIndex)), 0, p);
+  const changed = (p.group?.id || null) !== (group?.id || null);
+  if (group) p.group = { id: group.id, name: group.name };
+  else delete p.group;
+  if (changed) {
+    try {
+      await promptsApi(`/api/prompts/${encodeURIComponent(id)}`, "PUT", {
+        projectId: activeProjectId,
+        group: group ? { id: group.id, name: group.name } : null,
+        keepPlace: true,
+      });
+    } catch (err) {
+      alert(err.message || String(err));
+      return loadSavedPrompts();
+    }
+  }
+  await saveSavedOrder(`[data-id="${CSS.escape(id)}"]`);
+}
+
 function wireCardReorder(card, p) {
   card.draggable = true;
   card.addEventListener("keydown", (e) => {
     if (!e.altKey || (e.key !== "ArrowUp" && e.key !== "ArrowDown")) return;
     e.preventDefault();
-    const i = savedPrompts.findIndex((x) => x.id === p.id);
-    moveSavedPrompt(p.id, i + (e.key === "ArrowUp" ? -1 : 1));
+    stepSavedCard(p, e.key === "ArrowUp" ? -1 : 1);
   });
   card.addEventListener("dragstart", (e) => {
     e.dataTransfer.setData(SP_REORDER_TYPE, p.id);
@@ -7005,34 +7102,213 @@ function wireCardReorder(card, p) {
     let to =
       savedPrompts.findIndex((x) => x.id === p.id) + (lowerHalf(e) ? 1 : 0);
     if (from < to) to--; // removing the dragged card first shifts everything after it up
-    moveSavedPrompt(id, to);
+    // Dropped among a group's prompts it joins that group; among ungrouped ones it
+    // leaves any group it was in.
+    const dragged = savedPrompts[from];
+    if ((dragged?.group?.id || null) !== (p.group?.id || null))
+      regroupSavedPrompt(id, p.group || null, to);
+    else moveSavedPrompt(id, to);
   });
 }
 
-function makeCardMoveButtons(p) {
+// ▲ ▼ / Alt+↑↓ on a card: a group's prompt moves within its group; an ungrouped one
+// steps past its neighbour (a whole group counts as one).
+function stepSavedCard(p, delta) {
+  if (!p.group) return moveSavedUnit(p.id, delta);
+  const members = savedGroupMembers(p.group.id);
+  const j = members.indexOf(p) + delta;
+  if (j < 0 || j >= members.length) return;
+  moveSavedPrompt(p.id, savedPrompts.indexOf(members[j]));
+}
+
+// ▲ ▼ for a card, or — with `unitId` — for a whole group's header.
+function makeCardMoveButtons(p, unitId = null) {
   const wrap = document.createElement("span");
   wrap.className = "sp-move";
-  const i = savedPrompts.findIndex((x) => x.id === p.id);
+  let i, n;
+  if (unitId || !p.group) {
+    const units = savedUnits();
+    i = units.findIndex((u) => u.id === (unitId || p.id));
+    n = units.length;
+  } else {
+    const members = savedGroupMembers(p.group.id);
+    i = members.indexOf(p);
+    n = members.length;
+  }
   for (const [text, delta, title] of [
-    ["▲", -1, "Move up (Alt+↑)"],
-    ["▼", 1, "Move down (Alt+↓)"],
+    ["▲", -1, unitId ? "Move the group up" : "Move up (Alt+↑)"],
+    ["▼", 1, unitId ? "Move the group down" : "Move down (Alt+↓)"],
   ]) {
     const b = document.createElement("button");
     b.type = "button";
     b.className = "link-btn";
     b.textContent = text;
     b.title = title;
-    b.disabled = i + delta < 0 || i + delta >= savedPrompts.length;
+    b.disabled = i + delta < 0 || i + delta >= n;
     b.addEventListener("click", (e) => {
       e.stopPropagation(); // not a click on the card (which opens the editor)
-      moveSavedPrompt(p.id, i + delta);
+      if (unitId) moveSavedUnit(unitId, delta);
+      else stepSavedCard(p, delta);
     });
     wrap.appendChild(b);
   }
   return wrap;
 }
 
-function makeSavedPromptCard(p) {
+// --- group blocks ---
+// Collapsed groups, per browser-independent pref (a list of group ids).
+const COLLAPSED_GROUPS_KEY = "genie_collapsed_groups";
+let collapsedGroups = new Set();
+try {
+  collapsedGroups = new Set(JSON.parse(getPref(COLLAPSED_GROUPS_KEY, "[]")) || []);
+} catch {
+  /* corrupt — none collapsed */
+}
+function setGroupCollapsed(gid, on) {
+  collapsedGroups.delete(gid);
+  if (on) collapsedGroups.add(gid); // newest last
+  // Only the most recent ones are kept, so ids of deleted groups don't pile up.
+  setPref(COLLAPSED_GROUPS_KEY, JSON.stringify([...collapsedGroups].slice(-200)));
+}
+
+// A group's header (▶, name, length, actions) and its prompts' cards, numbered.
+function makeSavedGroupBlock(gid, shownMembers) {
+  const members = savedGroupMembers(gid);
+  const name = members[0]?.group?.name || "Group";
+  const block = document.createElement("div");
+  block.className = "sp-group";
+  block.dataset.group = gid;
+  const isActive = activeGroupId() === gid;
+  block.classList.toggle("run-active", isActive);
+  const collapsed = collapsedGroups.has(gid) && !savedPromptsFilter;
+  block.classList.toggle("collapsed", collapsed);
+
+  const head = document.createElement("div");
+  head.className = "sp-group-head";
+  head.tabIndex = 0;
+  const btn = (cls, text, title, onClick) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = cls;
+    b.textContent = text;
+    b.title = title;
+    b.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      try {
+        await onClick();
+      } catch (err) {
+        alert(err.message || String(err));
+      }
+    });
+    return b;
+  };
+  const use = btn(
+    "sp-use" + (isActive ? " on" : ""),
+    isActive ? "▶ Active" : "▶",
+    isActive ?
+      "Generate uses this group while the Saved Prompts tab is open — click to stop"
+    : "Use this group for Generate: a clip from each of its prompts, in order (while the Saved Prompts tab is open)",
+    () => setActiveGroup(isActive ? null : gid),
+  );
+  const toggle = btn(
+    "link-btn sp-group-toggle",
+    collapsed ? "▸" : "▾",
+    collapsed ? "Show the group's prompts" : "Hide the group's prompts",
+    () => {
+      setGroupCollapsed(gid, !collapsed);
+      renderSavedPrompts();
+    },
+  );
+  const title = document.createElement("span");
+  title.className = "sp-group-name";
+  title.textContent = name;
+  const total = members.reduce((a, p) => a + (savedPromptSeconds(p) || 0), 0);
+  const meta = document.createElement("span");
+  meta.className = "sp-meta";
+  meta.textContent = [
+    `${members.length} prompt${members.length === 1 ? "" : "s"}`,
+    total ? `${+total.toFixed(3)}s in all` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const tools = document.createElement("span");
+  tools.className = "sp-group-tools";
+  tools.append(
+    btn("link-btn", "＋ Next", "Add the next prompt: a copy of the last one's subjects, references, style and sound, with a blank summary and shots", async () => {
+      const created = await promptsApi(
+        `/api/prompt-groups/${encodeURIComponent(gid)}/next`,
+        "POST",
+        { projectId: activeProjectId },
+      );
+      setGroupCollapsed(gid, false);
+      await loadSavedPrompts();
+      openPromptEditor(savedPrompts.find((x) => x.id === created.id) || created);
+    }),
+    btn("link-btn", "✎ Rename", "Rename the group", async () => {
+      const next = prompt("Group name:", name);
+      if (next == null || !next.trim() || next.trim() === name) return;
+      await promptsApi(`/api/prompt-groups/${encodeURIComponent(gid)}`, "PUT", {
+        projectId: activeProjectId,
+        name: next.trim(),
+      });
+      await loadSavedPrompts();
+    }),
+    btn("link-btn", "Ungroup", "Remove the group — its prompts stay, ungrouped, where they are", async () => {
+      if (!confirm(`Ungroup “${name}”?\n\nIts ${members.length} prompt${members.length === 1 ? "" : "s"} stay where they are, just no longer grouped.`))
+        return;
+      await promptsApi(
+        `/api/prompt-groups/${encodeURIComponent(gid)}?projectId=${encodeURIComponent(activeProjectId)}`,
+        "DELETE",
+      );
+      if (isActive) setActiveSavedPrompt(null);
+      await loadSavedPrompts();
+    }),
+  );
+  // Beside ▲ ▼ rather than among the tools: on a phone it gets their row, away from Ungroup.
+  const del = btn("link-btn sp-group-delete", "🗑", "Delete the group and all its prompts", async () => {
+      const n = members.length;
+      if (
+        !confirm(
+          `Delete the group “${name}” and its ${n} prompt${n === 1 ? "" : "s"}?\n\n` +
+            members.map((p, i) => `${i + 1}. ${p.title}`).join("\n") +
+            "\n\nThis can't be undone. Their images stay in the gallery and their runs stay in History. (Ungroup keeps the prompts instead.)",
+        )
+      )
+        return;
+      await promptsApi(
+        `/api/prompt-groups/${encodeURIComponent(gid)}?projectId=${encodeURIComponent(activeProjectId)}&withPrompts=1`,
+        "DELETE",
+      );
+      if (isActive) setActiveSavedPrompt(null);
+      projectPromptsCache.delete(activeProjectId);
+      await loadSavedPrompts();
+    });
+  head.append(use, toggle, title, meta, tools, del);
+  if (!savedPromptsFilter) head.appendChild(makeCardMoveButtons(members[0], gid));
+  head.addEventListener("click", () => toggle.click());
+  head.addEventListener("keydown", (e) => {
+    if (e.target !== head) return; // a button in the header handles its own keys
+    if (e.altKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
+      e.preventDefault();
+      moveSavedUnit(gid, e.key === "ArrowUp" ? -1 : 1);
+    } else if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      toggle.click();
+    }
+  });
+  block.appendChild(head);
+
+  const body = document.createElement("div");
+  body.className = "sp-group-body";
+  if (!collapsed)
+    for (const p of shownMembers)
+      body.appendChild(makeSavedPromptCard(p, members.indexOf(p) + 1));
+  block.appendChild(body);
+  return block;
+}
+
+// `part`: the prompt's place in its group (1-based), shown on the card.
+function makeSavedPromptCard(p, part = null) {
   const refs = p.refs || [];
   const card = document.createElement("div");
   card.className = "sp-card";
@@ -7057,9 +7333,6 @@ function makeSavedPromptCard(p) {
   meta.className = "sp-meta";
   meta.textContent = [
     p.duration ? `${p.duration}s` : null,
-    isMmType(p.type) && minimaxSections(p.minimax).length > 1 ?
-      `${minimaxSections(p.minimax).length} sections`
-    : null,
     refSummary(refs) || null,
     `weight ${p.weight ?? 0}`,
     new Date(p.updatedAt || p.createdAt).toLocaleDateString(),
@@ -7091,6 +7364,13 @@ function makeSavedPromptCard(p) {
         "MiniMax H3 text-to-video format — compiled into its three fields when used"
       : "MiniMax H3 format — compiled into its six sections when used";
     title.prepend(badge);
+  }
+  if (part) {
+    const num = document.createElement("span");
+    num.className = "sp-part";
+    num.textContent = String(part);
+    num.title = `Prompt ${part} of the group “${p.group?.name || ""}”`;
+    title.prepend(num);
   }
   head.append(title, meta);
   if (!savedPromptsFilter) {
@@ -7869,32 +8149,15 @@ function renderMinimaxRefParts(mm) {
 }
 
 // The shot cards and ＋ Add cut, into `desc`. A shot holds how long it lasts; its start
-// time comes from the order, which the grip (drag) and ▲ ▼ change. ✂ starts a new
-// section at a shot (see minimaxSections); each section gets a header.
+// time comes from the order, which the grip (drag) and ▲ ▼ change. A clip longer than
+// one generation belongs in a prompt group: one whole prompt per clip.
 const MM_SHOT_TYPE = "application/x-genie-shot";
 function renderMinimaxShots(mm, desc, t2v) {
   const shots = mmEl("div", "pe-mm-shots");
-  // The shots with every section break as an item of its own, so a move can carry a
-  // shot across a break: ▲ on a section's first shot puts it at the end of the one above.
-  const BRK = {};
-  const items = () =>
-    mm.shots.flatMap((s, i) => (i > 0 && s.brk ? [BRK, s] : [s]));
-  // Back to shots (a break that's first, last or doubled is dropped), then redraw and
-  // show where `s` went.
+  const items = () => mm.shots;
+  // The new order, then redraw and show where `s` went.
   const apply = (list, s) => {
-    const out = [];
-    let brk = false;
-    for (const x of list) {
-      if (x === BRK) {
-        brk = true;
-        continue;
-      }
-      if (brk && out.length) x.brk = true;
-      else delete x.brk;
-      brk = false;
-      out.push(x);
-    }
-    mm.shots = out;
+    mm.shots = list;
     renderMinimaxForm();
     if (!s) return;
     const moved =
@@ -7909,30 +8172,9 @@ function renderMinimaxShots(mm, desc, t2v) {
     [list[a], list[a + delta]] = [list[a + delta], list[a]];
     apply(list, s);
   };
-  const sectionCount = mm.shots.filter((s, i) => i === 0 || s.brk).length;
-  let section = -1;
   mm.shots.forEach((s, i) => {
-    if (i === 0 || s.brk) {
-      section++;
-      if (sectionCount > 1) {
-        const bar = mmEl("div", "pe-mm-section");
-        const info = mmEl("span", "hint pe-mm-section-info");
-        info.dataset.section = String(section);
-        bar.append(mmEl("span", "pe-mm-section-name", `Section ${section + 1}`), info);
-        if (i > 0) {
-          const merge = mmEl("button", "link-btn", "Merge with section above");
-          merge.type = "button";
-          merge.addEventListener("click", () => {
-            delete s.brk;
-            renderMinimaxForm();
-          });
-          bar.appendChild(merge);
-        }
-        shots.appendChild(bar);
-      }
-    }
-    const lastInSection = i === mm.shots.length - 1 || !!mm.shots[i + 1].brk;
-    const pos = items().indexOf(s);
+    const isLast = i === mm.shots.length - 1;
+    const pos = i;
     const card = mmEl("div", "pe-mm-shot");
     const head = mmEl("div", "pe-mm-shot-head");
     const grip = mmEl("span", "pe-mm-grip", "⠿");
@@ -7986,9 +8228,9 @@ function renderMinimaxShots(mm, desc, t2v) {
     len.type = "text";
     len.inputMode = "decimal";
     len.value = s.len == null ? "" : String(s.len);
-    len.placeholder = lastInSection ? "rest" : "5";
+    len.placeholder = isLast ? "rest" : "5";
     len.title =
-      "How long this shot lasts — seconds (5) or MM:SS (00:05.5). Its start time is worked out from the shots before it. A section's last shot can be left empty: it runs to the end.";
+      "How long this shot lasts — seconds (5) or MM:SS (00:05.5). Its start time is worked out from the shots before it. The last shot can be left empty: it runs to the end.";
     len.addEventListener("input", () => {
       s.len = parseShotTime(len.value);
       refreshMinimaxDerived();
@@ -8000,17 +8242,6 @@ function renderMinimaxShots(mm, desc, t2v) {
     const warn = mmEl("span", "pe-mm-warn");
     warn.dataset.shot = String(i);
     const tools = mmEl("span", "pe-mm-shot-tools");
-    if (i > 0 && !s.brk) {
-      const split = mmEl("button", "link-btn", "✂");
-      split.type = "button";
-      split.title =
-        "Start a new section at this shot — each section is generated as a clip of its own";
-      split.addEventListener("click", () => {
-        s.brk = true;
-        renderMinimaxForm();
-      });
-      tools.appendChild(split);
-    }
     for (const [text, delta, title] of [
       ["▲", -1, "Move up"],
       ["▼", 1, "Move down"],
@@ -8123,70 +8354,41 @@ function refreshMinimaxDerived() {
     w.querySelector("textarea").disabled = !label;
   });
 
-  // Each shot's start time within its section, a note on a missing length (only a
-  // section's last shot may leave it empty), each section's length, and the shots'
-  // total.
+  // Each shot's start time, a note on a missing length (only the last shot may leave
+  // it empty), and the shots' total — with a warning past one clip's length.
   const secs = (n) => `${+n.toFixed(3)}s`;
   const lastShot = mm.shots.length - 1;
-  const opens = (i) => i === 0 || !!mm.shots[i].brk; // the first shot of a section
-  const starts = [];
-  mm.shots.forEach((s, i) => {
-    starts[i] = opens(i) ? 0 : starts[i - 1] + (Number(mm.shots[i - 1].len) || 0);
-  });
+  const starts = shotStarts(mm.shots);
   peMinimax.querySelectorAll(".pe-mm-shot .pe-mm-warn").forEach((w) => {
     const i = Number(w.dataset.shot);
     const len = mm.shots[i]?.len;
     w.textContent =
-      len == null && i < lastShot && !opens(i + 1) ? "⚠ needs a length"
+      len == null && i < lastShot ? "⚠ needs a length"
       : len === 0 ? "⚠ no length"
       : "";
     w.previousElementSibling.textContent =
-      opens(i) ? "opening shot" : `starts ${fmtShotTime(starts[i])}`;
-  });
-  const sections = minimaxSections(mm);
-  peMinimax.querySelectorAll(".pe-mm-section-info").forEach((el) => {
-    const shots = sections[Number(el.dataset.section)] || [];
-    const sum = shots.reduce((a, s) => a + (Number(s.len) || 0), 0);
-    const open = shotsSeconds(shots) == null;
-    const rest = SECTION_MAX_SECONDS - sum; // what an open last shot gets
-    const over = sum > SECTION_MAX_SECONDS;
-    el.textContent =
-      `— ${shots.length} shot${shots.length === 1 ? "" : "s"}, ${secs(sectionSeconds(shots))}` +
-      (open && rest > 0 ? ` (the last shot takes the remaining ${secs(rest)})` : "") +
-      (over ?
-        ` ⚠ over ${SECTION_MAX_SECONDS}s — longer than most models make in one clip`
-      : open && rest <= 0 ? " ⚠ no time left for the last shot"
-      : "");
-    el.classList.toggle("pe-mm-over", over || (open && rest <= 0));
+      i === 0 ? "opening shot" : `starts ${fmtShotTime(starts[i])}`;
   });
   const totalEl = document.getElementById("mmShotTotal");
   if (totalEl) {
-    if (sections.length > 1) {
-      // Every section has a length of its own (an open one fills a full clip).
-      const sum = sections.reduce((a, shots) => a + sectionSeconds(shots), 0);
-      totalEl.textContent = `${sections.length} sections — shots total ${secs(sum)}`;
-    } else {
-      const sum = mm.shots.reduce((a, s) => a + (Number(s.len) || 0), 0);
-      totalEl.textContent =
-        mm.shots[lastShot].len == null ?
-          `${secs(sum)} of shots, then the last runs to the end`
-        : `Shots total ${secs(sum)}`;
-    }
+    const sum = mm.shots.reduce((a, s) => a + (Number(s.len) || 0), 0);
+    const over = sum > CLIP_MAX_SECONDS;
+    totalEl.textContent =
+      (mm.shots[lastShot].len == null ?
+        `${secs(sum)} of shots, then the last runs to the end`
+      : `Shots total ${secs(sum)}`) +
+      (over ?
+        ` ⚠ over ${CLIP_MAX_SECONDS}s — longer than most models make in one clip. Put the rest in the next prompt of a group.`
+      : "");
+    totalEl.classList.toggle("pe-mm-over", over);
   }
 
   const out = document.getElementById("mmCompiled");
   if (out) {
-    // A sectioned prompt compiles to one prompt per section, as each is generated.
-    const compile = (k) =>
-      editing.type === "minimax_t2v" ?
-        compileMinimaxT2V(mm, k)
-      : compileMinimax(mm, refs, k);
     const text =
-      sections.length > 1 ?
-        sections
-          .map((_, k) => `── Section ${k + 1} ──\n${compile(k)}`)
-          .join("\n\n")
-      : compile(null);
+      editing.type === "minimax_t2v" ?
+        compileMinimaxT2V(mm)
+      : compileMinimax(mm, refs);
     out.textContent = text;
     const sum = out.parentElement.querySelector("summary");
     if (sum)
@@ -8262,7 +8464,7 @@ function renderEditorActions() {
       async () => {
         if (
           !confirm(
-            "Convert to a plain-text prompt?\n\nThe compiled MiniMax text becomes the prompt; the sections and cuts are dropped when you save.",
+            "Convert to a plain-text prompt?\n\nThe compiled MiniMax text becomes the prompt; the fields and cuts are dropped when you save.",
           )
         )
           return;
@@ -8295,7 +8497,7 @@ function renderEditorActions() {
   } else {
     btn(
       "⇄ To MiniMax",
-      "Split this prompt into MiniMax H3's sections, shots and subjects (on Save)",
+      "Split this prompt into MiniMax H3's fields, shots and subjects (on Save)",
       async () => {
         editing.mm = parseMinimax(pePrompt.value, editorLiveRefs());
         editing.type = "minimax";
@@ -8327,6 +8529,56 @@ function renderEditorActions() {
       openPromptEditor(fresh || copy, projectId);
     },
   );
+
+  // Group: put the prompt in one of the project's groups, a new one, or none — at once,
+  // like Move / Copy (it changes the saved prompt, not the edits).
+  {
+    const sel = document.createElement("select");
+    sel.className = "sp-transfer sp-group-pick";
+    sel.title = "Put this prompt in a group — a sequence of prompts generated one clip each";
+    const cur = editing.p.group?.id || "";
+    sel.appendChild(new Option(cur ? "📚 Leave the group" : "📚 No group", ""));
+    const seen = new Map();
+    getProjectPrompts(projectId).then((list) => {
+      for (const x of list)
+        if (x.group?.id && !seen.has(x.group.id)) seen.set(x.group.id, x.group);
+      for (const g of seen.values())
+        sel.appendChild(new Option(`📚 ${g.name}`, g.id));
+      sel.appendChild(new Option("📚 ＋ New group…", "__new"));
+      sel.value = cur;
+    });
+    sel.addEventListener("change", async () => {
+      const to = sel.value;
+      if (to === cur) return;
+      if (!okToLeaveEdits()) return void (sel.value = cur);
+      try {
+        if (to === "__new") {
+          const name = prompt("Name the new group:", editing.p.title);
+          if (!name?.trim()) return void (sel.value = cur);
+          await promptsApi("/api/prompt-groups", "POST", {
+            projectId,
+            name: name.trim(),
+            promptIds: [editing.p.id],
+          });
+        } else {
+          await promptsApi(base(), "PUT", {
+            projectId,
+            group: to ? seen.get(to) : null,
+          });
+        }
+        projectPromptsCache.delete(projectId);
+        await loadSavedPrompts();
+        const fresh = (await getProjectPrompts(projectId)).find(
+          (x) => x.id === editing.p.id,
+        );
+        if (fresh) openPromptEditor(fresh, projectId);
+      } catch (err) {
+        alert(err.message || String(err));
+        sel.value = cur;
+      }
+    });
+    peActions.appendChild(sel);
+  }
 
   // Move / copy to another project: a dropdown of the other projects, like the gallery's ⇄.
   const others = projects.filter((x) => x.id !== projectId);
@@ -8731,12 +8983,12 @@ function closePreviewStream() {
 }
 
 // `prompt`: the text to send — the textarea's, or an active saved prompt's export.
-// `seconds`: a prompt section's own length, in place of the form's duration — as whole
+// `seconds`: a group member's own length, in place of the form's duration — as whole
 // seconds within what the model allows.
 function collectInput(resolved, prompt = promptEl.value, seconds = null) {
   prompt = String(prompt).trim();
   const durEl = document.getElementById("duration");
-  const sectionDuration = seconds > 0 ? sectionRunDuration(seconds) : null;
+  const runSeconds = seconds > 0 ? runDuration(seconds) : null;
   if (isSeedream()) {
     const input = {
       model: modelSelect.value,
@@ -8757,7 +9009,7 @@ function collectInput(resolved, prompt = promptEl.value, seconds = null) {
     const input = {
       model: modelSelect.value,
       prompt,
-      duration: sectionDuration ?? Number(durEl.value),
+      duration: runSeconds ?? Number(durEl.value),
       resolution: resolutionSelect.value,
     };
     if (isH3I2V()) {
@@ -8784,7 +9036,7 @@ function collectInput(resolved, prompt = promptEl.value, seconds = null) {
     generate_audio: document.getElementById("generate_audio").checked,
     resolution: document.getElementById("resolution").value,
     aspect_ratio: document.getElementById("aspect_ratio").value,
-    duration: sectionDuration ?? (durationAuto() ? -1 : Number(durEl.value)),
+    duration: runSeconds ?? (durationAuto() ? -1 : Number(durEl.value)),
     web_search:
       document.getElementById("web_search").checked &&
       !(webSearchT2VOnly() && hasActiveMedia()),
@@ -8814,41 +9066,52 @@ form.addEventListener("submit", async (e) => {
     return;
   }
   saveKieForm(); // also what a Re-import or a saved prompt filled in, not just edits
-  // An active MiniMax prompt brings its own references (before they're checked below).
-  const mediaNotes = loadRunMedia(runSavedPrompt());
+  // Pinned now, so switching tabs (or the active prompt) mid-upload can't change the run.
+  const plan = savedRunPlan();
+  if (!plan) return submitKieRuns(null, [{ text: promptEl.value, duration: null }]);
+  // A saved prompt, or each member of an active group in turn — every one with its own
+  // references, so they're loaded, checked and uploaded per prompt.
+  const inGroup = !!plan[0].group;
+  if (inGroup) hide(errorEl);
+  const notes = []; // every member's notes, shown together
+  for (const [i, run] of plan.entries()) {
+    const ok = await submitKieRuns(run.prompt, [run], inGroup, notes);
+    if (!ok) {
+      if (i > 0)
+        setError(
+          `${errorEl.textContent}\n(The ${i} prompt${i === 1 ? "" : "s"} before it ${i === 1 ? "was" : "were"} submitted; the rest weren't.)`,
+        );
+      break;
+    }
+  }
+});
 
-  if (allItems().some((i) => i.status === "saving")) {
-    setError("Some files are still saving — wait a moment and try again.");
-    return;
-  }
-  if (allItems().some((i) => i.status === "error")) {
-    setError("Remove the failed file(s) before generating.");
-    return;
-  }
-  if (isI2I() && !lists.image.items.some((i) => i.status === "ready")) {
-    setError("Seedream image-to-image needs at least one reference image.");
-    return;
-  }
+// Submit the runs of one prompt to kie.ai (×N each): `fromSaved` is the saved prompt
+// they come from (its references are loaded into the form first), or null for the
+// Prompt tab's text. Resolves false when the form can't be submitted as it is.
+async function submitKieRuns(fromSaved, plan, inGroup = false, notes = []) {
+  for (const n of loadPlanRunMedia({ ...plan[0], prompt: fromSaved }))
+    notes.push(inGroup ? `${fromSaved.title}: ${n}` : n);
+  const mediaNotes = notes;
+  const fail = (msg) => {
+    setError([...notes, inGroup ? `${fromSaved.title}: ${msg}` : msg].join("\n"));
+    return false;
+  };
+
+  if (allItems().some((i) => i.status === "saving"))
+    return fail("Some files are still saving — wait a moment and try again.");
+  if (allItems().some((i) => i.status === "error"))
+    return fail("Remove the failed file(s) before generating.");
+  if (isI2I() && !lists.image.items.some((i) => i.status === "ready"))
+    return fail("Seedream image-to-image needs at least one reference image.");
   const ready = (kind) => lists[kind].items.some((i) => i.status === "ready");
-  if (isH3I2V() && !ready("firstFrame") && !ready("lastFrame")) {
-    setError(
-      "MiniMax H3 image-to-video needs a first frame, a last frame, or both.",
-    );
-    return;
-  }
+  if (isH3I2V() && !ready("firstFrame") && !ready("lastFrame"))
+    return fail("MiniMax H3 image-to-video needs a first frame, a last frame, or both.");
   // The API rejects a reference-to-video run carrying only audio.
-  if (isH3Ref() && !ready("image") && !ready("video")) {
-    setError(
-      "MiniMax H3 reference-to-video needs at least one reference image or video.",
-    );
-    return;
-  }
-  if (is25() && usesFrames() && ready("lastFrame") && !ready("firstFrame")) {
-    setError(
-      "Seedance 2.5 can't take a last frame on its own — add a first frame too.",
-    );
-    return;
-  }
+  if (isH3Ref() && !ready("image") && !ready("video"))
+    return fail("MiniMax H3 reference-to-video needs at least one reference image or video.");
+  if (is25() && usesFrames() && ready("lastFrame") && !ready("firstFrame"))
+    return fail("Seedance 2.5 can't take a last frame on its own — add a first frame too.");
   // Too many references, or too much reference video, is rejected by the API.
   if (isSeedanceVideo() || isH3Ref()) {
     const lim = refLimits();
@@ -8859,27 +9122,14 @@ form.addEventListener("submit", async (e) => {
       usesRefMedia() && count("video") > lim.video && `${lim.video} videos`,
       usesRefMedia() && count("audio") > lim.audio && `${lim.audio} audio files`,
     ].filter(Boolean);
-    if (over.length) {
-      setError(`This model takes at most ${over.join(", ")} as references.`);
-      return;
-    }
-    if (usesRefMedia() && refVideoSeconds() > lim.secs) {
-      setError(
+    if (over.length)
+      return fail(`This model takes at most ${over.join(", ")} as references.`);
+    if (usesRefMedia() && refVideoSeconds() > lim.secs)
+      return fail(
         `Reference videos total ${Math.round(refVideoSeconds())}s — this model's limit is ${lim.secs}s.`,
       );
-      return;
-    }
   }
-  // Pinned now, so switching tabs (or the active prompt) mid-upload can't change the run.
-  const fromSaved = runSavedPrompt();
-  // What to render: the textarea, or the saved prompt — one run, or one per section
-  // of a sectioned prompt (each with its own text and length).
-  const plan =
-    fromSaved ?
-      savedPromptRuns(fromSaved)
-    : [{ text: promptEl.value, duration: null, section: null }];
-  // Wildcards: each run of a ×N batch gets its own picks. A sectioned prompt runs
-  // section by section: ×N of the first, then ×N of the next.
+  // Wildcards: each run of a ×N batch gets its own picks.
   let runs;
   try {
     runs = plan.flatMap((r) =>
@@ -8889,20 +9139,19 @@ form.addEventListener("submit", async (e) => {
       })),
     );
   } catch (err) {
-    setError(err.message || String(err));
-    return;
+    return fail(err.message || String(err));
   }
   const longest = runs.reduce((a, r) => (r.prompt.length > a.prompt.length ? r : a));
   if (longest.prompt.length > promptCap()) {
     setError(
-      `${fromSaved ? `Saved prompt “${fromSaved.title}”${longest.section ? ` (section ${longest.section})` : ""}` : "Prompt"} is ${longest.prompt.length.toLocaleString()} characters` +
+      `${fromSaved ? `Saved prompt “${fromSaved.title}”` : "Prompt"} is ${longest.prompt.length.toLocaleString()} characters` +
         `${longest.prompt.length !== longest.text.length ? " with its wildcards and variables filled in" : ""} — ` +
         `this model's limit is ${promptCap().toLocaleString()}.`,
     );
-    return;
+    return false;
   }
 
-  hide(errorEl);
+  if (!inGroup) hide(errorEl);
   if (mediaNotes.length) setError(mediaNotes.join("\n"));
   // Lock only for the upload→create window so a double-click can't double-submit
   // the same form. It re-enables once the task is created, freeing you to queue
@@ -8988,7 +9237,7 @@ form.addEventListener("submit", async (e) => {
     const msg = err.message || "Failed to upload reference media.";
     for (const job of jobs) await failJob(job, msg);
     submitBtn.disabled = false;
-    return;
+    return false;
   }
 
   // Snapshot the balance so we can measure actual cost on completion. (With
@@ -9020,7 +9269,8 @@ form.addEventListener("submit", async (e) => {
   } finally {
     submitBtn.disabled = false;
   }
-});
+  return true;
+}
 
 const BATCH_CREATE_SPACING_MS = 400; // ~2.5 creates/s — well inside 20 per 10s
 
@@ -9995,6 +10245,15 @@ function renderHistory(entries) {
           entry.projectId || "default",
         ),
       );
+      if (typeof makeFramesButton === "function") {
+        actions.appendChild(
+          makeFramesButton(
+            entry.localVideo,
+            `generated-${entry.id}`,
+            entry.projectId || "default",
+          ),
+        );
+      }
     }
 
     if (output) actions.appendChild(makeHistoryPromptLink(entry, onLinked));

@@ -763,8 +763,12 @@ export function createLlm(deps) {
     }
     if (!description && !images.length)
       throw new Error("Add a description, an image, or both.");
-    const count = Math.max(1, Math.min(MAX_COUNT, Math.round(Number(body.count) || 1)));
+    const variations = Math.max(1, Math.min(MAX_COUNT, Math.round(Number(body.count) || 1)));
     const d = Number(body.duration);
+    const duration = Number.isFinite(d) && d > 0 ? d : null;
+    // A MiniMax video longer than one clip is written as a prompt group: one whole
+    // prompt per clip, each with its own summary, subjects and images.
+    const clips = format !== "default" ? clipLengths(duration) : [];
     const job = {
       id: randomUUID(),
       projectId: proj.id,
@@ -772,14 +776,18 @@ export function createLlm(deps) {
       sourceName: src.name,
       model,
       format,
+      variations, // what was asked for; `count` is the prompts that makes
+      clips, // [] for one prompt per variation, else each clip's seconds
+      group: null, // the group the clips being written go into
+      clipsDone: [], // the current variation's clips so far, for the next one's context
       imageIds: images.map((g) => g.id),
       images, // gallery entries (stripped from the public view)
       description,
       theme: String(body.theme || "").trim().slice(0, 2000),
       rules: String(body.rules || "").trim().slice(0, MAX_RULES),
       titlePrefix: String(body.titlePrefix || "").trim().slice(0, 100),
-      duration: Number.isFinite(d) && d > 0 ? d : null,
-      count,
+      duration,
+      count: variations * Math.max(1, clips.length),
       done: 0,
       created: [], // [{ id, title }]
       status: "queued",
@@ -789,7 +797,7 @@ export function createLlm(deps) {
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
-    rememberBuild(proj, body, job);
+    rememberBuild(proj, { ...body, count: variations }, job);
     jobs.set(job.id, job);
     queue.push(job);
     pruneJobs();
@@ -1085,7 +1093,11 @@ export function createLlm(deps) {
         await acquire(job, src);
         checkCancel(job);
         const n = job.done + 1;
-        const doing = job.kind === "revise" ? "Revising" : `Writing prompt ${n} of ${job.count}`;
+        const doing =
+          job.kind === "revise" ? "Revising"
+          : job.clips?.length ?
+            `Writing ${job.variations > 1 ? `video ${variationOf(job) + 1} of ${job.variations}, ` : ""}clip ${clipOf(job) + 1} of ${job.clips.length}`
+          : `Writing prompt ${n} of ${job.count}`;
         setJob(job, "generating", `${doing}…`);
         const controller = new AbortController();
         state.request = controller;
@@ -1121,6 +1133,13 @@ export function createLlm(deps) {
         }
         const saved = savePrompt(job, result, n);
         job.created.push({ id: saved.id, title: saved.title, llmTitle: result.title });
+        if (job.clips?.length) {
+          job.clipsDone.push(result);
+          if (job.clipsDone.length === job.clips.length) {
+            job.clipsDone = []; // the next variation starts a group of its own
+            job.group = null;
+          }
+        }
         job.done++;
       }
       if (job.kind === "revise") {
@@ -1130,7 +1149,9 @@ export function createLlm(deps) {
       setJob(
         job,
         "done",
-        `Saved ${job.count} prompt${job.count === 1 ? "" : "s"} to Saved Prompts.`,
+        job.clips?.length ?
+          `Saved ${job.variations} prompt group${job.variations === 1 ? "" : "s"} of ${job.clips.length} clips to Saved Prompts.`
+        : `Saved ${job.count} prompt${job.count === 1 ? "" : "s"} to Saved Prompts.`,
       );
     } finally {
       clearInterval(watch);
@@ -1164,13 +1185,7 @@ export function createLlm(deps) {
       );
     }
     o.style = mm.style || "";
-    // A sectioned prompt's shots carry their section number (see sectionLengths).
-    const sectioned = (mm.shots || []).some((x, i) => i > 0 && x?.brk);
-    let section = 1;
-    o.shots = (mm.shots || []).map((x, i) => {
-      if (i > 0 && x?.brk) section++;
-      return { ...(sectioned ? { section } : {}), seconds: x?.len ?? null, text: x?.text || "" };
-    });
+    o.shots = (mm.shots || []).map((x) => ({ seconds: x?.len ?? null, text: x?.text || "" }));
     o.soundscape = mm.soundscape || "";
     o.music = mm.music || "";
     return o;
@@ -1202,11 +1217,6 @@ export function createLlm(deps) {
       lines.push("");
     }
     if (job.duration) lines.push(`Clip length: ${job.duration} seconds.`, "");
-    if (job.format !== "default" && (job.current?.shots || []).some((x, i) => i > 0 && x?.brk))
-      lines.push(
-        `The shots are grouped into sections by their "section" number. Each section is generated as a separate clip of at most ${SECTION_MAX_SECONDS} seconds. Keep every shot's "section" unless the changes call for moving it.`,
-        "",
-      );
     lines.push("The current prompt:", "```json", JSON.stringify(currentAsJson(job), null, 2), "```", "");
     lines.push(`Changes to make: ${job.instruction}`, "");
     lines.push("Reply with only the complete revised JSON object.");
@@ -1243,30 +1253,59 @@ export function createLlm(deps) {
     if (job.description) lines.push(`What should happen: ${job.description}`);
     if (job.theme) lines.push(`Theme / style: ${job.theme}`);
     if (job.rules) lines.push("", "Follow the rules in the system prompt.");
-    const sections = job.format !== "default" ? sectionLengths(job.duration) : [];
-    if (sections.length > 1)
+    const clips = job.clips || [];
+    const k = clipOf(job);
+    if (clips.length) {
+      // One clip of a longer video: a whole prompt of its own.
       lines.push(
-        `Video length: ${job.duration} seconds, generated as ${sections.length} separate clips ("sections"): ${sections
-          .map((s, i) => `section ${i + 1} is ${s} seconds`)
+        "",
+        `The video is ${job.duration} seconds long, made as ${clips.length} clips that are generated separately and joined: ${clips
+          .map((c, i) => `clip ${i + 1} is ${c} seconds`)
           .join(", ")}.`,
-        `Give every shot a "section" number, like {"section": 1, "seconds": 5, "text": "…"}. Within a section, the shots' seconds add up to that section's length.`,
-        "Each section is generated on its own from the same references and never sees the others. Open each section with a shot that re-establishes who is where, and keep the subjects, setting and style consistent from one section to the next.",
+        `Write clip ${k + 1} now — ${clips[k]} seconds; its shots' seconds add up to ${clips[k]}. It covers ${k === 0 ? "the opening" : k === clips.length - 1 ? "the ending" : "the middle"} of what should happen.`,
+        "This clip is generated on its own and never sees the other clips, so its prompt stands alone: its own subjects, summary and retention for what is in it, and an opening shot that re-establishes who is where. Keep the subjects (with the same keys), setting and style consistent from clip to clip, and carry on exactly where the previous clip ended.",
       );
-    else if (job.duration) lines.push(`Clip length: ${job.duration} seconds.`);
-    if (job.count > 1) {
+      if (job.format === "minimax")
+        lines.push(
+          `Also give "pictures": the numbers of the reference images this clip needs, e.g. [1, 3] — only those are sent with it. Refer to images by those same numbers.`,
+        );
+      if (k === 0)
+        lines.push(`Also give "video_title": a short title for the whole video, at most 8 words.`);
+      if (job.clipsDone.length) {
+        lines.push("", "The clips written so far:");
+        job.clipsDone.forEach((c, i) => {
+          const mm = c.minimax || {};
+          lines.push(
+            `Clip ${i + 1}: ${mm.summary || ""}`.trim(),
+            ...(mm.shots || []).map((x, j) => `  Shot ${j + 1}${x.len ? ` (${x.len}s)` : ""}: ${x.text}`),
+          );
+        });
+      }
+    } else if (job.duration) lines.push(`Clip length: ${job.duration} seconds.`);
+    const variations = job.variations || job.count;
+    if (variations > 1) {
+      const v = clips.length ? variationOf(job) : n - 1;
       lines.push("");
       lines.push(
-        `This is prompt ${n} of ${job.count} variations on the request. Make it clearly different from the others — a different angle, beat, staging or camera approach — while keeping the same subjects and theme.`,
+        `This is ${clips.length ? "video" : "prompt"} ${v + 1} of ${variations} variations on the request. Make it clearly different from the others — a different angle, beat, staging or camera approach — while keeping the same subjects and theme.`,
       );
-      if (job.created.length)
-        lines.push(`Already written: ${job.created.map((c) => `"${c.llmTitle || c.title}"`).join(", ")}.`);
+      const others = clips.length ?
+          job.created.filter((_, i) => i % clips.length === 0 && Math.floor(i / clips.length) < v)
+        : job.created;
+      if (others.length && k === 0)
+        lines.push(`Already written: ${others.map((c) => `"${c.llmTitle || c.title}"`).join(", ")}.`);
     }
     lines.push("");
+    const extra =
+      !clips.length ? ""
+      : job.format === "minimax" ? (k === 0 ? ", pictures and video_title" : " and pictures")
+      : k === 0 ? " and video_title"
+      : "";
     lines.push(
       job.format === "minimax" ?
-        "Reply with only the JSON object with the fields title, subjects, summary, retention, style, shots, soundscape and music."
+        `Reply with only the JSON object with the fields title, subjects, summary, retention, style, shots, soundscape and music${extra}.`
       : job.format === "minimax_t2v" ?
-        "Reply with only the JSON object with the fields title, style, shots, soundscape and music."
+        `Reply with only the JSON object with the fields title, style, shots, soundscape and music${extra}.`
       : 'Reply with only the JSON object: {"title": "…", "prompt": "…"}',
     );
 
@@ -1312,10 +1351,7 @@ export function createLlm(deps) {
     let reply = text;
     for (let fix = 1; ; fix++) {
       try {
-        // A build longer than one clip is split into sections even if the reply didn't.
-        return parseStructuredReply(reply, job.format, {
-          split: job.kind !== "revise" && job.duration > SECTION_MAX_SECONDS,
-        });
+        return parseStructuredReply(reply, job.format);
       } catch (err) {
         if (fix > REPAIR_ATTEMPTS || !stripThinking(text)) throw err;
         log.warn?.(`LLM: ${err.message} Asking it to fix the JSON (${fix} of ${REPAIR_ATTEMPTS}).`);
@@ -1450,17 +1486,40 @@ export function createLlm(deps) {
     let title = result.title || `Prompt ${n}`;
     if (job.titlePrefix) title = `${job.titlePrefix} — ${title}`;
     const structured = job.format && job.format !== "default";
+    let images = job.format === "minimax_t2v" ? [] : job.images;
+    let minimax = result.minimax;
+    let duration = job.duration;
+    let group;
+    const clips = job.clips || [];
+    if (clips.length) {
+      const k = clipOf(job);
+      duration = clips[k];
+      if (!job.group) {
+        let name = result.videoTitle || result.title || `Video ${variationOf(job) + 1}`;
+        if (job.titlePrefix) name = `${job.titlePrefix} — ${name}`;
+        job.group = { id: randomUUID(), name: name.slice(0, 200) };
+      }
+      group = job.group;
+      title = `${result.title || group.name} — ${k + 1}/${clips.length}`;
+      // Only the images this clip uses, renumbered: its <Picture N> labels count from
+      // its own reference list.
+      if (images.length) ({ images, minimax } = clipImages(images, minimax, result.pictures));
+    }
+    // A batch reads top to bottom in the order it was written: each prompt goes
+    // right after the previous one from this build (the first goes on top), with its
+    // weight so it stays there even if the list was re-ordered meanwhile.
+    const list = readPrompts(proj);
+    const prevId = job.created.length ? job.created[job.created.length - 1].id : null;
+    const at = prevId ? list.findIndex((x) => x.id === prevId) : -1;
     const fields = sanitizePromptFields({
       title,
       type: structured ? job.format : "default",
       prompt: structured ? "" : result.prompt,
-      ...(structured ? { minimax: result.minimax } : {}),
-      duration: job.duration,
-      weight: 0,
-      refs:
-        job.format === "minimax_t2v" ? [] : (
-          job.images.map((g) => ({ id: g.id, kind: "image", name: g.name }))
-        ),
+      ...(structured ? { minimax } : {}),
+      ...(group ? { group } : {}),
+      duration,
+      weight: at >= 0 ? list[at].weight ?? 0 : 0,
+      refs: images.map((g) => ({ id: g.id, kind: "image", name: g.name })),
     });
     const now = new Date().toISOString();
     const entry = {
@@ -1477,15 +1536,18 @@ export function createLlm(deps) {
       createdAt: now,
       updatedAt: now,
     };
-    // A batch reads top to bottom in the order it was written: each prompt goes
-    // right after the previous one from this build (the first goes on top).
-    const list = readPrompts(proj);
-    const prev = job.created.length ? job.created[job.created.length - 1].id : null;
-    const at = prev ? list.findIndex((x) => x.id === prev) : -1;
     if (at >= 0) list.splice(at + 1, 0, entry);
     else list.unshift(entry);
     writePrompts(proj, list);
     return withRefDetails ? withRefDetails([entry])[0] : entry;
+  }
+
+  // Which variation (0-based) and which of its clips the next prompt is.
+  function variationOf(job) {
+    return Math.floor(job.done / Math.max(1, job.clips?.length || 1));
+  }
+  function clipOf(job) {
+    return job.clips?.length ? job.done % job.clips.length : 0;
   }
 
   return {
@@ -1526,25 +1588,72 @@ export function createLlm(deps) {
 // How many times a malformed MiniMax reply goes back to the model to be fixed.
 const REPAIR_ATTEMPTS = 3;
 
-// A MiniMax prompt longer than this is written as sections, each generated as a clip
-// of its own (the UI's SECTION_MAX_SECONDS).
-const SECTION_MAX_SECONDS = 15;
-const SECTION_MIN_SECONDS = 4; // the shortest clip the video models make
+// A MiniMax build longer than this is written as a prompt group, one prompt per clip
+// (the UI's CLIP_MAX_SECONDS).
+const CLIP_MAX_SECONDS = 15;
+const CLIP_MIN_SECONDS = 4; // the shortest clip the video models make
 
-// The lengths of the sections a video of `total` seconds is made of: full clips, then
+// The lengths of the clips a video of `total` seconds is made of: full clips, then
 // the remainder — topped up from the clip before it when too short to generate.
 // [] when one clip is enough.
-export function sectionLengths(total) {
+export function clipLengths(total) {
   const t = Math.round(Number(total) || 0);
-  if (t <= SECTION_MAX_SECONDS) return [];
-  const out = Array(Math.floor(t / SECTION_MAX_SECONDS)).fill(SECTION_MAX_SECONDS);
-  const rest = t % SECTION_MAX_SECONDS;
+  if (t <= CLIP_MAX_SECONDS) return [];
+  const out = Array(Math.floor(t / CLIP_MAX_SECONDS)).fill(CLIP_MAX_SECONDS);
+  const rest = t % CLIP_MAX_SECONDS;
   if (rest) {
-    const last = Math.max(rest, SECTION_MIN_SECONDS);
+    const last = Math.max(rest, CLIP_MIN_SECONDS);
     out[out.length - 1] -= last - rest;
     out.push(last);
   }
   return out;
+}
+
+// One clip's references: the images it listed in `pictures` plus any its text cites
+// as <Picture N>, in their original order — renumbered 1, 2, 3… through the text,
+// since a prompt's labels count from its own reference list. Every image when it
+// named none (or only ones that don't exist).
+export function clipImages(images, mm, pictures) {
+  const PIC = /<Picture\s+(\d+)>/gi;
+  const texts = [
+    mm.summary,
+    mm.style,
+    mm.soundscape,
+    mm.music,
+    ...(mm.shots || []).map((x) => x.text),
+    ...(mm.subjects || []).map((x) => x.definition),
+    ...Object.values(mm.retention || {}),
+  ];
+  const want = new Set(
+    (Array.isArray(pictures) ? pictures : [])
+      .map((x) => parseInt(String(x).replace(/\D+/g, ""), 10))
+      .filter((x) => x >= 1 && x <= images.length),
+  );
+  for (const t of texts)
+    for (const m of String(t || "").matchAll(PIC)) {
+      const x = Number(m[1]);
+      if (x >= 1 && x <= images.length) want.add(x);
+    }
+  if (!want.size || want.size === images.length) return { images, minimax: mm };
+  const keep = [...want].sort((a, b) => a - b);
+  const renumber = new Map(keep.map((x, i) => [x, i + 1]));
+  const fix = (t) =>
+    String(t ?? "").replace(PIC, (all, x) =>
+      renumber.has(Number(x)) ? `<Picture ${renumber.get(Number(x))}>` : all,
+    );
+  return {
+    images: keep.map((x) => images[x - 1]),
+    minimax: {
+      ...mm,
+      summary: fix(mm.summary),
+      style: fix(mm.style),
+      soundscape: fix(mm.soundscape),
+      music: fix(mm.music),
+      shots: (mm.shots || []).map((x) => ({ ...x, text: fix(x.text) })),
+      subjects: (mm.subjects || []).map((x) => ({ ...x, definition: fix(x.definition) })),
+      retention: Object.fromEntries(Object.entries(mm.retention || {}).map(([k, v]) => [k, fix(v)])),
+    },
+  };
 }
 
 // A reply without its <think> block.
@@ -1583,13 +1692,11 @@ export function parseReply(raw) {
   return { title: "", prompt: t.replace(/^\s*prompt\s*:\s*/i, "").trim() };
 }
 
-// A MiniMax build's reply → { title, minimax } in the stored shape (see app.js,
-// "Stored shape (p.minimax)"). Throws when there's no usable JSON, so the build
-// retries; a reply with only a "prompt" string becomes a single shot.
-// A shot whose "section" number differs from the one before starts a new section
-// (`brk`). `split`: shots that came without section numbers are packed into sections
-// of at most SECTION_MAX_SECONDS.
-export function parseStructuredReply(raw, format, { split = false } = {}) {
+// A MiniMax build's reply → { title, minimax, pictures?, videoTitle? } in the stored
+// shape (see app.js, "Stored shape (p.minimax)"). Throws when there's no usable JSON,
+// so the build retries; a reply with only a "prompt" string becomes a single shot.
+// `pictures` and `videoTitle` come from a clip of a longer build (see buildMessages).
+export function parseStructuredReply(raw, format) {
   let t = stripThinking(raw);
   const fence = /```(?:json)?\s*([\s\S]*?)```/i.exec(t);
   if (fence) t = fence[1].trim();
@@ -1627,7 +1734,6 @@ export function parseStructuredReply(raw, format, { split = false } = {}) {
     .map((x) => ({
       len: secs(x.seconds ?? x.len ?? x.length ?? x.duration),
       at: secs(x.at ?? x.time),
-      section: x.section ?? x.clip ?? null,
       text: str(x.text ?? x.description),
     }))
     .filter((x) => x.text);
@@ -1640,22 +1746,7 @@ export function parseStructuredReply(raw, format, { split = false } = {}) {
       const to = shots[i + 1]?.at;
       x.len = from == null || to == null ? null : Math.max(0, Math.round((to - from) * 1000) / 1000);
     });
-  shots.forEach((x, i) => {
-    const prev = shots[i - 1];
-    if (prev && x.section != null && prev.section != null && String(x.section) !== String(prev.section))
-      x.brk = true;
-  });
-  if (split && !shots.some((x) => x.brk)) {
-    let t = 0;
-    for (const x of shots) {
-      if (t > 0 && t + (x.len || 0) > SECTION_MAX_SECONDS) {
-        x.brk = true;
-        t = 0;
-      }
-      t += x.len || 0;
-    }
-  }
-  shots = shots.map(({ len, text, brk }) => ({ len, text, ...(brk ? { brk: true } : {}) }));
+  shots = shots.map(({ len, text }) => ({ len, text }));
   const mm = {
     summary: format === "minimax" ? str(j.summary) : "",
     style: str(j.style),
@@ -1676,10 +1767,15 @@ export function parseStructuredReply(raw, format, { split = false } = {}) {
       : [];
     for (const [k, v] of pairs) if (key(k) && str(v)) mm.retention[`<${key(k)}>`] = str(v);
   }
-  return {
+  const out = {
     title: str(j.title).replace(/^["']|["']$/g, "").slice(0, 120),
     minimax: mm,
   };
+  const pics = j.pictures ?? j.images ?? j.references;
+  if (Array.isArray(pics)) out.pictures = pics;
+  const vt = str(j.video_title ?? j.videoTitle ?? j.group_title);
+  if (vt) out.videoTitle = vt.replace(/^["']|["']$/g, "").slice(0, 120);
+  return out;
 }
 
 // Models often put real line breaks inside JSON strings, which JSON.parse rejects:

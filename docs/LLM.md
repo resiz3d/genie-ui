@@ -42,6 +42,15 @@ you type, so it's the same in every browser and on your phone. **↺ Recent buil
 refills it from any of the project's last 20 builds. A project with no rules yet
 starts from the rules you used most recently.
 
+**Longer than one clip.** With a MiniMax format and a **Duration** over 15 seconds,
+the build is written as a **prompt group**: one whole prompt per clip (15s clips, then
+the rest; a short remainder is topped up to 4s). Each clip is its own LLM request and
+gets its own subjects, summary, retention and shots, and the model is shown the clips
+written so far so it carries on where the last one ended. It also says which images
+each clip needs, and only those are attached to that prompt, renumbered as
+`<Picture 1>`, `<Picture 2>`… With several variations, each one becomes a group of its
+own, named after the title the model gives the whole video.
+
 Builds run on the server: you can close the tab or start one from your phone. The
 Saved Prompts tab shows builds in progress and picks up each prompt as it's saved.
 
@@ -57,7 +66,7 @@ revised version in the same format. You see it as a diff against the editor:
 - **Try again** asks for another take on the same request.
 - **Follow my Rules** also applies the Rules from the project's ✨ Build form.
 
-For MiniMax prompts, a section the model leaves empty keeps its current text, so a
+For MiniMax prompts, a field the model leaves empty keeps its current text, so a
 model that only returns the fields it changed can't blank the rest.
 
 ## Sharing the GPU with ComfyUI

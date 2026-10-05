@@ -2967,30 +2967,10 @@ textarea.wc-hl-on {
   gap: 0.15rem;
   margin-left: auto;
 }
-.pe-mm-section {
-  display: flex;
-  align-items: baseline;
-  flex-wrap: wrap;
-  gap: 0.45rem;
-  margin-top: 0.4rem;
-  padding-bottom: 0.2rem;
-  border-bottom: 1px solid var(--border);
-  font-size: 0.8rem;
-}
-.pe-mm-section:first-child {
-  margin-top: 0;
-}
-.pe-mm-section-name {
-  font-weight: 600;
-}
-.pe-mm-section .link-btn {
-  margin-left: auto;
-  font-size: 0.75rem;
-}
 .hint.pe-mm-over {
   color: #e0b060;
 }
-.sp-run-section {
+.sp-run-group {
   display: flex;
   flex-direction: row;
   align-items: center;
@@ -2999,7 +2979,7 @@ textarea.wc-hl-on {
   margin: 0;
   font-size: 0.8rem;
 }
-.sp-run-section select {
+.sp-run-group select {
   width: auto;
   max-width: 100%;
 }
@@ -3368,4 +3348,297 @@ textarea.wc-hl-on {
 .llm-rev-applied {
   margin: 0;
   font-size: 0.85rem;
+}
+
+/* 🎞 Frame picker */
+.modal-box.fp-box {
+  width: min(760px, 96vw);
+  max-height: 94vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.fp-stage {
+  position: relative;
+  background: #000;
+  border-radius: 8px;
+  overflow: hidden;
+  display: flex;
+  justify-content: center;
+}
+.fp-video {
+  display: block;
+  max-width: 100%;
+  max-height: 55vh;
+}
+.fp-picked-badge {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  background: var(--accent);
+  color: #fff;
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+}
+.fp-scrub {
+  width: 100%;
+  margin: 0;
+}
+.fp-ticks {
+  position: relative;
+  height: 6px;
+  margin: -0.4rem 8px 0;
+}
+.fp-ticks span {
+  position: absolute;
+  top: 0;
+  width: 2px;
+  height: 6px;
+  margin-left: -1px;
+  background: var(--accent);
+}
+.fp-readout {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.9rem;
+}
+.fp-fps-wrap {
+  display: inline-flex;
+  flex-direction: row;
+  margin: 0;
+  align-items: center;
+  gap: 0.3rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.fp-fps {
+  width: 5rem;
+}
+.fp-controls {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 0.35rem;
+}
+.fp-controls button {
+  min-height: 44px; /* thumb-sized on a phone */
+  padding: 0.3rem 0;
+  font-variant-numeric: tabular-nums;
+}
+.fp-pick {
+  width: 100%;
+  min-height: 44px;
+}
+.fp-pick.on {
+  background: transparent;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+}
+.fp-strip-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.85rem;
+}
+.fp-strip {
+  display: flex;
+  gap: 0.4rem;
+  overflow-x: auto;
+  padding-bottom: 0.25rem;
+}
+.fp-strip:empty {
+  display: none;
+}
+.fp-thumb {
+  position: relative;
+  flex: none;
+  border: 2px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  cursor: pointer;
+}
+.fp-thumb.cur {
+  border-color: var(--accent);
+}
+.fp-thumb.saved > span {
+  background: rgba(46, 160, 67, 0.9);
+}
+.fp-thumb img {
+  display: block;
+  height: 72px;
+}
+.fp-thumb > span {
+  position: absolute;
+  left: 0.2rem;
+  bottom: 0.2rem;
+  background: rgba(0, 0, 0, 0.7);
+  font-size: 0.7rem;
+  padding: 0 0.3rem;
+  border-radius: 4px;
+}
+.fp-x {
+  position: absolute;
+  top: 0.15rem;
+  right: 0.15rem;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.7);
+  color: #fff;
+  line-height: 1;
+  cursor: pointer;
+}
+@media (max-width: 520px) {
+  .modal-box.fp-box {
+    padding: 0.9rem;
+  }
+  .fp-video {
+    max-height: 45vh;
+  }
+  .fp-box .modal-actions {
+    flex-wrap: wrap;
+  }
+}
+
+/* Prompt groups: a header and the members' cards, numbered, in one framed block. */
+.sp-group {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--panel) 55%, var(--bg));
+  padding: 0.4rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.sp-group.run-active {
+  border-color: var(--accent);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.sp-group-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.5rem;
+  padding: 0.15rem 0.3rem;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.sp-group-head:focus-visible {
+  outline: 1px solid var(--accent);
+}
+.sp-group-name {
+  font-weight: 700;
+  flex: 1 1 calc(100% - 6rem); /* its own row beside ▶ ▾; count and tools wrap below */
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.sp-group-name::before {
+  content: "📚 ";
+}
+.sp-group-toggle {
+  width: 1.2rem;
+  padding: 0;
+  color: var(--muted);
+}
+.sp-group-tools {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-left: auto;
+  font-size: 0.8rem;
+}
+.sp-group-head > .sp-meta {
+  padding-left: 0.2rem;
+}
+.sp-group-tools .link-btn {
+  font-size: 0.8rem;
+}
+.sp-group .sp-move {
+  margin-left: 0;
+}
+.sp-group-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.sp-group.collapsed .sp-group-body {
+  display: none;
+}
+.sp-part {
+  display: inline-block;
+  min-width: 1.35rem;
+  margin-right: 0.4rem;
+  padding: 0 0.3rem;
+  border-radius: 999px;
+  background: var(--border);
+  color: var(--text);
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1.5;
+  text-align: center;
+}
+.sp-group.run-active .sp-part {
+  background: var(--accent);
+  color: #fff;
+}
+.sp-group-head .link-btn:hover:not(:disabled) {
+  background: none; /* not the generic button hover fill */
+}
+
+/* Phones and touch screens: the group header's controls as thumb-sized buttons. */
+@media (pointer: coarse), (max-width: 600px) {
+  .sp-group-head {
+    gap: 0.4rem;
+  }
+  .sp-group-tools {
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    margin-left: 0;
+    width: 100%;
+  }
+  .sp-group-tools .link-btn,
+  .sp-group-head .sp-move .link-btn,
+  .sp-group-toggle {
+    min-height: 40px;
+    min-width: 40px;
+    padding: 0.35rem 0.75rem;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: 0.9rem;
+    text-decoration: none;
+  }
+  .sp-group-tools .link-btn {
+    flex: 1 1 auto;
+  }
+  .sp-group-head .sp-group-delete {
+    min-height: 40px;
+    min-width: 40px;
+    padding: 0.35rem 0.75rem;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: 0.9rem;
+  }
+  .sp-group-head .sp-move {
+    display: inline-flex;
+    gap: 0.4rem;
+    margin-left: auto;
+  }
+  .sp-group-head .sp-use {
+    min-height: 36px;
+    padding: 0.35rem 0.75rem;
+  }
+}
+.sp-group-head .sp-group-delete {
+  color: var(--error);
+}
+.sp-group-head .sp-group-delete:hover:not(:disabled) {
+  color: var(--error);
+  border-color: var(--error);
 }

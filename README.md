@@ -111,7 +111,8 @@ submit a prompt + reference media, then polls until the result is ready.
 - **✨ Build with AI** — a local vision LLM (LM Studio, text-generation-webui,
   Ollama, or any OpenAI-compatible server) looks at gallery images and writes
   prompts from a short description and theme, saved straight to Saved Prompts with
-  the images as references. GENie loads the model only when ComfyUI is idle and
+  the images as references (a MiniMax video longer than 15s becomes a prompt group,
+  one prompt per clip). GENie loads the model only when ComfyUI is idle and
   VRAM allows (freeing ComfyUI's models if needed), and unloads it the moment a
   generation starts. See [`docs/LLM.md`](docs/LLM.md).
 

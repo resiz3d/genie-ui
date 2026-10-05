@@ -88,7 +88,7 @@
       <label>How many
         <input type="number" class="llm-count" min="1" max="20" step="1" value="3" />
       </label>
-      <label title="The whole video's length. Over 15 seconds, a MiniMax prompt is written as sections of up to 15 seconds, each generated as its own clip.">Duration (s)
+      <label title="The whole video's length. Over 15 seconds, a MiniMax build is written as a prompt group: one whole prompt per clip of up to 15 seconds, each with its own summary, subjects and images.">Duration (s)
         <input type="number" class="llm-dur" min="1" step="1" placeholder="—" />
       </label>
       <label>Title prefix
@@ -947,7 +947,7 @@
     return out.join("\n\n");
   }
   const editorText = () => (isStructured() ? mmText(editing.mm) : pePrompt.value);
-  // A MiniMax reply with a section left empty keeps the editor's text for it — models
+  // A MiniMax reply with a field left empty keeps the editor's text for it — models
   // sometimes drop fields they weren't asked to change, and that shouldn't blank them.
   function mergedMm(resMm) {
     const cur = editing?.mm || {};
@@ -958,9 +958,6 @@
       mm.retention = structuredClone(cur.retention);
     if (!(mm.subjects || []).length && (cur.subjects || []).length)
       mm.subjects = structuredClone(cur.subjects);
-    // A reply that dropped the section numbers: with the same number of shots, keep the breaks.
-    if (!mm.shots.some((x) => x.brk) && (cur.shots || []).length === mm.shots.length)
-      mm.shots.forEach((x, i) => cur.shots[i].brk && i > 0 && (x.brk = true));
     return mm;
   }
   const resultText = (res) => (res.minimax ? mmText(mergedMm(res.minimax)) : res.prompt || "");

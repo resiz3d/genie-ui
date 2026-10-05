@@ -12,6 +12,33 @@ heading for that version with the date, commit, then tag the commit `vX.Y.Z`.
 
 ### Added
 
+- **Prompt groups** replace shot sections. A group is a named sequence of whole saved
+  prompts, each generated as its own clip with its own summary, subjects, retention
+  and references. On the Saved Prompts tab a group is a collapsible block with
+  numbered prompts; **▶** on its header makes Generate render every prompt in it, in
+  order — one run and History card each, at that prompt's own length and with only
+  its own images (on both ComfyUI and kie.ai) — and **Render** picks just one of them.
+  The cost estimate adds up the group. **＋ Next** adds the next prompt as a copy of
+  the last one's subjects, references, style and sound with a blank summary and
+  shots; **✎ Rename** renames, **Ungroup** keeps the prompts but drops the group,
+  **🗑** deletes the group and its prompts (after a confirm listing them), **▲ ▼**
+  move the whole group. On phones these are full-size buttons. In the prompt editor, **📚** puts a prompt in a group, a new
+  one, or none; dragging a card among a group's cards adds it, dragging it out
+  removes it.
+- **Build with AI writes long videos as a group.** A MiniMax build over 15 seconds
+  is written clip by clip — each a complete prompt, shown the clips before it — and
+  saved as a group, each prompt carrying only the images the model said that clip
+  needs (renumbered from `<Picture 1>`). Each variation is its own group.
+
+- **🎞 Frames.** A frame picker beside **⇥ Last frame** on History and Gallery video
+  cards: step through the video one frame (or ten) at a time, scrub, or play and
+  pause; pick any number of frames (they show as ticks on the scrubber and in a strip
+  you can click to jump back to), then save them to the gallery as
+  `<name>-f0001.png`… or download them. Frame rate and count come from ffprobe
+  (new `/api/video/probe`), with an editable fallback. Keys: ←/→ (Shift for 10),
+  Home/End, Space, Enter or S to pick, Esc to close. Each upload retries on its
+  own if the connection drops, saved frames get a ✓, and Save only sends the frames
+  that aren't in the gallery yet, so a retry never duplicates.
 - **✨ Revise with AI**, in the saved-prompt editor. Say what to change ("make her
   lines teasing", "add a cut at 00:06 to a close-up", "slow the pacing") and the LLM
   rewrites the prompt as it stands in the editor, including unsaved edits, seeing
@@ -21,6 +48,15 @@ heading for that version with the date, commit, then tag the commit `vX.Y.Z`.
   **Try again** asks for another take. **Follow my Rules** adds the project's
   Build-with-AI rules. It runs through the same queue and GPU turn-taking as a
   build, and a MiniMax section the reply leaves empty keeps its current text.
+
+### Removed
+
+- **Shot sections**, added earlier in this release (✂ in the shot editor, section
+  headers, the Render-a-section picker). One prompt's shared summary and references
+  couldn't fit every clip. Existing sectioned prompts are split into a prompt group
+  the first time their project is loaded: one prompt per section, each a full copy
+  of the original with that section's shots and length; the first keeps the History
+  link.
 
 ### Changed
 
@@ -60,22 +96,12 @@ heading for that version with the date, commit, then tag the commit `vX.Y.Z`.
   saved duration now follows the shots. Existing prompts are converted from their
   cut times when opened, and Build / Revise with AI now asks the LLM for each
   shot's seconds.
-- **MiniMax shots can be grouped into sections, each generated as its own clip.**
-  **✂** on a shot starts a new section there; a section's header shows its length,
-  with a warning past 15s (it is still allowed), and **Merge with section above**
-  removes the break. ▲ ▼ and dragging carry a shot across a break. Each section
-  compiles to a prompt of its own, with shot numbers and times starting over. When
-  a sectioned prompt is **▶ Active**, a **Render** picker by the cards chooses one
-  section or **All sections**: All makes a run and History card per section, in
-  order. A section's length sets that run's duration, rounded up and kept within
-  the model's limits; a section whose last shot is left empty fills a full 15s.
-  The cost estimate beside Generate adds up the sections that will run.
 - **The kie.ai form remembers each model's settings.** Resolution, aspect ratio,
   duration, quality and output format are kept per model on the server
   (`settings/app.json`), so a page reload, or switching to a local workflow or
   another model and back, no longer resets them to the defaults — and the phone and
-  every other browser see the same choices. A sectioned prompt's **Render** pick is
-  kept there too. An open tab picks up changes made elsewhere when it is looked at
+  every other browser see the same choices. An active prompt group's **Render** pick
+  is kept there too. An open tab picks up changes made elsewhere when it is looked at
   again.
 - **Every remembered choice is now shared across browsers.** The active project,
   last-used model, open prompt tab, each project's ▶ Active saved prompt, hidden
