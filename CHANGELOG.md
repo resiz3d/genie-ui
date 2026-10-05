@@ -10,6 +10,8 @@ heading for that version with the date, commit, then tag the commit `vX.Y.Z`.
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-10-05
+
 ### Added
 
 - **Prompt groups** replace shot sections. A group is a named sequence of whole saved
@@ -471,5 +473,9 @@ second path.
 - A failed run's long error message (e.g. kie.ai's "Timeout while downloading url=…")
   took over its History card and crushed the buttons beside it.
 
-[Unreleased]: https://github.com/resiz3d/genie-ui/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/resiz3d/genie-ui/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/resiz3d/genie-ui/compare/v1.2.0...v1.3.0
+[1.2.0]: https://github.com/resiz3d/genie-ui/compare/v1.1.0...v1.2.0
+[1.1.0]: https://github.com/resiz3d/genie-ui/compare/v1.0.1...v1.1.0
+[1.0.1]: https://github.com/resiz3d/genie-ui/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/resiz3d/genie-ui/releases/tag/v1.0.0
