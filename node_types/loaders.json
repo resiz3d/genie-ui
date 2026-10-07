@@ -1,5 +1,5 @@
 {
-  "_comment": "Model-file loaders. Each becomes its own collapsed section so the (long) installed-file dropdowns stay out of the way until wanted. The file pickers (unet_name / clip_name / vae_name) and the small enums (weight_dtype / type / device) all populate from ComfyUI /object_info.",
+  "_comment": "Model-file loaders. Each becomes its own collapsed section so the (long) installed-file dropdowns stay out of the way until wanted. The file pickers (unet_name / clip_name / vae_name) and the small enums (weight_dtype / type / device) all populate from ComfyUI /object_info. A CLIPLoader feeding a Generate Text node is the LLM behind a prompt enhancer rather than the text encoder, so it gets its own section and control names.",
   "nodes": {
     "UNETLoader": {
       "display_name": "Load Diffusion Model",
@@ -21,6 +21,16 @@
       "display_name": "Load CLIP",
       "recognize": {
         "variants": [
+          {
+            "match": [{ "when": "produces", "target": "TextGenerate.clip" }],
+            "group": "Prompt Enhancer Model (LLM)",
+            "collapsed": true,
+            "expose": {
+              "clip_name": { "name": "enhancer_clip_name",   "label": "Text model", "control": "combo", "width": "full", "order": 45 },
+              "type":      { "name": "enhancer_clip_type",   "label": "Type",       "control": "combo", "width": "1/2",  "order": 46 },
+              "device":    { "name": "enhancer_clip_device", "label": "Device",     "control": "combo", "width": "1/2",  "order": 47 }
+            }
+          },
           {
             "match": [{ "when": "any" }],
             "group": "CLIP",

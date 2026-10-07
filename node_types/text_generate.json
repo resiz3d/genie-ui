@@ -1,0 +1,23 @@
+{
+  "_comment": "Generate Text runs an LLM (loaded through a CLIPLoader) over a prompt — in the Qwen Image 2.1 edit workflow it is the prompt enhancer. Its output derives from its `prompt` input, so `value_through` lets a prompt control traced back through it write the text the LLM is given. The system prompt (followed to its Primitive node), the token limit and the thinking switch are exposed in a collapsed section; sampling settings stay as exported. `max_length` matters: it counts thinking too, and an LLM that reaches it before answering returns an empty string — which the encoder then gets as the prompt. Whether it runs at all is the If/Else Switch after it (node_types/logic.json).",
+  "nodes": {
+    "TextGenerate": {
+      "display_name": "Generate Text",
+      "value_through": { "inputs": ["prompt"] },
+      "recognize": {
+        "variants": [
+          {
+            "match": [{ "when": "any" }],
+            "group": "Prompt Enhancer — LLM Settings",
+            "collapsed": true,
+            "expose": {
+              "max_length":    { "name": "enhancer_max_length", "label": "Max length (tokens, thinking included)", "control": "number", "width": "1/2", "order": 4.05 },
+              "thinking":      { "name": "enhancer_thinking",   "label": "Thinking", "control": "toggle", "width": "1/2", "order": 4.06 },
+              "system_prompt": { "name": "enhancer_system_prompt", "label": "System prompt", "control": "text", "multiline": true, "width": "full", "order": 4.1 }
+            }
+          }
+        ]
+      }
+    }
+  }
+}

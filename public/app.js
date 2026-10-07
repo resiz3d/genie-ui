@@ -2453,10 +2453,15 @@ function comfyRefTags() {
   const fieldsOfKind = (kind) =>
     comfyFields.filter((f) => f.mediaKind === kind && f.filledMedia);
 
+  // Qwen Image numbers its pictures <image1>, <image2>, …; it takes nothing else.
+  const pictureTag =
+    comfyRefLabelScheme === "qwen_image" ?
+      (n) => `<image${n}>`
+    : (n) => `<Picture ${n}>`;
   for (const f of fieldsOfKind("image")) {
     perField.set(
       f,
-      f.filledMedia().map(() => `<Picture ${++counts.picture}>`),
+      f.filledMedia().map(() => pictureTag(++counts.picture)),
     );
   }
   for (const f of fieldsOfKind("video")) {
@@ -2480,7 +2485,7 @@ function comfyRefTags() {
 // it must not itself trigger a re-render.
 function refreshComfyRefTags() {
   syncComfyDefaultNotes(); // what the run falls back to depends on what's filled
-  if (comfyRefLabelScheme !== "minimax_h3") return;
+  if (!comfyRefLabelScheme) return;
   for (const [f, tags] of comfyRefTags()) {
     const labels = f.el.querySelectorAll(".dropzone .thumb.ready .img-label");
     tags.forEach((t, i) => {
@@ -9750,7 +9755,28 @@ function buildHistDetails(entry, input, comfyEntry, isImg) {
   const fp = document.createElement("div");
   fp.className = "hist-fullprompt";
   fp.textContent = input.prompt || "(no prompt)";
-  dbody.appendChild(fp);
+  // A workflow's prompt enhancer rewrote the text before encoding it: show what was
+  // typed and what the model was given, each under its own label.
+  const promptBlock = (text, el) => {
+    const lbl = document.createElement("div");
+    lbl.className = "hist-refs-label";
+    lbl.textContent = text;
+    dbody.append(lbl, el);
+  };
+  if (typeof entry.enhancedPrompt === "string") {
+    promptBlock("Prompt", fp);
+    const ep = document.createElement("div");
+    ep.className = "hist-fullprompt";
+    // Blank: the enhancer ran out of tokens before answering, and its (empty) answer
+    // is what was encoded — the picture was made without your prompt.
+    ep.textContent =
+      entry.enhancedPrompt ||
+      "⚠ The prompt enhancer returned nothing, so this image was generated from a blank prompt. " +
+        "The LLM most likely used its whole token limit before answering — raise Max length " +
+        "under Prompt Enhancer — LLM Settings, or switch the enhancer off.";
+    if (!entry.enhancedPrompt) ep.classList.add("comfy-missing");
+    promptBlock("Enhanced prompt — what the model was given", ep);
+  } else dbody.appendChild(fp);
   details.appendChild(dbody);
   return details;
 }

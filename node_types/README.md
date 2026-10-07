@@ -37,6 +37,8 @@ user drop-in can override a shipped entry — the same shipped-vs-yours idea as
 | `display_name` | Human label (reference/UI only). |
 | `output` | `true` marks a terminal/sink node (SaveImage, VideoCombine). The `feeds_output` predicate walks toward these. |
 | `value_source` | `{ "input": "value" }` — marks a passthrough value provider (a Primitive\*). When another node's exposed input is *wired from* this node, recognition follows the link here to the real editable value. |
+| `value_through` | `{ "inputs": ["on_false", "on_true"] }` — marks a node a value merely passes through (an If/Else Switch, a Preview as Text, a Generate Text rewriting its `prompt`). Recognition follows **every** listed input, so one control can write several places: a subgraph's prompt is exported as the same literal on both branches of a switch, and the one Prompt box fills both. See `logic.json`. |
+| `reports_text` | `true` marks a node whose output is the text that went through it (Preview as Text). When the `prompt` control reaches its encoder through one, GENie reads that text back from the finished run and stores it on the History entry as the **enhanced prompt** whenever it differs from what was typed. |
 | `bypassable` | `true` gives every instance an **enable/disable** checkbox at the top of its section; unchecked, the node is removed at generate time and its `model` link reconnected. For optional MODEL-in/MODEL-out patches (Sage Attention, attention backends, sparse attention, Spectrum — see `attention.json`). The same as a workflow's `_meta.bypassable`, without editing the export. |
 | `bypassed_by_default` | `true` with `bypassable` starts the checkbox **off**. Saved settings win once the workflow has run. |
 | `progress_passes` | `{ "passes": 2, "when": [{ "input": "…", "equals": true, "default": true }] }` — the node makes the sampler go over its steps `passes` times and reports them as one combined progress count (Spectrum's capture + replay reports `2 × steps`). When every `when` condition holds on the node's input (a wired or absent input counts as `default`), a run's card shows **pass 1 of 2 · step N/steps**, with the bar and time left for the current pass. See `spectrum_minimax_h3.json`. |
@@ -112,7 +114,8 @@ Add a `references` array to a variant (alongside or instead of `expose`):
     "max": 9,                     // cap (1 = a single-media input)
     "order": 3,
     "loader": { "class_type": "LoadImage", "input": "image" },  // node to inject per file
-    "wires": [ { "prefix": "ref_images.ref_image_", "slot": 0 } ] // target input(s): prefix+index = [loaderId, slot]
+    "wires": [ { "prefix": "ref_images.ref_image_", "slot": 0 } ], // target input(s): prefix+index = [loaderId, slot]
+    "mirrors": [ { "class_type": "BatchImagesNode", "prefix": "images.image", "slot": 0 } ] // optional, below
   }
 ]
 ```
@@ -123,6 +126,15 @@ Add a `references` array to a variant (alongside or instead of `expose`):
 - **`wires`** are the target node's dotted dynamic inputs. Each file `i` sets
   `<prefix><i> = [loaderId, slot]` for every wire — so one loader can feed several
   inputs (a video feeding both `ref_video_N` and `ref_video_audio_N`).
+- A wire's optional **`start`** is the index of its first slot (default `0`). Qwen
+  Image 2.1's encoder numbers its pictures from 1 (`images.image_1`), so its wire is
+  `{ "prefix": "images.image_", "slot": 0, "start": 1 }`.
+- **`mirrors`** name other nodes that must receive the same files — e.g. the Batch
+  Images node that hands a prompt enhancer the pictures the encoder also gets. Each is
+  `{ class_type, prefix, slot, start }`, resolved to the node of that class already
+  sharing one of the collection's loaders (or the only one in the graph) and wired
+  exactly like the target. A mirror left with no files is removed from the run, along
+  with the links into it.
 - A single-media input is just `max: 1`.
 
 ## Match predicates (the closed set)
@@ -134,6 +146,7 @@ Add a `references` array to a variant (alongside or instead of `expose`):
 | `feeds_output` | a path runs forward from this node to any `output: true` node. |
 | `produces` + `target: "Class.input"` | this node is the **direct** upstream producer of that input on some node of that class (e.g. `KSampler.positive`). Direct, not transitive — so a node reaching the sampler only through a `ConditioningZeroOut` does **not** match. |
 | `produces_input` + `input: "name"` | like `produces` but matches an input of that name on **any** node class (e.g. `audio_vae` to tell an audio VAE loader from an image one). |
+| `consumes` + `source: "Class"` (+ `input: "name"`) | this node's own input — the named one, or any — is wired **from** a node of that class (e.g. the If/Else Switch whose `on_true` comes from a `TextGenerate` is the prompt-enhancer switch). |
 | `title_matches` + `pattern` | the node's `_meta.title` matches the (case-insensitive) regex. |
 
 Recognition is the sole source of form controls. (GENie's older `{{token}}` authoring

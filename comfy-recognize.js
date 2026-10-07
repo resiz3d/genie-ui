@@ -116,26 +116,35 @@ function literalType(v) {
   return "string";
 }
 
-// Follow an exposed input to the node that actually holds its editable value.
-// A literal is editable in place. A link is followed to its source; if that
-// source is a declared value-provider (a Primitive*), we recurse into the
-// provider's own value input. A link into a non-provider is graph-driven and has
-// no single editable value — we return null and the input isn't exposed.
-function traceEditable(workflow, nodeTypes, nodeId, inputKey, seen = new Set()) {
+// Follow an exposed input to the node(s) that actually hold its editable value.
+// A literal is editable in place. A link is followed to its source: a declared
+// value-provider (a Primitive*) is followed into its own value input, and a node
+// declaring `value_through` (a switch, a text preview, an LLM rewriting its prompt)
+// is followed into each input it names — so one control can end in several places.
+// A subgraph's prompt, say, is exported as the same literal on both branches of an
+// If/Else switch, and both have to be written. A link into anything else is
+// graph-driven and contributes nothing. Returns the editable leaves (possibly none);
+// `via` collects the ids of the nodes passed through on the way.
+function traceEditable(workflow, nodeTypes, nodeId, inputKey, seen = new Set(), via = []) {
   const node = workflow[nodeId];
-  if (!node) return null;
+  if (!node) return [];
   const v = node.inputs?.[inputKey];
   const link = asLink(v);
   if (!link) {
-    return { id: String(nodeId), input: inputKey, value: v, type: literalType(v) };
+    if (v === undefined && seen.size) return []; // followed here, but the input isn't set
+    return [{ id: String(nodeId), input: inputKey, value: v, type: literalType(v) }];
   }
   const srcId = String(link[0]);
-  if (seen.has(srcId)) return null; // cycle guard
+  if (seen.has(srcId)) return []; // cycle guard
   seen.add(srcId);
-  const srcNode = workflow[srcId];
-  const provider = srcNode && nodeTypes.get(srcNode.class_type)?.value_source;
-  if (!provider?.input) return null; // link into something we can't edit
-  return traceEditable(workflow, nodeTypes, srcId, provider.input, seen);
+  const srcEntry = workflow[srcId] && nodeTypes.get(workflow[srcId].class_type);
+  const inputs =
+    srcEntry?.value_source?.input ? [srcEntry.value_source.input]
+    : Array.isArray(srcEntry?.value_through?.inputs) ? srcEntry.value_through.inputs
+    : null;
+  if (!inputs) return []; // link into something we can't edit
+  via.push(srcId);
+  return inputs.flatMap((k) => traceEditable(workflow, nodeTypes, srcId, k, seen, via));
 }
 
 // --- Match predicates (closed set) ------------------------------------------
@@ -159,6 +168,15 @@ function nodeMatches(pred, ctx) {
       return producesTarget(workflow, nodeId, pred.target);
     case "produces_input":
       return producesInput(workflow, nodeId, pred.input);
+    case "consumes": {
+      // This node's own input (a named one, or any) is wired from a node of that class.
+      const inputs = workflow[nodeId]?.inputs || {};
+      const keys = pred.input ? [pred.input] : Object.keys(inputs);
+      return keys.some((k) => {
+        const link = asLink(inputs[k]);
+        return !!link && workflow[link[0]]?.class_type === pred.source;
+      });
+    }
     case "title_matches": {
       const title = workflow[nodeId]?._meta?.title;
       if (typeof title !== "string" || !pred.pattern) return false;
@@ -236,10 +254,10 @@ function variantsOf(entry) {
 // describes it, for combo/number enrichment) and `targets` (where the value is
 // written at submit). Names are made unique with numeric suffixes.
 //
-// Returns { controls, references, handledNodeIds, bypassable }. Pure and offline: no
+// Returns { controls, references, handledNodeIds, bypassable, promptEcho }. Pure and offline: no
 // ComfyUI needed.
 export function recognizeWorkflow(workflow, nodeTypes) {
-  if (!workflow || typeof workflow !== "object") return { controls: [], references: [], handledNodeIds: new Set(), bypassable: [] };
+  if (!workflow || typeof workflow !== "object") return { controls: [], references: [], handledNodeIds: new Set(), bypassable: [], promptEcho: null };
   const fwd = forwardIndex(workflow);
   const controls = [];
   // Node ids GENie surfaced a control for (or traced a value out of). Everything
@@ -268,9 +286,29 @@ export function recognizeWorkflow(workflow, nodeTypes) {
     const variant = variantsOf(entry).find((v) => (v.match || [{ when: "any" }]).some((p) => nodeMatches(p, ctx)));
     if (!variant?.references) continue;
     for (const rc of variant.references) {
+      const loaders = new Set(); // the export's own loaders wired into this collection
       for (const w of rc.wires || []) {
         for (const [k, v] of Object.entries(node.inputs || {})) {
-          if (k.startsWith(w.prefix) && asLink(v)) consumed.add(String(v[0]));
+          if (k.startsWith(w.prefix) && asLink(v)) loaders.add(String(v[0]));
+        }
+      }
+      for (const id of loaders) consumed.add(id);
+      // `mirrors`: other nodes that take the same files (a Batch Images feeding an LLM
+      // the pictures the encoder also gets). Each resolves to the node of that class
+      // already sharing one of this collection's loaders — or the only one there is —
+      // and becomes one more wire, addressed to that node instead of the target.
+      const wires = (rc.wires || []).map((w) => ({ ...w }));
+      for (const m of rc.mirrors || []) {
+        const ofClass = ids.filter((id) => workflow[id]?.class_type === m.class_type);
+        const sharing = ofClass.filter((id) =>
+          Object.entries(workflow[id].inputs || {}).some(
+            ([k, v]) => k.startsWith(m.prefix) && asLink(v) && loaders.has(String(v[0])),
+          ),
+        );
+        const found = sharing.length ? sharing : ofClass.length === 1 ? ofClass : [];
+        for (const id of found) {
+          wires.push({ prefix: m.prefix, slot: m.slot || 0, start: m.start, nodeId: String(id), mirror: true });
+          handledNodeIds.add(String(id));
         }
       }
       references.push({
@@ -282,7 +320,7 @@ export function recognizeWorkflow(workflow, nodeTypes) {
         width: rc.width || "full",
         targetNodeId: String(nodeId),
         loader: rc.loader,
-        wires: rc.wires || [],
+        wires,
       });
       handledNodeIds.add(String(nodeId));
     }
@@ -310,10 +348,15 @@ export function recognizeWorkflow(workflow, nodeTypes) {
     };
 
     for (const [inputKey, spec] of Object.entries(variant.expose)) {
-      const traced = traceEditable(workflow, nodeTypes, nodeId, inputKey);
-      if (!traced) continue; // graph-driven, nothing editable — skip silently
+      const via = [];
+      const leaves = traceEditable(workflow, nodeTypes, nodeId, inputKey, new Set(), via);
+      if (!leaves.length) continue; // graph-driven, nothing editable — skip silently
       handledNodeIds.add(String(nodeId)); // exposed a control on this node
-      handledNodeIds.add(traced.id); // …and surfaced this node's value (may be a provider)
+      // …and surfaced these nodes' values (a provider, or what the value passed through)
+      for (const id of via) handledNodeIds.add(id);
+      for (const leaf of leaves) handledNodeIds.add(leaf.id);
+      // Several leaves hold copies of one value; show the first that has something.
+      const traced = leaves.find((l) => l.value != null && l.value !== "") || leaves[0];
       const base = spec.name || inputKey;
       // De-dupe: first use keeps the bare name; a second node wanting it gets _2.
       const count = usedNames.get(base) || 0;
@@ -336,7 +379,8 @@ export function recognizeWorkflow(workflow, nodeTypes) {
         // combo/number metadata.
         owner: { id: String(nodeId), classType: node.class_type, input: inputKey },
         // Where the value is written at submit — the traced editable location.
-        targets: [{ id: traced.id, input: traced.input, type: traced.type }],
+        targets: leaves.map((l) => ({ id: l.id, input: l.input, type: l.type })),
+        via, // the nodes the value passes through on its way to this input
       });
     }
   }
@@ -391,7 +435,14 @@ export function recognizeWorkflow(workflow, nodeTypes) {
     handledNodeIds.add(String(nodeId));
   }
 
-  return { controls, references, handledNodeIds, bypassable };
+  // The node that reports the prompt as it was actually used. When the prompt reaches
+  // its encoder through a text preview (`reports_text`), that preview's output is the
+  // final text — after an LLM enhancer rewrote it, when one is switched on.
+  const promptCtrl = controls.find((c) => c.name === "prompt");
+  const promptEcho =
+    (promptCtrl?.via || []).find((id) => nodeTypes.get(workflow[id]?.class_type)?.reports_text) || null;
+
+  return { controls, references, handledNodeIds, bypassable, promptEcho };
 }
 
 // How many sampler passes one run reports as a single progress bar. Some nodes run
@@ -452,21 +503,43 @@ function isReferencedBy(workflow, id) {
 // [Errno 13] Permission denied: …/input"), so it's unwired and pruned and the run
 // simply goes without that reference. Slots with a real filename are left alone.
 function dropEmptyReferenceSlots(workflow, ref) {
-  const target = workflow[ref.targetNodeId];
-  if (!target?.inputs) return;
   const loaders = new Set();
   for (const w of ref.wires || []) {
-    for (const k of Object.keys(target.inputs)) {
+    const inputs = wireNode(workflow, ref, w)?.inputs;
+    if (!inputs) continue;
+    for (const k of Object.keys(inputs)) {
       if (!k.startsWith(w.prefix)) continue;
-      const link = asLink(target.inputs[k]);
+      const link = asLink(inputs[k]);
       const file = link && workflow[link[0]]?.inputs?.[ref.loader.input];
       if (typeof file === "string" && !file.trim()) {
         loaders.add(String(link[0]));
-        delete target.inputs[k];
+        delete inputs[k];
       }
     }
   }
   for (const id of loaders) if (!isReferencedBy(workflow, id)) delete workflow[id];
+  dropEmptyMirrors(workflow, ref);
+}
+
+// The node a wire writes to: the collection's target, or the mirror node it names.
+function wireNode(workflow, ref, w) {
+  return workflow[w.nodeId || ref.targetNodeId];
+}
+
+// A mirror node left with no files (a Batch Images with nothing to batch) can't run,
+// so it goes too, along with the links into it — what it fed runs without the media.
+function dropEmptyMirrors(workflow, ref) {
+  for (const w of ref.wires || []) {
+    if (!w.mirror) continue;
+    const node = workflow[w.nodeId];
+    if (!node || Object.keys(node.inputs || {}).some((k) => k.startsWith(w.prefix))) continue;
+    for (const n of Object.values(workflow)) {
+      for (const [k, v] of Object.entries(n.inputs || {})) {
+        if (asLink(v) && String(v[0]) === String(w.nodeId)) delete n.inputs[k];
+      }
+    }
+    delete workflow[w.nodeId];
+  }
 }
 
 export function applyReferenceCollections(workflow, references, provided) {
@@ -478,26 +551,31 @@ export function applyReferenceCollections(workflow, references, provided) {
       dropEmptyReferenceSlots(workflow, ref); // keep baked files, drop blank slots
       continue;
     }
-    const target = workflow[ref.targetNodeId];
-    if (!target?.inputs) continue;
+    if (!workflow[ref.targetNodeId]?.inputs) continue;
     // Clear the collection's current wiring, remembering the loaders it pointed to.
     const oldLoaders = new Set();
     for (const w of ref.wires || []) {
-      for (const k of Object.keys(target.inputs)) {
+      const inputs = wireNode(workflow, ref, w)?.inputs;
+      if (!inputs) continue;
+      for (const k of Object.keys(inputs)) {
         if (!k.startsWith(w.prefix)) continue;
-        const link = asLink(target.inputs[k]);
+        const link = asLink(inputs[k]);
         if (link) oldLoaders.add(String(link[0]));
-        delete target.inputs[k];
+        delete inputs[k];
       }
     }
-    // One loader node per file, wired into slot i of every wire of this collection.
+    // One loader node per file, wired into slot i of every wire of this collection
+    // (counting from the wire's `start` — some nodes number their slots from 1).
     files.slice(0, ref.max).forEach((filename, i) => {
       const loaderId = String(nextId++);
       workflow[loaderId] = {
         inputs: { [ref.loader.input]: filename, ...(ref.loader.defaults || {}) },
         class_type: ref.loader.class_type,
       };
-      for (const w of ref.wires || []) target.inputs[`${w.prefix}${i}`] = [loaderId, w.slot];
+      for (const w of ref.wires || []) {
+        const inputs = wireNode(workflow, ref, w)?.inputs;
+        if (inputs) inputs[`${w.prefix}${i + (w.start || 0)}`] = [loaderId, w.slot];
+      }
     });
     // Prune the export's original loaders if nothing references them any more.
     for (const id of oldLoaders) if (!isReferencedBy(workflow, id)) delete workflow[id];

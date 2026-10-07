@@ -201,6 +201,40 @@ workflows keep each field's own numbering.
 > `{{token}}` layer and is **not currently active** on the recognition path. Re-adding
 > it as a property of a recognized reference collection is tracked as follow-up work.
 
+Qwen Image 2.1 numbers its pictures `<image1>`, `<image2>`, … in the order they're
+loaded (`refLabelScheme: "qwen_image"`), and the thumbnails show those tags the same way.
+
+## Subgraphs
+
+A subgraph needs nothing special. **Export (API)** flattens it: the nodes inside come
+out as ordinary nodes with ids like `459:474` (subgraph node `459`, inner node `474`),
+and each widget the subgraph exposes is written as a literal onto every inner input it
+feeds. GENie recognizes those inner nodes like any others — model loaders included, so
+the files can be re-pointed at your own — and where one exposed value landed in several
+places (a prompt fed to both branches of a switch), the single control writes them all.
+
+## Prompt enhancers
+
+Some workflows run the prompt through an LLM before encoding it — the Qwen Image 2.1
+edit workflow does, with a **Generate Text** node behind an **If/Else Switch**. GENie
+shows that switch as a **Prompt Enhancer** checkbox, the LLM's file under **Prompt
+Enhancer Model (LLM)**, and its token limit, thinking switch and system prompt in a
+collapsed **Prompt Enhancer — LLM Settings** section.
+
+With the enhancer on, the run's History card keeps both texts: open **Settings & full
+prompt** to see the **Prompt** you typed and the **Enhanced prompt** the model was
+given (project exports include both too). Re-import, Re-run and the ⧉ Prompt button
+use the prompt you typed. The rewritten text is read from the **Preview as Text** node
+the prompt passes through, so a workflow of your own gets the same treatment as long as
+its enhancer's output goes through one on the way to the encoder.
+
+**If the enhanced prompt comes back blank**, the LLM hit **Max length** before it
+finished: the limit counts its thinking too, and a busy image (a character sheet full
+of text, say) can use all of it. Generate Text then returns an empty string, and the
+workflow encodes that — the picture is made from a blank prompt, with no error. The
+History card says so in place of the enhanced prompt. Raise **Max length** (the node
+allows up to 32768), or switch the enhancer off for that run.
+
 ## Continuations — carry state between runs
 
 Some workflows carry state from one run to the next — a sampler that writes something

@@ -10,6 +10,26 @@ heading for that version with the date, commit, then tag the commit `vX.Y.Z`.
 
 ## [Unreleased]
 
+### Added
+
+- **Qwen Image 2.1 Image Edit** ships as a default workflow. Load one or more images
+  (up to 16) — each thumbnail shows the `<image1>`, `<image2>` tag to use in the
+  prompt — with LoRAs, a custom output size, and pickers for the diffusion model, CLIP,
+  VAE and the enhancer's LLM.
+- **Prompt enhancers.** A workflow that rewrites the prompt with an LLM gets a
+  **Prompt Enhancer** checkbox, and its History card keeps both the prompt you typed
+  and the **enhanced prompt** the model was given (under *Settings & full prompt*, and
+  in project exports). When the LLM returns nothing — it ran out of tokens while
+  thinking, so the image was made from a blank prompt — the card says so; the
+  enhancer's **Max length** and **Thinking** are in the form to fix it.
+- **Subgraph exports are recognized.** The inner nodes of a subgraph (`459:474`-style
+  ids) build the form like any others, and a value the subgraph fed to several inner
+  inputs is one control that writes them all.
+- Node recognition: `value_through` (follow a value through switches, text previews
+  and Generate Text), `reports_text`, the `consumes` match predicate, and reference
+  collections that count slots from 1 (`start`) or feed a second node (`mirrors`).
+  Save Image (Advanced) exposes its filename prefix. See `node_types/README.md`.
+
 ## [1.3.0] - 2026-10-05
 
 ### Added

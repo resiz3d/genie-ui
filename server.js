@@ -1752,10 +1752,11 @@ function videoHasSoundtrack(workflow, nodeId) {
 // Which label scheme the client should apply, or null to leave its own numbering
 // alone. Node-specific by nature, so it's named rather than assumed.
 function refLabelScheme(workflow) {
-  const has = Object.values(workflow || {}).some(
-    (n) => n?.class_type === "MiniMaxH3ReferenceToVideo",
-  );
-  return has ? "minimax_h3" : null;
+  const has = (cls) =>
+    Object.values(workflow || {}).some((n) => n?.class_type === cls);
+  if (has("MiniMaxH3ReferenceToVideo")) return "minimax_h3";
+  if (has("TextEncodeQwenImage21")) return "qwen_image"; // <image1>, <image2>, …
+  return null;
 }
 
 // Frame count / fps of a local video, for turning seconds-of-tail into an exact
@@ -2190,6 +2191,7 @@ app.post("/api/comfy/generate", async (req, res) => {
   let continuation = null; // null unless this workflow declares the continuation tokens
   let continuationValues = null; // just the role tokens GENie filled, for the record
   let runValues = values || {};
+  let promptEcho = null; // the node that reports the prompt as used (see comfyEnhancedPrompt)
   try {
     const wfText = fs.readFileSync(wfPath, "utf8");
     workflow = JSON.parse(wfText);
@@ -2202,8 +2204,11 @@ app.post("/api/comfy/generate", async (req, res) => {
     let recognizedControls = [];
     let recognizedRefs = [];
     try {
-      ({ controls: recognizedControls, references: recognizedRefs } =
-        recognizeWorkflow(workflow, loadNodeTypes(NODE_TYPES_DIR)));
+      ({
+        controls: recognizedControls,
+        references: recognizedRefs,
+        promptEcho,
+      } = recognizeWorkflow(workflow, loadNodeTypes(NODE_TYPES_DIR)));
     } catch (err) {
       console.error("Node recognition failed:", err.message);
     }
@@ -2315,6 +2320,7 @@ app.post("/api/comfy/generate", async (req, res) => {
         status: "pending",
       });
       if (passes > 1) entry.progressPasses = passes; // so a server restart mid-run still knows
+      if (promptEcho && workflow[promptEcho]) entry.promptEchoNode = promptEcho;
       const entries = readJson(HISTORY_FILE);
       entries.unshift(entry);
       writeJson(HISTORY_FILE, entries);
@@ -2358,6 +2364,21 @@ function collectComfyOutputs(entry) {
     }
   }
   return moving.concat(stills);
+}
+
+// The prompt as the run actually used it, when that differs from what was typed — a
+// workflow with a prompt enhancer has an LLM rewrite the text first. The pending entry
+// names the text-preview node the prompt passes through (`promptEchoNode`, from
+// recognition); ComfyUI's history carries that node's text. null when the workflow has
+// no such node, the enhancer was off (the text is the prompt itself), or it's missing.
+// An empty string is a real answer and is kept: the enhancer ran and returned nothing
+// (an LLM that spent its whole token limit thinking), so the model got a blank prompt.
+function comfyEnhancedPrompt(h, entry) {
+  const text = entry?.promptEchoNode && h?.outputs?.[entry.promptEchoNode]?.text;
+  if (text === undefined || text === null || text === false) return null;
+  const out = (Array.isArray(text) ? text.join("\n") : String(text)).trim();
+  const raw = String(entry?.input?.prompt || "").trim();
+  return out === raw ? null : out;
 }
 
 // Actual execution time for a finished prompt, from ComfyUI's own timestamps in
@@ -2531,7 +2552,7 @@ let comfyWatchBusy = false;
 // history so it no-ops if the browser already finished the same entry.
 async function finalizePendingComfy(
   id,
-  { resultUrls, resultUrl, fail, runtimeMs },
+  { resultUrls, resultUrl, fail, runtimeMs, enhancedPrompt },
 ) {
   const entries = readJson(HISTORY_FILE);
   const entry = entries.find((e) => e.id === id);
@@ -2543,6 +2564,7 @@ async function finalizePendingComfy(
   if (urls.length) {
     await attachOutputs(entry, urls); // downloads every output (a batch can be several)
     entry.status = "done";
+    if (typeof enhancedPrompt === "string") entry.enhancedPrompt = enhancedPrompt;
     // Prefer ComfyUI's own per-prompt execution time; fall back to since-created only
     // when it's unavailable (older ComfyUI / missing timestamps).
     entry.runtimeMs =
@@ -2595,6 +2617,7 @@ async function sweepPendingComfy() {
             await finalizePendingComfy(entry.id, {
               resultUrls: urls,
               runtimeMs: comfyExecRuntime(h),
+              enhancedPrompt: comfyEnhancedPrompt(h, entry),
             });
           // in history but no outputs yet → still running; leave pending
         }
@@ -3046,7 +3069,11 @@ function buildExportHtml(view, meta) {
         .join("");
       return `<section class="card">
   <div class="col left">
-    <div class="prompt">${escapeHtml(input.prompt || "(no prompt)")}</div>
+    <div class="prompt">${escapeHtml(input.prompt || "(no prompt)")}</div>${
+      entry.enhancedPrompt ?
+        `\n    <div class="lbl">Enhanced prompt</div><div class="prompt">${escapeHtml(entry.enhancedPrompt)}</div>`
+      : ""
+    }
     <div class="meta">${metaRows}</div>
     ${
       inputs.length ?
@@ -4661,6 +4688,18 @@ app.post("/api/history/:id/result", async (req, res) => {
   }
   if (typeof costCredits === "number") entry.costCredits = costCredits;
   entry.status = "done";
+  // A run whose prompt went through an enhancer: read the rewritten text back.
+  if (entry.promptEchoNode && entry.taskId) {
+    try {
+      const hist = await fetch(
+        `${COMFYUI_URL}/history/${encodeURIComponent(entry.taskId)}`,
+      ).then((r) => r.json());
+      const enhanced = comfyEnhancedPrompt(hist?.[entry.taskId], entry);
+      if (typeof enhanced === "string") entry.enhancedPrompt = enhanced;
+    } catch {
+      // ComfyUI unreachable — the run is still saved, just without the rewrite
+    }
+  }
   // Prefer a caller-supplied run time (ComfyUI's real per-prompt execution time);
   // fall back to since-created for kie.ai jobs, which are submitted one at a time.
   entry.runtimeMs =

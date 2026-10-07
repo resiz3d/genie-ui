@@ -1,0 +1,29 @@
+{
+  "_comment": "Qwen Image 2.1 text encoder (text-to-image and image edit). `prompt` is usually wired through a Preview as Text and an If/Else Switch that picks between the raw prompt and a Generate Text enhancer's rewrite; recognition follows all of it (see logic.json / text_generate.json), so the one Prompt box writes both. Reference images are an autogrow input numbered from 1 (images.image_1 … image_16), hence `start: 1`. The enhancer sees the same pictures through a Batch Images node numbered from 0 — the `mirrors` entry keeps that node wired to the same files.",
+  "nodes": {
+    "TextEncodeQwenImage21": {
+      "display_name": "Text Encode Qwen Image 2.1",
+      "recognize": {
+        "variants": [
+          {
+            "match": [{ "when": "any" }],
+            "group": "Prompt",
+            "expose": {
+              "prompt":          { "name": "prompt",          "label": "Prompt",          "control": "text", "multiline": true, "width": "full", "order": 1 },
+              "negative_prompt": { "name": "negative_prompt", "label": "Negative Prompt", "control": "text", "multiline": true, "width": "full", "order": 2 },
+              "resolution":      { "name": "reference_size",  "label": "Reference size (px; 0 keeps each image's own size)", "control": "number", "width": "full", "order": 2.1 }
+            },
+            "references": [
+              {
+                "name": "ref_image", "kind": "image", "label": "Images", "max": 16, "order": 3,
+                "loader": { "class_type": "LoadImage", "input": "image" },
+                "wires": [{ "prefix": "images.image_", "slot": 0, "start": 1 }],
+                "mirrors": [{ "class_type": "BatchImagesNode", "prefix": "images.image", "slot": 0, "start": 0 }]
+              }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "_comment": "Core plumbing nodes a value passes through. `value_through` lists the inputs recognition follows when another node's exposed input is wired from one of these, so the control lands on the literal(s) behind it: an If/Else Switch carries either branch (both are followed — a subgraph's prompt is exported as the same literal on each side, and both must be written), a Preview as Text carries its source. `reports_text` marks the preview as a node whose output is the text that went through it; when the prompt runs through one, GENie reads the final prompt back from the finished run (see docs/COMFYUI.md, Prompt enhancers). A switch's own `switch` is exposed only where its role is recognizable: gating a Generate Text (a prompt enhancer), or choosing the sampler's latent (a custom size vs. the size the encoder derived from the first image).",
+  "nodes": {
+    "ComfySwitchNode": {
+      "display_name": "If/Else Switch",
+      "value_through": { "inputs": ["on_false", "on_true"] },
+      "recognize": {
+        "variants": [
+          {
+            "match": [{ "when": "consumes", "source": "TextGenerate", "input": "on_true" }],
+            "group": "Prompt Enhancer",
+            "expose": {
+              "switch": { "name": "prompt_enhancer", "label": "Rewrite the prompt with the LLM before encoding", "control": "toggle", "width": "full", "order": 4 }
+            }
+          },
+          {
+            "match": [{ "when": "produces", "target": "KSampler.latent_image" }],
+            "group": "Output Size",
+            "expose": {
+              "switch": { "name": "custom_size", "label": "Custom size (off: use the first image's size)", "control": "toggle", "width": "full", "order": 19 }
+            }
+          }
+        ]
+      }
+    },
+    "PreviewAny": {
+      "display_name": "Preview as Text",
+      "value_through": { "inputs": ["source"] },
+      "reports_text": true
+    }
+  }
+}
