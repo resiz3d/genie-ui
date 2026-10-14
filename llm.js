@@ -11,7 +11,22 @@
 //     the request in flight and unloads the LLM before the video model loads. The
 //     build then waits and picks up where it left off once ComfyUI is idle again.
 //
-// Builds run as server-side jobs, so they keep going with the browser closed (or
+// One kind of server GENie runs itself: llama.cpp's llama-server, started as a child
+// process when a job first needs its model and stopped to unload it.
+//
+// A server marked "CPU only" is outside all of that: its jobs run in a lane of their
+// own, straight away and alongside a generation, and its model stays loaded. That's
+// what ✨ Analyze (a subject's reference images → its definition and retention line,
+// in the prompt editor) is meant to run on.
+//
+// A build has two steps. First the model writes only a shot list — the number of shots
+// asked for, adding up to the video's length — which waits in the project's builder
+// file for the user to edit and to put breaks in. Then, for each run of shots between
+// breaks, the model writes the rest of a prompt around them (subjects, summary, style,
+// sound, music…): the shots themselves go into the saved prompt exactly as the user
+// left them, and are never sent back to be rewritten. Several runs make a prompt group.
+//
+// Both steps run as server-side jobs, so they keep going with the browser closed (or
 // from the phone). Each prompt is saved to the project's Saved Prompts the moment
 // it's written, with the images it was built from as its references.
 //
@@ -21,6 +36,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { spawn as spawnProcess } from "node:child_process";
 
 const GiB = 1024 ** 3;
 const MiB = 1024 ** 2;
@@ -30,8 +46,47 @@ export const SOURCE_KINDS = {
   lmstudio: { label: "LM Studio", port: 1234, managed: true },
   textgen: { label: "text-generation-webui", port: 5000, managed: true },
   ollama: { label: "Ollama", port: 11434, managed: true },
+  // No server of its own to connect to: GENie launches llama-server on `port`.
+  llamacpp: { label: "llama.cpp server (GENie runs it)", port: 8090, managed: true, launched: true },
   openai: { label: "Other OpenAI-compatible", port: null, managed: false },
 };
+
+// The llama-servers GENie has running, across every createLlm(): { child, pid, file }.
+// They're stopped when GENie exits, so none is left behind holding RAM. (On Windows a
+// child goes down with GENie however it ends — a `node --watch` restart included.
+// Elsewhere a GENie killed outright can leave one running, and the next GENie picks
+// it up again from its run file; see startLlama.)
+const launched = new Set();
+function stopLaunched() {
+  for (const p of launched) {
+    try {
+      if (p.child) p.child.kill();
+      else process.kill(p.pid);
+    } catch {
+      /* already gone */
+    }
+    fs.rmSync(p.file, { force: true });
+  }
+  launched.clear();
+}
+let exitHooked = false;
+function hookExit() {
+  if (exitHooked) return;
+  exitHooked = true;
+  process.on("exit", stopLaunched);
+  for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"])
+    process.on(sig, () => {
+      stopLaunched();
+      process.exit();
+    });
+}
+
+// '--threads 12 --chat-template-file "C:\my files\t.jinja"' → its arguments.
+function splitArgs(s) {
+  return [...String(s || "").matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g)].map(
+    (m) => m[1] ?? m[2] ?? m[3],
+  );
+}
 
 export const DEFAULT_INSTRUCTIONS = `You write prompts for AI video generation (image-to-video and reference-to-video models such as Seedance, MiniMax Hailuo and LTX Video).
 
@@ -49,41 +104,117 @@ Reply with only a JSON object and nothing else:
 // prompt's fields, so it can't be edited away).
 export const BUILD_FORMATS = new Set(["default", "minimax", "minimax_t2v"]);
 
-export const MINIMAX_INSTRUCTIONS = `You write structured prompts for MiniMax Hailuo H3 reference-to-video. The video model receives the reference images as <Picture 1>, <Picture 2> … and a prompt made of labelled sections, which you fill in as JSON fields.
+const LOOK_CLOSELY =
+  "Look closely at what the images actually show — build, clothing, hair, expression, setting, lighting and colours — and keep that continuity unless the request asks for a change.";
+const PLAIN_TEXT = "Plain text in every field — no markdown, no bullet points, no notes to the reader.";
+const JSON_ONLY = "Reply with only a JSON object and nothing else:";
+const MM_HEAD =
+  "You write structured prompts for MiniMax Hailuo H3 reference-to-video. The video model receives the reference images as <Picture 1>, <Picture 2> … and a prompt made of labelled sections, which you fill in as JSON fields.";
+const MM_SUBJECTS =
+  'Subjects: every person, character, creature, object or place the video keeps from the references is a subject with a <key> label — one short lowercase word (underscores allowed), like <hulk> or <stall>. When an image is given with a subject key, use exactly that key. Otherwise invent one, and start that subject\'s definition with the images it comes from, e.g. "seen in <Picture 1> and <Picture 2>, a tall green woman with long black hair …". In every other field, refer to subjects only by their <key> label, never by picture number or by a name.';
+const T2V_HEAD =
+  "You write structured prompts for MiniMax Hailuo H3 text-to-video. There are no reference images: the prompt alone describes everything on screen, so describe each person, character and place fully the first time it appears — build, clothing, hair, expression, setting, lighting and colours.";
+const FIELD = {
+  subjects:
+    '- subjects: one entry per subject: {"key": "hulk", "definition": "one or two sentences describing how the subject looks"}.',
+  summary:
+    '- summary: the task type in square brackets, then one short paragraph on what the video shows and what each reference is for, e.g. "[reference generation] <hulk> strides down a desert road toward the camera …".',
+  retention:
+    '- retention: for each subject key, how closely the video must match its references: a marker, " - ", then what is kept, e.g. {"hulk": "fully_preserved - face, hair, build and skin colour"}. Markers: fully_preserved, partially_preserved, attribute_transfer, weak_reference.',
+  style:
+    '- style: one sentence with the visual style, e.g. "The target video uses a live action cinematic style."',
+  shots:
+    '- shots: the shots in order, each with "seconds": how many seconds it lasts. The seconds of all the shots add up to the clip\'s length. Each "text" is concrete, filmable action in the present tense: who does what and in what order, how the camera moves and frames them, the lighting and mood. Pace the action to fit the clip\'s length; use one shot unless the action needs a cut.',
+  soundscape: "- soundscape: the diegetic sound — ambience, footsteps, voices, effects.",
+  music: '- music: the non-diegetic music, or "None".',
+};
+const fieldList = (...names) => ["Fields:", ...names.map((n) => FIELD[n])].join("\n");
 
-Subjects: every person, character, creature, object or place the video keeps from the references is a subject with a <key> label — one short lowercase word (underscores allowed), like <hulk> or <stall>. When an image is given with a subject key, use exactly that key. Otherwise invent one, and start that subject's definition with the images it comes from, e.g. "seen in <Picture 1> and <Picture 2>, a tall green woman with long black hair …". In every other field, refer to subjects only by their <key> label, never by picture number or by a name.
+// A whole MiniMax prompt, shots included — what ✏️ Revise edits.
+export const MINIMAX_INSTRUCTIONS = [
+  MM_HEAD,
+  MM_SUBJECTS,
+  LOOK_CLOSELY,
+  fieldList("subjects", "summary", "retention", "style", "shots", "soundscape", "music"),
+  PLAIN_TEXT,
+  `${JSON_ONLY}\n{"title": "a short title, at most 8 words", "subjects": [{"key": "…", "definition": "…"}], "summary": "…", "retention": {"key": "…"}, "style": "…", "shots": [{"seconds": 5, "text": "…"}], "soundscape": "…", "music": "…"}`,
+].join("\n\n");
 
-Look closely at what the images actually show — build, clothing, hair, expression, setting, lighting and colours — and keep that continuity unless the request asks for a change.
+export const MINIMAX_T2V_INSTRUCTIONS = [
+  T2V_HEAD,
+  fieldList("style", "shots", "soundscape", "music"),
+  PLAIN_TEXT,
+  `${JSON_ONLY}\n{"title": "a short title, at most 8 words", "style": "…", "shots": [{"seconds": 5, "text": "…"}], "soundscape": "…", "music": "…"}`,
+].join("\n\n");
 
-Fields:
-- subjects: one entry per subject: {"key": "hulk", "definition": "one or two sentences describing how the subject looks"}.
-- summary: the task type in square brackets, then one short paragraph on what the video shows and what each reference is for, e.g. "[reference generation] <hulk> strides down a desert road toward the camera …".
-- retention: for each subject key, how closely the video must match its references: a marker, " - ", then what is kept, e.g. {"hulk": "fully_preserved - face, hair, build and skin colour"}. Markers: fully_preserved, partially_preserved, attribute_transfer, weak_reference.
-- style: one sentence opening the description with the visual style, e.g. "The target video uses a live action cinematic style."
-- shots: the shots in order, each with "seconds": how many seconds it lasts. The seconds of all the shots add up to the clip's length. Each "text" is concrete, filmable action in the present tense: who does what and in what order, how the camera moves and frames them, the lighting and mood. Pace the action to fit the clip's length; use one shot unless the action needs a cut.
-- soundscape: the diegetic sound — ambience, footsteps, voices, effects.
-- music: the non-diegetic music, or "None".
+// Step 1 of a build — the shot list alone.
+const SHOT_LIST_HEAD = {
+  default:
+    "You are shown the reference images the video will be made from. Refer to each one exactly by its label, like <Picture 1>, and to a named subject by its <key> label when one is given.",
+  minimax:
+    "The video model receives the reference images you are shown as <Picture 1>, <Picture 2> … Every person, character, creature, object or place the video keeps from them is a subject with a <key> label — one short lowercase word (underscores allowed), like <hulk> or <stall>. When an image is given with a subject key, use exactly that key; otherwise invent one and use the same key in every shot. Refer to subjects only by their <key> label, never by picture number or by a name.",
+  minimax_t2v:
+    "There are no reference images: the text alone describes everything on screen, so describe each person, character and place fully the first time it appears — build, clothing, hair, expression, setting, lighting and colours.",
+};
+export const shotListInstructions = (format) =>
+  [
+    "You plan the shot list for an AI-generated video. You write only the shots: no subject definitions, no summary, no style line, no soundscape and no music — those are written later, around the shots you give.",
+    SHOT_LIST_HEAD[format] || SHOT_LIST_HEAD.default,
+    ...(format === "minimax_t2v" ? [] : [LOOK_CLOSELY]),
+    'Each shot is one continuous camera setup, with "seconds": how many whole seconds it lasts (at least 1). Its "text" is concrete, filmable action in the present tense: who does what and in what order, how the camera frames them and moves, the lighting and mood. Write exactly the number of shots asked for, and make their seconds add up to exactly the video\'s length. Pace what should happen across the whole video: the first shot opens it and the last one ends it.',
+    "The shots are edited together into one continuous video, so write them as one sequence: each shot carries on from the one before, without setting the scene again.",
+    "Plain text — no markdown, no bullet points, no notes to the reader.",
+    `${JSON_ONLY}\n{"title": "a short title for the video, at most 8 words", "shots": [{"seconds": 5, "text": "…"}]}`,
+  ].join("\n\n");
 
-Plain text in every field — no markdown, no bullet points, no notes to the reader.
+// Step 2 — everything in a prompt except its shots, which are fixed by then.
+const SHOTS_ARE_FINAL =
+  "The shots of this prompt are already written and final: they are given in the request and go into the prompt exactly as they are. Do not rewrite them, repeat them or return them — write only the other fields, to fit them.";
+export const MINIMAX_AROUND_INSTRUCTIONS = [
+  MM_HEAD,
+  MM_SUBJECTS,
+  LOOK_CLOSELY,
+  `${SHOTS_ARE_FINAL} Define a subject for every <key> label the shots use, under exactly that key.`,
+  fieldList("subjects", "summary", "retention", "style", "soundscape", "music"),
+  PLAIN_TEXT,
+  `${JSON_ONLY}\n{"title": "a short title, at most 8 words", "subjects": [{"key": "…", "definition": "…"}], "summary": "…", "retention": {"key": "…"}, "style": "…", "soundscape": "…", "music": "…"}`,
+].join("\n\n");
 
-Reply with only a JSON object and nothing else:
-{"title": "a short title, at most 8 words", "subjects": [{"key": "…", "definition": "…"}], "summary": "…", "retention": {"key": "…"}, "style": "…", "shots": [{"seconds": 5, "text": "…"}], "soundscape": "…", "music": "…"}`;
+export const MINIMAX_T2V_AROUND_INSTRUCTIONS = [
+  "You write structured prompts for MiniMax Hailuo H3 text-to-video. There are no reference images: the prompt alone describes everything on screen.",
+  SHOTS_ARE_FINAL,
+  fieldList("style", "soundscape", "music"),
+  PLAIN_TEXT,
+  `${JSON_ONLY}\n{"title": "a short title, at most 8 words", "style": "…", "soundscape": "…", "music": "…"}`,
+].join("\n\n");
 
-export const MINIMAX_T2V_INSTRUCTIONS = `You write structured prompts for MiniMax Hailuo H3 text-to-video. There are no reference images: the prompt alone describes everything on screen, so describe each person, character and place fully the first time it appears — build, clothing, hair, expression, setting, lighting and colours.
+// Added to the Default format's (editable) instructions, whose own reply format asks
+// for the whole prompt.
+const DEFAULT_AROUND = [
+  `${SHOTS_ARE_FINAL} What you write:`,
+  '- intro: one opening paragraph that goes before the first shot — who and what is on screen (by their labels), the setting, the visual style, the lighting and mood. "" when the shots need no setting up.\n- sound: one closing paragraph on the sound — ambience, voices, effects — and the music. "" for none.',
+  `Reply with only this JSON object instead of the one above, and nothing else:\n{"title": "a short title, at most 8 words", "intro": "…", "sound": "…"}`,
+].join("\n\n");
 
-Fields:
-- style: one sentence with the visual style, e.g. "The target video uses a live action cinematic style."
-- shots: the shots in order, each with "seconds": how many seconds it lasts. The seconds of all the shots add up to the clip's length. Each "text" is concrete, filmable action in the present tense: who does what and in what order, how the camera moves and frames them, the lighting and mood. Pace the action to fit the clip's length; use one shot unless the action needs a cut.
-- soundscape: the diegetic sound — ambience, footsteps, voices, effects.
-- music: the non-diegetic music, or "None".
-
-Plain text in every field — no markdown, no bullet points, no notes to the reader.
-
-Reply with only a JSON object and nothing else:
-{"title": "a short title, at most 8 words", "style": "…", "shots": [{"seconds": 5, "text": "…"}], "soundscape": "…", "music": "…"}`;
+// ✨ Analyze: one subject's reference image(s) → its definition and retention line.
+// (The last line is the reply's JSON shape — see buildRepairMessages.)
+const ANALYZE_INSTRUCTIONS = [
+  "You look at the reference image(s) of one subject for a MiniMax Hailuo H3 reference-to-video prompt and describe that subject, so the video model knows what to keep from them. When several images are given they all show the same subject — different views, or a sheet of views.",
+  [
+    "Fields:",
+    '- kind: "person", "creature", "object" or "place".',
+    '- definition: one noun phrase of 15 to 45 words that finishes the sentence "<key> is …". Start with "a", "an" or "the"; no label and no picture number. Only what is visible and stays the same from shot to shot. For a person or creature: apparent age and gender, build, skin, hair (colour, length, style), notable facial features, clothing and accessories. For a place: the kind of place, its main features and objects, materials, lighting, colours and time of day. For an object: what it is, its shape, material, colour and markings. Leave out the pose, the expression, the camera angle and the image quality.',
+    '- retention: how closely the video must match the image(s): a marker, " - ", then what is kept. Markers: fully_preserved, partially_preserved, attribute_transfer, weak_reference. Use fully_preserved unless the author\'s notes say otherwise, and name the elements, e.g. "fully_preserved - all elements including her skin colour, clothing, accessories, hairstyle and hair colour" for a person, or "fully_preserved - all elements, objects, features and lighting" for a place.',
+  ].join("\n"),
+  "The author's notes and current retention line, when given, are true: keep every fact in them and build on them with what the image shows.",
+  PLAIN_TEXT,
+  `${JSON_ONLY}\n{"kind": "person", "definition": "…", "retention": "…"}`,
+].join("\n\n");
 
 const DEFAULT_SETTINGS = {
   activeSourceId: "lmstudio",
+  analyzeSourceId: "", // the server ✨ Analyze uses — "" = the active one
+  analyzeImageSize: 768, // px on the longest side sent to it (the browser scales them down)
   sources: [
     {
       id: "lmstudio",
@@ -132,7 +263,7 @@ const DEFAULT_SETTINGS = {
 };
 
 const MAX_IMAGES = 10;
-const MAX_COUNT = 20;
+const MAX_SHOTS = 60; // in one shot list
 const MAX_RULES = 12000;
 const MAX_RECENT = 20;
 const JOB_KEEP = 30; // finished jobs remembered (in memory) for the UI
@@ -152,6 +283,8 @@ export function createLlm(deps) {
     gpuMemory, // async () => { freeMiB, totalMiB } | null
     builderFile = null, // (project) => path of its projects/<slug>/llm-builder.json
     ensureComfyWs = () => {},
+    spawn = spawnProcess, // (file, args, options) => ChildProcess — the tests' way in
+    llamaStartMs = 10 * 60 * 1000, // how long a llama-server may take to load its model
     log = console,
   } = deps;
 
@@ -174,7 +307,14 @@ export function createLlm(deps) {
       sources.some((x) => x.id === s.activeSourceId) ?
         s.activeSourceId
       : sources[0]?.id || null;
-    return { activeSourceId, sources, options };
+    const analyzeSourceId =
+      sources.some((x) => x.id === s.analyzeSourceId) ? s.analyzeSourceId : "";
+    const size = Number(s.analyzeImageSize);
+    const analyzeImageSize =
+      Number.isFinite(size) && size > 0 ?
+        Math.round(Math.min(2048, Math.max(256, size)))
+      : DEFAULT_SETTINGS.analyzeImageSize;
+    return { activeSourceId, analyzeSourceId, analyzeImageSize, sources, options };
   }
 
   function writeSettings(s) {
@@ -188,7 +328,13 @@ export function createLlm(deps) {
       const n = Number(v);
       return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : d;
     };
-    return {
+    // A path as typed or pasted — Windows' "Copy as path" wraps it in quotes.
+    const file = (v) =>
+      String(v || "")
+        .trim()
+        .replace(/^"(.*)"$/, "$1")
+        .slice(0, 500);
+    const src = {
       id: String(x.id || randomUUID()).slice(0, 60),
       name: String(x.name || SOURCE_KINDS[kind].label)
         .trim()
@@ -205,13 +351,30 @@ export function createLlm(deps) {
       vramGb: num(x.vramGb, 0, 0, 1024),
       contextLength: Math.round(num(x.contextLength, 8192, 0, 1048576)),
       loadArgs: String(x.loadArgs || "").slice(0, 4000),
+      cpuOnly: !!x.cpuOnly, // runs in system RAM: no turn-taking with ComfyUI
+      // llama.cpp server (GENie runs it): what to launch, and where it listens.
+      exePath: file(x.exePath),
+      modelPath: file(x.modelPath),
+      mmprojPath: file(x.mmprojPath),
+      port: Math.round(num(x.port, SOURCE_KINDS.llamacpp.port, 1, 65535)),
+      extraArgs: String(x.extraArgs || "")
+        .trim()
+        .slice(0, 2000),
     };
+    if (kind === "llamacpp") {
+      // Its address and model follow from the port and the file.
+      src.baseUrl = llamaUrl(src);
+      src.model = llamaModelId(src);
+    }
+    return src;
   }
 
   // What the browser sees: no API keys, just whether one is set.
   function publicSettings(s = readSettings()) {
     return {
       activeSourceId: s.activeSourceId,
+      analyzeSourceId: s.analyzeSourceId,
+      analyzeImageSize: s.analyzeImageSize,
       sources: s.sources.map(({ apiKey, ...rest }) => ({
         ...rest,
         hasApiKey: !!apiKey,
@@ -242,6 +405,10 @@ export function createLlm(deps) {
     }
     if (body.activeSourceId !== undefined)
       next.activeSourceId = String(body.activeSourceId || "");
+    if (body.analyzeSourceId !== undefined)
+      next.analyzeSourceId = String(body.analyzeSourceId || "");
+    if (body.analyzeImageSize !== undefined)
+      next.analyzeImageSize = Number(body.analyzeImageSize);
     if (body.options && typeof body.options === "object") {
       const o = { ...cur.options };
       const b = body.options;
@@ -270,8 +437,16 @@ export function createLlm(deps) {
     }
     if (!next.sources.some((x) => x.id === next.activeSourceId))
       next.activeSourceId = next.sources[0]?.id || null;
+    // A llama-server whose source was removed (or moved to another port) has no
+    // one left to stop it.
+    for (const old of cur.sources)
+      if (
+        old.kind === "llamacpp" &&
+        !next.sources.some((x) => x.id === old.id && x.kind === "llamacpp" && Number(x.port) === old.port)
+      )
+        stopLlama(old).catch(() => {});
     writeSettings(next);
-    return next;
+    return readSettings(); // as it reads back: a removed Analyze server falls away
   }
 
   function getSource(id, s = readSettings()) {
@@ -280,7 +455,10 @@ export function createLlm(deps) {
 
   // ------------------------------------------------------------ HTTP helpers
   // "http://host:1234/v1" and "http://host:1234" both mean the server root.
-  const rootUrl = (src) => src.baseUrl.replace(/\/+$/, "").replace(/\/v1$/i, "");
+  const rootUrl = (src) =>
+    src.kind === "llamacpp" ?
+      llamaUrl(src)
+    : src.baseUrl.replace(/\/+$/, "").replace(/\/v1$/i, "");
 
   function headers(src) {
     const h = { "Content-Type": "application/json" };
@@ -350,9 +528,257 @@ export function createLlm(deps) {
     }
   }
 
+  // ------------------------------------------ llama.cpp server (GENie runs it)
+  // One llama-server per port: { child, pid, sig, token, file, exited, code, error }.
+  // `sig` is the command line it was started with — a server started from settings
+  // that have since changed is stopped and started again. `child` is null for one
+  // picked up from a GENie before this one (see startLlama).
+  const llamaProcs = new Map();
+  const llamaPort = (src) => Math.round(Number(src.port)) || SOURCE_KINDS.llamacpp.port;
+  function llamaUrl(src) {
+    return `http://127.0.0.1:${llamaPort(src)}`;
+  }
+  function llamaModelId(src) {
+    return String(src.modelPath || "").split(/[\\/]/).pop();
+  }
+  // Next to the settings: llamacpp-<port>.json (the server GENie has running there)
+  // and llamacpp-<port>.log (its output).
+  const llamaFile = (src, ext) =>
+    path.join(path.dirname(settingsFile), `llamacpp-${llamaPort(src)}.${ext}`);
+
+  function llamaArgs(src) {
+    const args = ["-m", src.modelPath];
+    if (src.mmprojPath) args.push("--mmproj", src.mmprojPath);
+    if (src.contextLength > 0) args.push("-c", String(src.contextLength));
+    args.push("--host", "127.0.0.1", "--port", String(llamaPort(src)));
+    if (src.cpuOnly) {
+      // No GPU device at all: the model and its projector both stay in system RAM.
+      args.push("--device", "none");
+      if (src.mmprojPath) args.push("--no-mmproj-offload");
+    }
+    return [...args, ...splitArgs(src.extraArgs)]; // last, so they win
+  }
+  // A CUDA build of llama-server takes some 400 MB of VRAM just by starting, with no
+  // layers on the GPU at all. Hiding the GPU from the process stops that.
+  const llamaEnv = (src) => (src.cpuOnly ? { CUDA_VISIBLE_DEVICES: "-1" } : {});
+  const llamaSig = (src) => JSON.stringify([src.exePath, llamaEnv(src), ...llamaArgs(src)]);
+
+  // The settings can be changed from any browser that reaches GENie, so the program
+  // has to at least be a llama-server, not whatever path was typed.
+  function llamaCheck(src) {
+    const isFile = (p) => {
+      try {
+        return fs.statSync(p).isFile();
+      } catch {
+        return false;
+      }
+    };
+    if (!src.exePath) throw new Error(`${src.name}: no llama-server program set`);
+    if (!/^llama-server(\.exe)?$/i.test(String(src.exePath).split(/[\\/]/).pop()))
+      throw new Error(`${src.name}: the program must be llama-server (llama-server.exe on Windows)`);
+    if (!isFile(src.exePath)) throw new Error(`${src.name}: can't find ${src.exePath}`);
+    if (!src.modelPath) throw new Error(`${src.name}: no model file set`);
+    if (!isFile(src.modelPath)) throw new Error(`${src.name}: can't find the model file ${src.modelPath}`);
+    if (src.mmprojPath && !isFile(src.mmprojPath))
+      throw new Error(`${src.name}: can't find the vision projector ${src.mmprojPath}`);
+  }
+
+  // "ok" (ready), "loading", "other" (not a llama-server) or null (nothing there).
+  async function llamaHealth(src) {
+    try {
+      const r = await fetch(`${llamaUrl(src)}/health`, { signal: AbortSignal.timeout(3000) });
+      return r.ok ? "ok" : r.status === 503 ? "loading" : "other";
+    } catch {
+      return null;
+    }
+  }
+
+  const pidAlive = (pid) => {
+    try {
+      process.kill(pid, 0); // throws when there's no such process
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const llamaGone = (p) => (p.child ? p.exited : !pidAlive(p.pid));
+
+  // The server GENie has on this port: the child it started, or one a GENie before
+  // this one started — known by its run file, and by answering to the name it was
+  // given then (so a stale file can't point at some other program's process).
+  async function llamaOurs(src) {
+    const p = llamaProcs.get(llamaPort(src));
+    if (p && !llamaGone(p)) return p;
+    const file = llamaFile(src, "json");
+    try {
+      const f = JSON.parse(fs.readFileSync(file, "utf8"));
+      if (!pidAlive(f.pid)) return null;
+      const r = await fetch(`${llamaUrl(src)}/v1/models`, { signal: AbortSignal.timeout(3000) });
+      const d = await r.json();
+      if (!(d.data || []).some((m) => m.id === f.token)) return null;
+      return { child: null, pid: f.pid, sig: f.sig, token: f.token, file };
+    } catch {
+      return null;
+    }
+  }
+
+  function llamaLogTail(src) {
+    try {
+      const lines = fs.readFileSync(llamaFile(src, "log"), "utf8").trim().split(/\r?\n/);
+      return lines.slice(-8).join("\n").slice(-1200);
+    } catch {
+      return "";
+    }
+  }
+
+  // Wait for /health to say the model is loaded. `p` is the process to watch (and
+  // to stop if this gives up), when it's ours.
+  async function llamaReady(src, signal, p) {
+    const deadline = Date.now() + llamaStartMs;
+    const fail = (what) => {
+      const tail = llamaLogTail(src);
+      return new Error(`llama-server ${what}${tail ? ` — its last output:\n${tail}` : ""}`);
+    };
+    for (;;) {
+      if (signal?.aborted) {
+        if (p) await stopLlama(src);
+        throw signal.reason || new Error("aborted");
+      }
+      if (p?.error) throw new Error(`couldn't start ${src.exePath} (${p.error})`);
+      if (p && llamaGone(p)) throw fail(`exited${p.code == null ? "" : ` with code ${p.code}`} before it was ready`);
+      const h = await llamaHealth(src);
+      if (h === "ok") return;
+      if (h === "other")
+        throw new Error(`something other than llama-server is answering on port ${llamaPort(src)} — pick another port`);
+      if (Date.now() > deadline) {
+        if (p) await stopLlama(src);
+        throw fail(`wasn't ready after ${Math.round(llamaStartMs / 1000)}s`);
+      }
+      await sleep(500);
+    }
+  }
+
+  async function startLlama(src, signal) {
+    llamaCheck(src);
+    hookExit();
+    const port = llamaPort(src);
+    const sig = llamaSig(src);
+    let p = llamaProcs.get(port);
+    if (p && llamaGone(p)) p = null;
+    if (!p && (await llamaHealth(src))) {
+      // Something is on the port already: a server the last GENie left running (it
+      // was killed before it could stop it), or one started by hand.
+      await llamaReady(src, signal, null);
+      p = await llamaOurs(src);
+      if (!p) {
+        log.log?.(`LLM: using the server already on port ${port} — GENie didn't start it, so it won't stop it.`);
+        return;
+      }
+      llamaAdopt(src, p);
+      if (p.sig === sig) return log.log?.(`LLM: picked up the llama-server on port ${port} (pid ${p.pid}).`);
+    }
+    if (p && p.sig === sig) return llamaReady(src, signal, p); // ours, and still starting
+    if (p) await stopLlama(src); // started with other settings
+
+    const token = `genie-${randomUUID().slice(0, 8)}`;
+    const args = llamaArgs(src);
+    args.splice(args.length - splitArgs(src.extraArgs).length, 0, "--alias", token);
+    // Its output goes to a file: there to read after a failed start, and nothing
+    // breaks if the server outlives this GENie.
+    fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
+    const out = fs.openSync(llamaFile(src, "log"), "w");
+    p = { child: null, pid: null, sig, token, file: llamaFile(src, "json"), exited: false };
+    const proc = p;
+    try {
+      p.child = spawn(src.exePath, args, {
+        stdio: ["ignore", out, out],
+        windowsHide: true,
+        env: { ...process.env, ...llamaEnv(src) },
+      });
+    } finally {
+      fs.closeSync(out);
+    }
+    p.pid = p.child.pid;
+    p.child.on("error", (err) => {
+      proc.error = err.code || err.message;
+      proc.exited = true;
+      launched.delete(proc);
+    });
+    p.child.on("exit", (code) => {
+      proc.exited = true;
+      proc.code = code;
+      launched.delete(proc);
+      if (llamaProcs.get(port) === proc) {
+        llamaProcs.delete(port);
+        fs.rmSync(proc.file, { force: true });
+      }
+    });
+    llamaProcs.set(port, p);
+    launched.add(p);
+    if (p.pid) fs.writeFileSync(p.file, JSON.stringify({ pid: p.pid, port, token, sig }));
+    log.log?.(`LLM: started llama-server on port ${port} (pid ${p.pid}) — ${llamaModelId(src)}${src.cpuOnly ? ", CPU only" : ""}.`);
+    await llamaReady(src, signal, p);
+  }
+
+  // Stop the server GENie has on this source's port. False when there's none of ours.
+  async function stopLlama(src) {
+    const p = await llamaOurs(src);
+    if (!p) return false;
+    try {
+      if (p.child) p.child.kill();
+      else process.kill(p.pid);
+    } catch {
+      /* already gone */
+    }
+    for (let i = 0; i < 100 && !llamaGone(p); i++) await sleep(100);
+    launched.delete(p);
+    if (llamaProcs.get(llamaPort(src)) === p) llamaProcs.delete(llamaPort(src));
+    fs.rmSync(p.file, { force: true });
+    return true;
+  }
+
+  function llamaAdopt(src, p) {
+    llamaProcs.set(llamaPort(src), p);
+    launched.add(p);
+    hookExit();
+  }
+  // A server the last GENie left running (see startLlama): take it over now, so
+  // it's stopped with this one even if no job uses it again.
+  for (const src of readSettings().sources)
+    if (src.kind === "llamacpp")
+      llamaOurs(src)
+        .then((p) => {
+          if (!p || llamaProcs.has(llamaPort(src))) return;
+          llamaAdopt(src, p);
+          log.log?.(`LLM: picked up the llama-server on port ${llamaPort(src)} (pid ${p.pid}).`);
+        })
+        .catch(() => {});
+
   // ------------------------------------------------ per-server model management
   // listModels → [{ id, name, vision (true/false/null), sizeBytes, loaded, instances }]
   async function listModels(src) {
+    if (src.kind === "llamacpp") {
+      // The one model it's set to serve — loaded when its server is up and was
+      // started with these settings.
+      llamaCheck(src);
+      const id = llamaModelId(src);
+      let loaded = (await llamaHealth(src)) === "ok";
+      if (loaded) {
+        const p = await llamaOurs(src);
+        if (p && p.sig !== llamaSig(src)) loaded = false;
+      }
+      const size = (p) => (p ? fs.statSync(p).size : 0);
+      return [
+        {
+          id,
+          name: id,
+          vision: !!src.mmprojPath,
+          sizeBytes: size(src.modelPath) + size(src.mmprojPath),
+          loaded,
+          instances: loaded ? [id] : [],
+        },
+      ];
+    }
     if (src.kind === "lmstudio") {
       try {
         const d = await call(src, "GET", "/api/v1/models");
@@ -446,6 +872,7 @@ export function createLlm(deps) {
   }
 
   async function loadModel(src, model, signal) {
+    if (src.kind === "llamacpp") return startLlama(src, signal);
     const extra = parseLoadArgs(src);
     if (src.kind === "lmstudio") {
       const body = { model, ...extra };
@@ -462,8 +889,11 @@ export function createLlm(deps) {
       }
     } else if (src.kind === "textgen") {
       const body = { model_name: model };
-      if (Object.keys(extra).length) body.args = extra;
-      else if (src.contextLength > 0) body.args = { ctx_size: src.contextLength };
+      const args = { ...extra };
+      if (!Object.keys(extra).length && src.contextLength > 0)
+        args.ctx_size = src.contextLength;
+      if (src.cpuOnly && args.gpu_layers === undefined) args.gpu_layers = 0;
+      if (Object.keys(args).length) body.args = args;
       await call(src, "POST", "/v1/internal/model/load", body, {
         timeoutMs: 10 * 60 * 1000,
         signal,
@@ -473,6 +903,7 @@ export function createLlm(deps) {
       const opts = { ...extra };
       if (src.contextLength > 0 && opts.num_ctx === undefined)
         opts.num_ctx = src.contextLength;
+      if (src.cpuOnly && opts.num_gpu === undefined) opts.num_gpu = 0;
       if (Object.keys(opts).length) body.options = opts;
       await call(src, "POST", "/api/generate", body, {
         timeoutMs: 10 * 60 * 1000,
@@ -483,6 +914,10 @@ export function createLlm(deps) {
   }
 
   async function unloadModel(src, model) {
+    if (src.kind === "llamacpp") {
+      await stopLlama(src);
+      return true;
+    }
     if (src.kind === "lmstudio") {
       let info = null;
       try {
@@ -556,6 +991,19 @@ export function createLlm(deps) {
   const jobs = new Map();
   const queue = [];
   let runner = null;
+  // Jobs on a "CPU only" server run in a lane of their own, one at a time: they never
+  // wait for ComfyUI and a generation never interrupts them.
+  const cpu = {
+    queue: [],
+    runner: null, // { job }
+    request: null, // AbortController of its chat request
+    loading: null, // AbortController of its model load
+  };
+  // text-generation-webui holds one model at a time, so two servers at the same
+  // address (the usual setup: a GPU model for builds, a CPU one for ✨ Analyze) can't
+  // both be in use — whichever lane got there first finishes its step.
+  const sharesOneModel = (a, b) =>
+    !!a && !!b && a.kind === "textgen" && b.kind === "textgen" && rootUrl(a) === rootUrl(b);
 
   function touchComfy() {
     state.lastComfyActivity = Date.now();
@@ -585,7 +1033,7 @@ export function createLlm(deps) {
       }
     }
     for (const j of jobs.values())
-      if (j.status === "generating" || j.status === "loading")
+      if (!j.cpu && (j.status === "generating" || j.status === "loading"))
         setJob(j, "waiting", `Paused — ${reason}. Resumes when ComfyUI is idle.`);
     return true;
   }
@@ -626,7 +1074,7 @@ export function createLlm(deps) {
   }
 
   function publicJob(j) {
-    const { images, current, ...rest } = j;
+    const { images, current, groups, clipsDone, scaled, ...rest } = j;
     return rest;
   }
 
@@ -646,31 +1094,58 @@ export function createLlm(deps) {
 
   // ------------------------------------------------ the builder form, remembered
   // Per project, on the server (so every browser and the phone see the same thing):
-  // `draft` is the form as last left, `recent` the inputs of the last builds started.
+  // `draft` is the form as last left, `recent` the inputs of the last builds started,
+  // and `shotList` the shot list being worked on — as the model wrote it, then with
+  // the user's edits and breaks.
   // A project with no rules of its own starts from the rules used most recently
   // anywhere (options.lastRules), since rules tend to carry across projects.
-  function readBuilder(proj) {
-    let d = {};
-    if (builderFile) {
-      try {
-        d = JSON.parse(fs.readFileSync(builderFile(proj), "utf8")) || {};
-      } catch {
-        /* none yet */
-      }
+  function readBuilderFile(proj) {
+    if (!builderFile) return {};
+    try {
+      return JSON.parse(fs.readFileSync(builderFile(proj), "utf8")) || {};
+    } catch {
+      return {}; // none yet
     }
+  }
+
+  function readBuilder(proj) {
+    const d = readBuilderFile(proj);
     const draft = d.draft ? cleanForm(d.draft) : null;
     return {
       draft,
       recent: Array.isArray(d.recent) ? d.recent.map(cleanForm).slice(0, MAX_RECENT) : [],
+      shotList: cleanShotList(d.shotList),
       lastRules: readSettings().options.lastRules || "",
     };
   }
 
-  function writeBuilder(proj, data) {
+  // Replaces only the parts given.
+  function writeBuilder(proj, parts) {
     if (!builderFile) return;
     const file = builderFile(proj);
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, JSON.stringify(data, null, 2));
+    fs.writeFileSync(file, JSON.stringify({ ...readBuilderFile(proj), ...parts }, null, 2));
+  }
+
+  // A shot list as stored: { title, shots: [{ len, text, brk }], jobId, at }. `brk`
+  // marks a break after the shot — the next one starts a new prompt. null for none.
+  function cleanShotList(l) {
+    if (!l || typeof l !== "object" || !Array.isArray(l.shots) || !l.shots.length) return null;
+    const shots = l.shots.slice(0, MAX_SHOTS).map((s) => {
+      const n = Number(s?.len);
+      return {
+        len: s?.len === null || s?.len === "" || !Number.isFinite(n) || n <= 0 ? null : n,
+        text: String(s?.text ?? "").slice(0, 20000),
+        brk: !!s?.brk,
+      };
+    });
+    shots[shots.length - 1].brk = false;
+    return {
+      title: String(l.title ?? "").slice(0, 120),
+      shots,
+      jobId: typeof l.jobId === "string" ? l.jobId.slice(0, 60) : undefined,
+      at: typeof l.at === "string" ? l.at.slice(0, 40) : undefined,
+    };
   }
 
   // The fields worth remembering, validated.
@@ -685,7 +1160,8 @@ export function createLlm(deps) {
       description: str(f.description, 8000),
       theme: str(f.theme, 2000),
       rules: str(f.rules, MAX_RULES),
-      count: Math.max(1, Math.min(MAX_COUNT, Math.round(Number(f.count) || 1))),
+      // (`count` — how many variations — is what earlier versions kept here.)
+      shotCount: Math.max(1, Math.min(MAX_SHOTS, Math.round(Number(f.shotCount ?? f.count) || 1))),
       duration: num(f.duration),
       titlePrefix: str(f.titlePrefix, 100),
       imageIds: (Array.isArray(f.imageIds) ? f.imageIds : []).map(String).slice(0, MAX_IMAGES),
@@ -693,15 +1169,20 @@ export function createLlm(deps) {
     };
   }
 
-  function saveDraft(projectId, form) {
+  // A PUT from the browser: the form (`draft`), the shot list (`shotList`, null to
+  // clear it), or both — whichever is sent.
+  function saveBuilder(projectId, { draft, shotList } = {}) {
     const proj = findProject(projectId);
     if (!proj) throw new Error("unknown projectId");
-    const cur = readBuilder(proj);
-    const draft = cleanForm(form);
-    delete draft.at;
-    writeBuilder(proj, { draft, recent: cur.recent });
-    rememberRules(draft.rules);
-    return draft;
+    const parts = {};
+    if (draft && typeof draft === "object") {
+      parts.draft = cleanForm(draft);
+      delete parts.draft.at;
+    }
+    if (shotList !== undefined) parts.shotList = cleanShotList(shotList);
+    writeBuilder(proj, parts);
+    if (parts.draft) rememberRules(parts.draft.rules);
+    return parts;
   }
 
   function rememberRules(rules) {
@@ -712,7 +1193,7 @@ export function createLlm(deps) {
     writeSettings(s);
   }
 
-  // A build started: its inputs become the draft and go on top of `recent`
+  // A shot list was asked for: its inputs become the draft and go on top of `recent`
   // (an identical earlier entry moves up rather than repeating).
   function rememberBuild(proj, body, job) {
     try {
@@ -732,7 +1213,9 @@ export function createLlm(deps) {
     }
   }
 
-  function startBuild(body = {}) {
+  // What both steps of a build start from: the server and model, the project, the
+  // images and the request. `needRequest`: there must be something to write from.
+  function buildInputs(body, needRequest) {
     const settings = readSettings();
     const src = getSource(body.sourceId, settings);
     if (!src) throw new Error("No LLM source is set up — open ⚙ LLM settings.");
@@ -759,50 +1242,97 @@ export function createLlm(deps) {
     const format = BUILD_FORMATS.has(body.format) ? body.format : "default";
     if (format === "minimax_t2v") {
       images.length = 0; // text-to-video takes no references
-      if (!description) throw new Error("MiniMax T2V needs a description (it takes no images).");
+      if (needRequest && !description)
+        throw new Error("MiniMax T2V needs a description (it takes no images).");
     }
-    if (!description && !images.length)
+    if (needRequest && !description && !images.length)
       throw new Error("Add a description, an image, or both.");
-    const variations = Math.max(1, Math.min(MAX_COUNT, Math.round(Number(body.count) || 1)));
-    const d = Number(body.duration);
-    const duration = Number.isFinite(d) && d > 0 ? d : null;
-    // A MiniMax video longer than one clip is written as a prompt group: one whole
-    // prompt per clip, each with its own summary, subjects and images.
-    const clips = format !== "default" ? clipLengths(duration) : [];
-    const job = {
+    return { src, model, proj, images, description, format };
+  }
+
+  function newJob({ src, model, proj, images, description, format }, body, fields) {
+    const now = new Date().toISOString();
+    return {
       id: randomUUID(),
       projectId: proj.id,
       sourceId: src.id,
       sourceName: src.name,
       model,
       format,
-      variations, // what was asked for; `count` is the prompts that makes
-      clips, // [] for one prompt per variation, else each clip's seconds
-      group: null, // the group the clips being written go into
-      clipsDone: [], // the current variation's clips so far, for the next one's context
       imageIds: images.map((g) => g.id),
       images, // gallery entries (stripped from the public view)
       description,
       theme: String(body.theme || "").trim().slice(0, 2000),
       rules: String(body.rules || "").trim().slice(0, MAX_RULES),
       titlePrefix: String(body.titlePrefix || "").trim().slice(0, 100),
-      duration,
-      count: variations * Math.max(1, clips.length),
+      count: 1,
       done: 0,
       created: [], // [{ id, title }]
       status: "queued",
       message: "Queued",
       error: null,
       cancelled: false,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
+      createdAt: now,
+      updatedAt: now,
+      ...fields,
     };
-    rememberBuild(proj, { ...body, count: variations }, job);
+  }
+
+  function enqueue(job) {
     jobs.set(job.id, job);
-    queue.push(job);
+    job.cpu = !!getSource(job.sourceId)?.cpuOnly;
+    (job.cpu ? cpu.queue : queue).push(job);
     pruneJobs();
-    pump();
+    if (job.cpu) pumpCpu();
+    else pump();
     return publicJob(job);
+  }
+
+  // Step 1: a shot list — `shotCount` shots adding up to `duration` seconds. Nothing
+  // goes to Saved Prompts: the list is put in the project's builder file (replacing
+  // the one there) for the user to edit and break up.
+  function startShots(body = {}) {
+    const inp = buildInputs(body, true);
+    const shotCount = Math.max(1, Math.min(MAX_SHOTS, Math.round(Number(body.shotCount) || 1)));
+    const d = Number(body.duration);
+    const job = newJob(inp, body, {
+      kind: "shots",
+      shotCount,
+      duration: Number.isFinite(d) && d > 0 ? d : null,
+      result: null,
+    });
+    rememberBuild(inp.proj, { ...body, shotCount }, job);
+    return enqueue(job);
+  }
+
+  // Step 2: the prompts around a finished shot list. `body.shots` is the list as the
+  // user left it — [{ len, text, brk }], `brk` marking a break after a shot. Each run
+  // of shots between breaks becomes one saved prompt holding exactly those shots; two
+  // or more runs are saved as a prompt group named `body.title`.
+  function startBuild(body = {}) {
+    const inp = buildInputs(body, false);
+    const list = cleanShotList({ shots: body.shots, title: body.title });
+    if (!list) throw new Error("There's no shot list yet — build one first.");
+    list.shots.forEach((s, i) => {
+      if (!s.text.trim()) throw new Error(`Shot ${i + 1} is empty — write it or remove it.`);
+      if (s.len == null) throw new Error(`Shot ${i + 1} needs a length.`);
+    });
+    const groups = [[]];
+    for (const s of list.shots) {
+      groups[groups.length - 1].push({ len: s.len, text: s.text });
+      if (s.brk) groups.push([]);
+    }
+    const total = (g) => Math.round(g.reduce((a, s) => a + s.len, 0) * 1000) / 1000;
+    const job = newJob(inp, body, {
+      groups, // each prompt's shots, fixed (stripped from the public view)
+      clips: groups.map(total), // each prompt's seconds
+      videoTitle: list.title.trim(),
+      group: null, // the prompt group they go into, when there are several
+      clipsDone: [], // the prompts written so far, for the next one's context
+      duration: total(list.shots),
+      count: groups.length,
+    });
+    return enqueue(job);
   }
 
   // ✏️ Revise: rewrite one saved prompt (as it currently stands in the editor, saved
@@ -884,11 +1414,84 @@ export function createLlm(deps) {
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
-    jobs.set(job.id, job);
-    queue.push(job);
-    pruneJobs();
-    pump();
-    return publicJob(job);
+    return enqueue(job);
+  }
+
+  // ✨ Analyze: look at each subject's reference image(s) and write its definition and
+  // retention line. `body.subjects` is [{ key, note, retention, images: [{ id, url }] }]
+  // as the editor has them — `note`/`retention` what's typed there now, `url` an
+  // optional scaled-down copy of the image (a data: URL; the gallery file otherwise).
+  // One request per subject. Nothing is saved: the results build up on the job
+  // (result.subjects[key] = { kind, definition, retention }) for the editor to fill in.
+  function startAnalyze(body = {}) {
+    const settings = readSettings();
+    const src = getSource(body.sourceId || settings.analyzeSourceId, settings);
+    if (!src) throw new Error("No LLM source is set up — open ⚙ LLM settings.");
+    const model = String(body.model || src.model || "").trim();
+    if (!model && src.kind !== "openai")
+      throw new Error(`Pick a model for ${src.name} in ⚙ LLM settings.`);
+    const proj = findProject(body.projectId);
+    if (!proj) throw new Error("unknown projectId");
+
+    const gallery = readJson(imagesFile);
+    const images = [];
+    const scaled = {};
+    const subjects = [];
+    for (const s of (Array.isArray(body.subjects) ? body.subjects : []).slice(0, 20)) {
+      const key = analyzeKey(s?.key);
+      if (!key || subjects.some((x) => x.key === key)) continue;
+      const imageIds = [];
+      for (const im of (Array.isArray(s.images) ? s.images : []).slice(0, 4)) {
+        const g = gallery.find((x) => x.id === String(im?.id));
+        if (!g || !(g.kind === "image" || String(g.mime || "").startsWith("image/"))) continue;
+        if (!images.includes(g)) {
+          if (images.length >= MAX_IMAGES) break;
+          images.push(g);
+          const url = String(im.url || "");
+          if (url.length < 8 * MiB && /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(url))
+            scaled[g.id] = url;
+        }
+        imageIds.push(g.id);
+      }
+      if (!imageIds.length) continue;
+      subjects.push({
+        key,
+        imageIds,
+        note: String(s.note || "").trim().slice(0, 2000),
+        retention: String(s.retention || "").trim().slice(0, 1000),
+      });
+    }
+    if (!subjects.length)
+      throw new Error("Nothing to analyse — give an image a @key in reference media first.");
+    const now = new Date().toISOString();
+    return enqueue({
+      id: randomUUID(),
+      kind: "analyze",
+      projectId: proj.id,
+      promptId: String(body.promptId || "").slice(0, 100) || null,
+      sourceId: src.id,
+      sourceName: src.name,
+      model,
+      format: "minimax",
+      subjects,
+      imageIds: images.map((g) => g.id),
+      images,
+      scaled, // image id → data: URL (stripped from the public view)
+      description: subjects.map((s) => `<${s.key}>`).join(", "), // what the job list shows
+      theme: "",
+      rules: "",
+      titlePrefix: "",
+      count: subjects.length,
+      done: 0,
+      created: [],
+      result: { subjects: {} },
+      status: "queued",
+      message: "Queued",
+      error: null,
+      cancelled: false,
+      createdAt: now,
+      updatedAt: now,
+    });
   }
 
   function cancelJob(id) {
@@ -896,13 +1499,19 @@ export function createLlm(deps) {
     if (!job) return null;
     if (["done", "failed", "cancelled"].includes(job.status)) return publicJob(job);
     job.cancelled = true;
-    const i = queue.indexOf(job);
-    if (i >= 0) queue.splice(i, 1);
+    for (const q of [queue, cpu.queue]) {
+      const i = q.indexOf(job);
+      if (i >= 0) q.splice(i, 1);
+    }
+    const e = new Error("Cancelled");
+    e.cancelled = true;
     if (runner?.job === job) {
-      const e = new Error("Cancelled");
-      e.cancelled = true;
       state.request?.abort(e);
       state.loading?.controller.abort(e);
+    }
+    if (cpu.runner?.job === job) {
+      cpu.request?.abort(e);
+      cpu.loading?.abort(e);
     }
     setJob(job, "cancelled", `Cancelled after ${job.done} of ${job.count}.`);
     return publicJob(job);
@@ -915,18 +1524,33 @@ export function createLlm(deps) {
     for (const j of finished.slice(JOB_KEEP)) jobs.delete(j.id);
   }
 
+  const jobFailed = (job) => (err) => {
+    if (job.cancelled) return;
+    job.error = err.message || String(err);
+    setJob(job, "failed", job.error);
+    log.error?.("LLM build failed:", job.error);
+  };
+
+  // The CPU lane. Its model stays loaded when the queue empties: it's in system RAM,
+  // out of ComfyUI's way, and the next ✨ Analyze starts at once.
+  function pumpCpu() {
+    if (cpu.runner || !cpu.queue.length) return;
+    const job = cpu.queue.shift();
+    cpu.runner = { job };
+    runJob(job)
+      .catch(jobFailed(job))
+      .finally(() => {
+        cpu.runner = null;
+        pumpCpu();
+      });
+  }
+
   function pump() {
     if (runner || !queue.length) return;
     const job = queue.shift();
     runner = { job };
     runJob(job)
-      .catch((err) => {
-        if (!job.cancelled) {
-          job.error = err.message || String(err);
-          setJob(job, "failed", job.error);
-          log.error?.("LLM build failed:", job.error);
-        }
-      })
+      .catch(jobFailed(job))
       .finally(async () => {
         runner = null;
         if (!queue.length) {
@@ -966,6 +1590,14 @@ export function createLlm(deps) {
       const opts = readSettings().options;
       if (state.inUse && state.inUse.sourceId === src.id && state.inUse.model === job.model)
         return; // already loaded and ours
+
+      // The CPU lane is using this same one-model server: let it finish.
+      const cpuJob = cpu.runner?.job;
+      if (cpuJob && sharesOneModel(src, getSource(cpuJob.sourceId))) {
+        setJob(job, "waiting", `Waiting for ${cpuJob.kind === "analyze" ? "the image analysis" : "a CPU job"} on ${src.name} to finish…`);
+        await sleep(2000);
+        continue;
+      }
 
       // 1. ComfyUI idle, and idle for long enough.
       if (await comfyQueueBusy()) {
@@ -1061,9 +1693,46 @@ export function createLlm(deps) {
     }
   }
 
+  // The CPU lane's version: no ComfyUI, no VRAM — just the model loaded.
+  async function acquireCpu(job, src) {
+    for (;;) {
+      checkCancel(job);
+      // A build has its model in this same one-model server right now: wait for it
+      // (a build paused by a generation has let go, so this doesn't wait on ComfyUI).
+      const held = state.loading || (runner && state.inUse);
+      if (held && held.model !== job.model && sharesOneModel(src, getSource(held.sourceId))) {
+        setJob(job, "waiting", `${src.name} is busy with a build (it holds one model at a time)…`);
+        await sleep(2000);
+        continue;
+      }
+      break;
+    }
+    if (!SOURCE_KINDS[src.kind].managed) return;
+    const info = await modelInfo(src, job.model);
+    if (!info)
+      throw new Error(`${src.name} has no model "${job.model}". Pick another in ⚙ LLM settings.`);
+    if (info.loaded) return;
+    // Loading here replaces whatever a build left loaded in the same server.
+    if (state.inUse && sharesOneModel(src, getSource(state.inUse.sourceId))) state.inUse = null;
+    const controller = new AbortController();
+    cpu.loading = controller;
+    setJob(job, "loading", `Loading ${job.model} in ${src.name} (CPU)…`);
+    const t0 = Date.now();
+    try {
+      await loadModel(src, job.model, controller.signal);
+    } catch (err) {
+      if (job.cancelled) checkCancel(job);
+      throw new Error(`Couldn't load ${job.model}: ${err.message}`);
+    } finally {
+      cpu.loading = null;
+    }
+    log.log?.(`LLM: loaded ${job.model} on the CPU in ${((Date.now() - t0) / 1000).toFixed(1)}s.`);
+  }
+
   async function runJob(job) {
     const src = getSource(job.sourceId);
     if (!src) throw new Error("That LLM source was removed from settings.");
+    const lane = job.cpu ? cpu : state; // whose `request` this job's chat call is
     const imageParts = job.images.map((g) => {
       const file = path.join(inputDir, g.storedName);
       let buf;
@@ -1074,36 +1743,46 @@ export function createLlm(deps) {
       }
       return {
         g,
-        url: `data:${g.mime || "image/png"};base64,${buf.toString("base64")}`,
+        url: job.scaled?.[g.id] || `data:${g.mime || "image/png"};base64,${buf.toString("base64")}`,
       };
     });
 
     // While a request is in flight, watch ComfyUI's queue too (the websocket may
     // not be connected) so a run started elsewhere still takes the GPU back.
-    ensureComfyWs();
-    const watch = setInterval(async () => {
-      if (state.request && (await comfyQueueBusy()))
-        yieldForGeneration("ComfyUI started a run").catch(() => {});
-    }, 3000);
+    if (!job.cpu) ensureComfyWs();
+    const watch =
+      job.cpu ? null : (
+        setInterval(async () => {
+          if (state.request && (await comfyQueueBusy()))
+            yieldForGeneration("ComfyUI started a run").catch(() => {});
+        }, 3000)
+      );
 
     let failures = 0;
     try {
       while (job.done < job.count) {
         checkCancel(job);
-        await acquire(job, src);
+        if (job.cpu) await acquireCpu(job, src);
+        else await acquire(job, src);
         checkCancel(job);
         const n = job.done + 1;
+        const subject = job.kind === "analyze" ? job.subjects[job.done] : null;
+        const parts =
+          subject ? imageParts.filter((p) => subject.imageIds.includes(p.g.id)) : imageParts;
         const doing =
           job.kind === "revise" ? "Revising"
-          : job.clips?.length ?
-            `Writing ${job.variations > 1 ? `video ${variationOf(job) + 1} of ${job.variations}, ` : ""}clip ${clipOf(job) + 1} of ${job.clips.length}`
-          : `Writing prompt ${n} of ${job.count}`;
+          : subject ?
+            `Looking at <${subject.key}>${job.count > 1 ? ` (${n} of ${job.count})` : ""}`
+          : job.kind === "shots" ?
+            `Writing a list of ${job.shotCount} shot${job.shotCount === 1 ? "" : "s"}`
+          : job.count > 1 ? `Writing prompt ${n} of ${job.count} around its shots`
+          : "Writing the prompt around its shots";
         setJob(job, "generating", `${doing}…`);
         const controller = new AbortController();
-        state.request = controller;
+        lane.request = controller;
         let result;
         try {
-          result = await writePrompt(job, src, imageParts, controller.signal, (chars, fix) =>
+          result = await writePrompt(job, src, parts, controller.signal, (chars, fix) =>
             setJob(
               job,
               undefined,
@@ -1117,44 +1796,72 @@ export function createLlm(deps) {
           if (reason?.cancelled || job.cancelled) checkCancel(job);
           if (reason?.yielded) continue; // resumes after the generation
           failures++;
-          log.error?.(`LLM: prompt ${n} failed:`, err.message);
+          log.error?.(`LLM: ${job.kind === "shots" ? "shot list" : subject ? `<${subject.key}>` : `prompt ${n}`} failed:`, err.message);
           if (failures >= 3) throw err;
-          setJob(job, undefined, `Prompt ${n} failed (${err.message}) — retrying…`);
+          setJob(job, undefined, `That failed (${err.message}) — retrying…`);
           await sleep(2000);
           continue;
         } finally {
-          state.request = null;
+          lane.request = null;
         }
         failures = 0;
+        if (subject) {
+          // The editor fills this subject in while the next one is looked at.
+          job.result = { subjects: { ...job.result.subjects, [subject.key]: result } };
+          job.done++;
+          continue;
+        }
         if (job.kind === "revise") {
           job.result = result; // the editor shows it; nothing is saved here
           job.done = 1;
           break;
         }
-        const saved = savePrompt(job, result, n);
-        job.created.push({ id: saved.id, title: saved.title, llmTitle: result.title });
-        if (job.clips?.length) {
-          job.clipsDone.push(result);
-          if (job.clipsDone.length === job.clips.length) {
-            job.clipsDone = []; // the next variation starts a group of its own
-            job.group = null;
+        if (job.kind === "shots") {
+          // The wrong number of shots is asked for once more, then taken as it is —
+          // the user can add or remove shots.
+          if (result.shots.length !== job.shotCount && !job.recounted) {
+            job.recounted = true;
+            log.warn?.(`LLM: wrote ${result.shots.length} shots, not ${job.shotCount} — asking again.`);
+            continue;
           }
+          saveShotList(job, result);
+          job.result = result;
+          job.done = 1;
+          break;
         }
+        const saved = savePrompt(job, result, n);
+        job.created.push({ id: saved.id, title: saved.title });
+        job.clipsDone.push(result);
         job.done++;
       }
       if (job.kind === "revise") {
         setJob(job, "done", "Revision ready — review it in the prompt editor.");
         return;
       }
+      if (job.kind === "analyze") {
+        setJob(job, "done", `Described ${job.count} subject${job.count === 1 ? "" : "s"}.`);
+        return;
+      }
+      if (job.kind === "shots") {
+        const got = job.result.shots.length;
+        setJob(
+          job,
+          "done",
+          `Shot list ready: ${got} shot${got === 1 ? "" : "s"}` +
+            (got !== job.shotCount ? ` (${job.shotCount} were asked for)` : "") +
+            ". Edit it, add breaks, then ✨ Write prompts.",
+        );
+        return;
+      }
       setJob(
         job,
         "done",
-        job.clips?.length ?
-          `Saved ${job.variations} prompt group${job.variations === 1 ? "" : "s"} of ${job.clips.length} clips to Saved Prompts.`
-        : `Saved ${job.count} prompt${job.count === 1 ? "" : "s"} to Saved Prompts.`,
+        job.count > 1 ?
+          `Saved a prompt group of ${job.count} prompts to Saved Prompts.`
+        : "Saved the prompt to Saved Prompts.",
       );
     } finally {
-      clearInterval(watch);
+      if (watch) clearInterval(watch);
     }
   }
 
@@ -1232,9 +1939,26 @@ export function createLlm(deps) {
     ];
   }
 
-  function buildMessages(job, imageParts, n) {
-    if (job.kind === "revise") return buildReviseMessages(job, imageParts);
-    const opts = readSettings().options;
+  // The system prompt a job runs under. Its last line is the JSON shape of the reply.
+  function instructionsFor(job, opts = readSettings().options) {
+    const whole = opts.instructions || DEFAULT_INSTRUCTIONS;
+    if (job.kind === "analyze") return ANALYZE_INSTRUCTIONS;
+    if (job.kind === "shots") return shotListInstructions(job.format);
+    if (job.kind === "revise")
+      return (
+        job.format === "minimax" ? MINIMAX_INSTRUCTIONS
+        : job.format === "minimax_t2v" ? MINIMAX_T2V_INSTRUCTIONS
+        : whole
+      );
+    return (
+      job.format === "minimax" ? MINIMAX_AROUND_INSTRUCTIONS
+      : job.format === "minimax_t2v" ? MINIMAX_T2V_AROUND_INSTRUCTIONS
+      : `${whole}\n\n${DEFAULT_AROUND}`
+    );
+  }
+
+  // The request's opening lines: the reference images, then what was asked for.
+  function requestLines(job, imageParts) {
     const lines = [];
     if (imageParts.length) {
       lines.push(
@@ -1253,62 +1977,10 @@ export function createLlm(deps) {
     if (job.description) lines.push(`What should happen: ${job.description}`);
     if (job.theme) lines.push(`Theme / style: ${job.theme}`);
     if (job.rules) lines.push("", "Follow the rules in the system prompt.");
-    const clips = job.clips || [];
-    const k = clipOf(job);
-    if (clips.length) {
-      // One clip of a longer video: a whole prompt of its own.
-      lines.push(
-        "",
-        `The video is ${job.duration} seconds long, made as ${clips.length} clips that are generated separately and joined: ${clips
-          .map((c, i) => `clip ${i + 1} is ${c} seconds`)
-          .join(", ")}.`,
-        `Write clip ${k + 1} now — ${clips[k]} seconds; its shots' seconds add up to ${clips[k]}. It covers ${k === 0 ? "the opening" : k === clips.length - 1 ? "the ending" : "the middle"} of what should happen.`,
-        "This clip is generated on its own and never sees the other clips, so its prompt stands alone: its own subjects, summary and retention for what is in it, and an opening shot that re-establishes who is where. Keep the subjects (with the same keys), setting and style consistent from clip to clip, and carry on exactly where the previous clip ended.",
-      );
-      if (job.format === "minimax")
-        lines.push(
-          `Also give "pictures": the numbers of the reference images this clip needs, e.g. [1, 3] — only those are sent with it. Refer to images by those same numbers.`,
-        );
-      if (k === 0)
-        lines.push(`Also give "video_title": a short title for the whole video, at most 8 words.`);
-      if (job.clipsDone.length) {
-        lines.push("", "The clips written so far:");
-        job.clipsDone.forEach((c, i) => {
-          const mm = c.minimax || {};
-          lines.push(
-            `Clip ${i + 1}: ${mm.summary || ""}`.trim(),
-            ...(mm.shots || []).map((x, j) => `  Shot ${j + 1}${x.len ? ` (${x.len}s)` : ""}: ${x.text}`),
-          );
-        });
-      }
-    } else if (job.duration) lines.push(`Clip length: ${job.duration} seconds.`);
-    const variations = job.variations || job.count;
-    if (variations > 1) {
-      const v = clips.length ? variationOf(job) : n - 1;
-      lines.push("");
-      lines.push(
-        `This is ${clips.length ? "video" : "prompt"} ${v + 1} of ${variations} variations on the request. Make it clearly different from the others — a different angle, beat, staging or camera approach — while keeping the same subjects and theme.`,
-      );
-      const others = clips.length ?
-          job.created.filter((_, i) => i % clips.length === 0 && Math.floor(i / clips.length) < v)
-        : job.created;
-      if (others.length && k === 0)
-        lines.push(`Already written: ${others.map((c) => `"${c.llmTitle || c.title}"`).join(", ")}.`);
-    }
-    lines.push("");
-    const extra =
-      !clips.length ? ""
-      : job.format === "minimax" ? (k === 0 ? ", pictures and video_title" : " and pictures")
-      : k === 0 ? " and video_title"
-      : "";
-    lines.push(
-      job.format === "minimax" ?
-        `Reply with only the JSON object with the fields title, subjects, summary, retention, style, shots, soundscape and music${extra}.`
-      : job.format === "minimax_t2v" ?
-        `Reply with only the JSON object with the fields title, style, shots, soundscape and music${extra}.`
-      : 'Reply with only the JSON object: {"title": "…", "prompt": "…"}',
-    );
+    return lines;
+  }
 
+  function chatMessages(job, lines, imageParts) {
     const content = [{ type: "text", text: lines.join("\n") }];
     imageParts.forEach(({ url }, i) => {
       content.push({ type: "text", text: `<Picture ${i + 1}>:` });
@@ -1318,9 +1990,7 @@ export function createLlm(deps) {
       {
         role: "system",
         content:
-          (job.format === "minimax" ? MINIMAX_INSTRUCTIONS
-          : job.format === "minimax_t2v" ? MINIMAX_T2V_INSTRUCTIONS
-          : opts.instructions || DEFAULT_INSTRUCTIONS) +
+          instructionsFor(job) +
           (job.rules ?
             "\n\nRULES — the user's own rules for this prompt. Follow every one of them; " +
             "where one conflicts with the guidance above, the rule wins (but still reply in the JSON format asked for):\n" +
@@ -1331,27 +2001,132 @@ export function createLlm(deps) {
     ];
   }
 
-  // One prompt from the LLM, streamed (a long non-streamed reply would trip Node's
-  // 5-minute header timeout).
+  const secs = (n) => `${+Number(n).toFixed(3)}s`;
+  const shotLines = (shots) =>
+    shots.map((s, i) => `  Shot ${i + 1} (${secs(s.len)}): ${s.text.trim().replace(/\s*\n\s*/g, " ")}`);
+
+  // ✨ Analyze: the subject being looked at (job.subjects[job.done]) and its image(s).
+  function buildAnalyzeMessages(job, imageParts) {
+    const s = job.subjects[job.done];
+    const lines = [
+      `The subject's key is <${s.key}>. ${imageParts.length > 1 ? `Its ${imageParts.length} reference images follow` : "Its reference image follows"}.`,
+    ];
+    if (s.note) lines.push(`The author's notes on <${s.key}>: ${s.note}`);
+    if (s.retention) lines.push(`The author's current retention line: ${s.retention}`);
+    lines.push("Reply with only the JSON object with the fields kind, definition and retention.");
+    const content = [{ type: "text", text: lines.join("\n") }];
+    for (const { url } of imageParts) content.push({ type: "image_url", image_url: { url } });
+    return [
+      { role: "system", content: ANALYZE_INSTRUCTIONS },
+      { role: "user", content },
+    ];
+  }
+
+  function buildMessages(job, imageParts) {
+    if (job.kind === "analyze") return buildAnalyzeMessages(job, imageParts);
+    if (job.kind === "revise") return buildReviseMessages(job, imageParts);
+    const lines = requestLines(job, imageParts);
+    lines.push("");
+    if (job.kind === "shots") {
+      const n = `${job.shotCount} shot${job.shotCount === 1 ? "" : "s"}`;
+      lines.push(
+        job.duration ?
+          `Write exactly ${n} for a video ${secs(job.duration)} long: their seconds add up to ${+job.duration}.`
+        : `Write exactly ${n}, each as long as its action needs.`,
+        "",
+        "Reply with only the JSON object with the fields title and shots.",
+      );
+      return chatMessages(job, lines, imageParts);
+    }
+
+    // One prompt: everything around its shots.
+    const groups = job.groups;
+    const k = job.done;
+    const many = groups.length > 1;
+    const structured = job.format !== "default";
+    if (many) {
+      lines.push(
+        `The video is ${secs(job.duration)} long, made as ${groups.length} clips that are generated separately and edited together in order. Its shots are already written and final:`,
+      );
+      groups.forEach((g, i) => {
+        lines.push(`Clip ${i + 1} (${secs(job.clips[i])})${i === k ? " — the clip to write now" : ""}:`, ...shotLines(g));
+      });
+      lines.push(
+        "",
+        `Write the prompt for clip ${k + 1}: every field except its shots. The clip is generated on its own and never sees the others, so write for what is in clip ${k + 1}'s shots only` +
+          (job.format === "minimax" ? " and define every subject they use" : "") +
+          `. Keep ${structured ? "the subjects (same keys, same definitions), " : ""}the setting and the style the same from clip to clip.`,
+      );
+      if (job.format === "minimax" && imageParts.length > 1)
+        lines.push(
+          `Also give "pictures": the numbers of the reference images this clip needs, e.g. [1, 3] — only those are sent with it. Refer to images by those same numbers.`,
+        );
+      if (job.clipsDone.length) {
+        lines.push("", "Already written for the earlier clips — stay consistent with it:");
+        if (structured) {
+          const first = job.clipsDone[0].minimax;
+          if (first.style) lines.push(`Style: ${first.style}`);
+          const subjects = new Map();
+          for (const c of job.clipsDone)
+            for (const x of c.minimax.subjects || [])
+              if (x.key && !subjects.has(x.key)) subjects.set(x.key, x.definition);
+          for (const [key, definition] of subjects) lines.push(`Subject <${key}>: ${definition}`);
+          const music = job.clipsDone[job.clipsDone.length - 1].minimax.music;
+          if (music) lines.push(`Music: ${music}`);
+        } else
+          job.clipsDone.forEach((c, i) => {
+            if (c.intro) lines.push(`Clip ${i + 1} intro: ${c.intro}`);
+            if (c.sound) lines.push(`Clip ${i + 1} sound: ${c.sound}`);
+          });
+      }
+    } else
+      lines.push(
+        `The clip is ${secs(job.duration)} long. Its shots are already written and final:`,
+        ...shotLines(groups[0]),
+        "",
+        "Write the prompt around them: every field except the shots.",
+      );
+    lines.push(
+      "",
+      job.format === "minimax" ?
+        `Reply with only the JSON object with the fields title, subjects, summary, retention, style, soundscape and music${many && imageParts.length > 1 ? ", and pictures" : ""}.`
+      : job.format === "minimax_t2v" ?
+        "Reply with only the JSON object with the fields title, style, soundscape and music."
+      : 'Reply with only the JSON object: {"title": "…", "intro": "…", "sound": "…"}',
+    );
+    return chatMessages(job, lines, imageParts);
+  }
+
+  // One reply from the LLM, streamed (a long non-streamed reply would trip Node's
+  // 5-minute header timeout) and read into what the job needs: a shot list, a
+  // revision, or a prompt — whose shots are the job's own, not the model's.
   async function writePrompt(job, src, imageParts, signal, onProgress) {
     const opts = readSettings().options;
     const text = await complete(
       job,
       src,
-      buildMessages(job, imageParts, job.done + 1),
-      opts.temperature,
+      buildMessages(job, imageParts),
+      job.kind === "analyze" ? 0.3 : opts.temperature, // a description, not invention
       imageParts.length > 0,
       signal,
       onProgress,
     );
-    if (!job.format || job.format === "default") return parseReply(text);
-    // A MiniMax reply that isn't its JSON goes back to the model to be fixed — a
-    // text-only request, so the images aren't processed again. After REPAIR_ATTEMPTS
-    // the reply is thrown away: the error makes runJob write the prompt afresh.
+    // A revised Default prompt is read leniently: a reply that isn't JSON is the prompt.
+    if (job.kind === "revise" && job.format === "default") return parseReply(text);
+    const shots = job.kind ? null : job.groups[job.done];
+    const parse =
+      job.kind === "analyze" ? (t) => parseAnalysis(t, job.subjects[job.done].key)
+      : job.kind === "shots" ? (t) => parseShotList(t, job.duration)
+      : job.kind === "revise" ? (t) => parseStructuredReply(t, job.format)
+      : job.format === "default" ? (t) => parseAroundReply(t, shots)
+      : (t) => parseStructuredReply(t, job.format, shots);
+    // A reply that isn't its JSON goes back to the model to be fixed — a text-only
+    // request, so the images aren't processed again. After REPAIR_ATTEMPTS the reply
+    // is thrown away: the error makes runJob ask afresh.
     let reply = text;
     for (let fix = 1; ; fix++) {
       try {
-        return parseStructuredReply(reply, job.format);
+        return parse(reply);
       } catch (err) {
         if (fix > REPAIR_ATTEMPTS || !stripThinking(text)) throw err;
         log.warn?.(`LLM: ${err.message} Asking it to fix the JSON (${fix} of ${REPAIR_ATTEMPTS}).`);
@@ -1369,11 +2144,9 @@ export function createLlm(deps) {
     }
   }
 
-  // Ask the model to turn its own malformed reply into the JSON the format needs.
+  // Ask the model to turn its own malformed reply into the JSON the job needs.
   function buildRepairMessages(job, text, problem) {
-    const shape = (job.format === "minimax" ? MINIMAX_INSTRUCTIONS : MINIMAX_T2V_INSTRUCTIONS)
-      .split("\n")
-      .pop();
+    const shape = instructionsFor(job).split("\n").pop();
     return [
       {
         role: "system",
@@ -1480,32 +2253,44 @@ export function createLlm(deps) {
     return text;
   }
 
+  // The model's shot list → the project's builder file, where the user works on it.
+  function saveShotList(job, result) {
+    const proj = findProject(job.projectId);
+    if (!proj) throw new Error("The project was deleted.");
+    writeBuilder(proj, {
+      shotList: cleanShotList({
+        title: result.title,
+        shots: result.shots,
+        jobId: job.id,
+        at: new Date().toISOString(),
+      }),
+    });
+  }
+
+  // Prompt `n` (1-based) of a build: the model's fields around the job's own shots.
   function savePrompt(job, result, n) {
     const proj = findProject(job.projectId);
     if (!proj) throw new Error("The project was deleted.");
-    let title = result.title || `Prompt ${n}`;
-    if (job.titlePrefix) title = `${job.titlePrefix} — ${title}`;
-    const structured = job.format && job.format !== "default";
+    const prefixed = (t) => (job.titlePrefix ? `${job.titlePrefix} — ${t}` : t);
+    const structured = job.format !== "default";
     let images = job.format === "minimax_t2v" ? [] : job.images;
     let minimax = result.minimax;
-    let duration = job.duration;
+    let title = prefixed(job.videoTitle || result.title || `Prompt ${n}`);
     let group;
-    const clips = job.clips || [];
-    if (clips.length) {
-      const k = clipOf(job);
-      duration = clips[k];
-      if (!job.group) {
-        let name = result.videoTitle || result.title || `Video ${variationOf(job) + 1}`;
-        if (job.titlePrefix) name = `${job.titlePrefix} — ${name}`;
-        job.group = { id: randomUUID(), name: name.slice(0, 200) };
-      }
+    if (job.groups.length > 1) {
+      job.group ||= {
+        id: randomUUID(),
+        name: prefixed(job.videoTitle || result.title || "Video").slice(0, 200),
+      };
       group = job.group;
-      title = `${result.title || group.name} — ${k + 1}/${clips.length}`;
+      title = `${result.title || group.name} — ${n}/${job.groups.length}`;
       // Only the images this clip uses, renumbered: its <Picture N> labels count from
-      // its own reference list.
-      if (images.length) ({ images, minimax } = clipImages(images, minimax, result.pictures));
+      // its own reference list (the one change a shot's text can see — a label that
+      // would otherwise point at the wrong image).
+      if (structured && images.length)
+        ({ images, minimax } = clipImages(images, minimax, result.pictures));
     }
-    // A batch reads top to bottom in the order it was written: each prompt goes
+    // A build reads top to bottom in the order it was written: each prompt goes
     // right after the previous one from this build (the first goes on top), with its
     // weight so it stays there even if the list was re-ordered meanwhile.
     const list = readPrompts(proj);
@@ -1517,7 +2302,7 @@ export function createLlm(deps) {
       prompt: structured ? "" : result.prompt,
       ...(structured ? { minimax } : {}),
       ...(group ? { group } : {}),
-      duration,
+      duration: job.clips[n - 1],
       weight: at >= 0 ? list[at].weight ?? 0 : 0,
       refs: images.map((g) => ({ id: g.id, kind: "image", name: g.name })),
     });
@@ -1542,14 +2327,6 @@ export function createLlm(deps) {
     return withRefDetails ? withRefDetails([entry])[0] : entry;
   }
 
-  // Which variation (0-based) and which of its clips the next prompt is.
-  function variationOf(job) {
-    return Math.floor(job.done / Math.max(1, job.clips?.length || 1));
-  }
-  function clipOf(job) {
-    return job.clips?.length ? job.done % job.clips.length : 0;
-  }
-
   return {
     readSettings,
     publicSettings,
@@ -1558,14 +2335,16 @@ export function createLlm(deps) {
     listModels,
     loadModel,
     unloadModel,
+    startShots,
     startBuild,
     startRevise,
+    startAnalyze,
     readBuilder: (projectId) => {
       const proj = findProject(projectId);
       if (!proj) throw new Error("unknown projectId");
       return readBuilder(proj);
     },
-    saveDraft,
+    saveBuilder,
     cancelJob,
     listJobs,
     status,
@@ -1581,32 +2360,163 @@ export function createLlm(deps) {
       if (src && SOURCE_KINDS[src.kind].managed) await unloadModel(src, t.model);
       return true;
     },
+    // A "CPU only" server's model stays loaded on purpose; this is how it's let go
+    // (⚙ LLM settings → ⏏ Unload). False when it wasn't loaded.
+    unloadCpu: async (sourceId) => {
+      const src = sourceId ? getSource(sourceId) : null;
+      if (!src) throw new Error("That server isn't saved in the settings.");
+      if (!src.cpuOnly || !SOURCE_KINDS[src.kind].managed)
+        throw new Error(`${src.name} isn't a CPU-only server GENie loads models on.`);
+      if (cpu.runner && cpu.runner.job.sourceId === src.id)
+        throw new Error("It's in use — cancel the job first.");
+      // The same one-model server may be holding a build's model instead.
+      const held = state.loading || state.inUse;
+      if (held && sharesOneModel(src, getSource(held.sourceId)))
+        throw new Error(`${src.name} is busy with a build.`);
+      const info = await modelInfo(src, src.model);
+      if (!info?.loaded) return false;
+      await unloadModel(src, src.model);
+      log.log?.(`LLM: unloaded ${src.model} from ${src.name} (CPU).`);
+      return true;
+    },
     _state: state,
   };
 }
 
-// How many times a malformed MiniMax reply goes back to the model to be fixed.
+// How many times a malformed reply goes back to the model to be fixed.
 const REPAIR_ATTEMPTS = 3;
 
-// A MiniMax build longer than this is written as a prompt group, one prompt per clip
-// (the UI's CLIP_MAX_SECONDS).
-const CLIP_MAX_SECONDS = 15;
-const CLIP_MIN_SECONDS = 4; // the shortest clip the video models make
+// The JSON in a reply — an object, or an array when the model sent a bare list — or
+// null. Tolerates <think> blocks, ``` fences, chatter around it and raw line breaks
+// inside its strings.
+function replyJson(raw) {
+  let t = stripThinking(raw);
+  const fence = /```(?:json)?\s*([\s\S]*?)```/i.exec(t);
+  if (fence) t = fence[1].trim();
+  const between = (open, close) => {
+    const a = t.indexOf(open);
+    const b = t.lastIndexOf(close);
+    return a >= 0 && b > a ? t.slice(a, b + 1) : null;
+  };
+  const cands = [between("{", "}"), between("[", "]")].filter(Boolean);
+  if (t.startsWith("[")) cands.reverse();
+  for (const cand of cands)
+    for (const attempt of [cand, escapeRawNewlines(cand)]) {
+      try {
+        const j = JSON.parse(attempt);
+        if (j && typeof j === "object") return j;
+      } catch {
+        /* try the next shape */
+      }
+    }
+  return null;
+}
 
-// The lengths of the clips a video of `total` seconds is made of: full clips, then
-// the remainder — topped up from the clip before it when too short to generate.
-// [] when one clip is enough.
-export function clipLengths(total) {
-  const t = Math.round(Number(total) || 0);
-  if (t <= CLIP_MAX_SECONDS) return [];
-  const out = Array(Math.floor(t / CLIP_MAX_SECONDS)).fill(CLIP_MAX_SECONDS);
-  const rest = t % CLIP_MAX_SECONDS;
-  if (rest) {
-    const last = Math.max(rest, CLIP_MIN_SECONDS);
-    out[out.length - 1] -= last - rest;
-    out.push(last);
+const replyText = (v) => String(v ?? "").replace(/\\n/g, "\n").trim();
+const replyTitle = (v) => replyText(v).replace(/^["']|["']$/g, "").slice(0, 120);
+
+// A reply's "shots" → [{ len, text }], the empty ones dropped. A reply that gave start
+// times instead of lengths: a shot lasts until the next one starts.
+function readShots(list) {
+  const secs = (v) => {
+    if (v === null || v === undefined || v === "") return null;
+    if (typeof v === "number") return Number.isFinite(v) ? Math.max(0, v) : null;
+    const m = /^(?:(\d+):)?(\d+(?:\.\d+)?)/.exec(String(v).trim());
+    return m ? Number(m[1] || 0) * 60 + Number(m[2]) : null;
+  };
+  const shots = (Array.isArray(list) ? list : [])
+    .map((x) => (typeof x === "string" ? { text: x } : x || {}))
+    .map((x) => ({
+      len: secs(x.seconds ?? x.len ?? x.length ?? x.duration),
+      at: secs(x.at ?? x.time),
+      text: replyText(x.text ?? x.description),
+    }))
+    .filter((x) => x.text);
+  if (!shots.some((x) => x.len != null) && shots.some((x) => x.at != null))
+    shots.forEach((x, i) => {
+      const from = i === 0 ? 0 : x.at;
+      const to = shots[i + 1]?.at;
+      x.len = from == null || to == null ? null : Math.max(0, Math.round((to - from) * 1000) / 1000);
+    });
+  return shots.map(({ len, text }) => ({ len, text }));
+}
+
+// Step 1's reply → { title, shots: [{ len, text }] }, every shot with a length and —
+// when the video's length is known — the lengths adding up to it (see fitShotLengths).
+// Throws when there are no shots in it, so the build asks again.
+export function parseShotList(raw, total) {
+  const j = replyJson(raw);
+  const shots = readShots(Array.isArray(j) ? j : j?.shots ?? j?.shot_list);
+  if (!shots.length) throw new Error("The LLM's reply wasn't a JSON shot list.");
+  const lens = fitShotLengths(shots.map((s) => s.len), total);
+  return {
+    title: Array.isArray(j) ? "" : replyTitle(j.title ?? j.video_title),
+    shots: shots.map((s, i) => ({ len: lens[i], text: s.text })),
+  };
+}
+
+// Shot lengths that add up to `total` seconds. Models are loose with arithmetic: a
+// missing length gets the average of the others, and a list that's over or under is
+// scaled to fit, in whole seconds (at least 1 each) while there's a second per shot.
+// With no total, lengths are only filled in and rounded.
+export function fitShotLengths(lens, total) {
+  const n = lens.length;
+  const r3 = (x) => Math.round(x * 1000) / 1000;
+  const known = lens.filter((x) => x > 0);
+  const fill = known.length ? known.reduce((a, x) => a + x, 0) / known.length : total > 0 ? total / n : 5;
+  const out = lens.map((x) => (x > 0 ? x : fill));
+  if (!(total > 0)) return out.map((x) => Math.max(1, Math.round(x)));
+  const sum = out.reduce((a, x) => a + x, 0);
+  if (Math.abs(sum - total) < 0.0005) return out.map(r3);
+  const whole = Math.floor(total);
+  if (whole < n) return out.map((x) => r3((x * total) / sum));
+  const scaled = out.map((x) => (x * whole) / sum);
+  const fit = scaled.map((x) => Math.max(1, Math.floor(x)));
+  // Hand out (or take back) the seconds rounding left over, to the shots it shorted most.
+  let left = whole - fit.reduce((a, x) => a + x, 0);
+  while (left !== 0) {
+    const step = Math.sign(left);
+    let pick = -1;
+    fit.forEach((x, i) => {
+      if (step < 0 && x <= 1) return;
+      if (pick < 0 || (scaled[i] - x) * step > (scaled[pick] - fit[pick]) * step) pick = i;
+    });
+    fit[pick] += step;
+    left -= step;
   }
-  return out;
+  fit[n - 1] = r3(fit[n - 1] + (total - whole)); // a fraction of a second, if any
+  return fit;
+}
+
+// A Default prompt's text: the intro, then the shots exactly as written — each later
+// one under the time it starts, as the default instructions mark a cut — then the sound.
+export function composeDefaultPrompt(intro, shots, sound) {
+  const clock = (sec) => {
+    const m = Math.floor(sec / 60);
+    return `${String(m).padStart(2, "0")}:${(sec - m * 60).toFixed(3).padStart(6, "0")}`;
+  };
+  let t = 0;
+  const paras = shots.map((s, i) => {
+    const at = t;
+    t += Number(s.len) || 0;
+    return i === 0 ? s.text.trim() : `At ${clock(at)}: ${s.text.trim()}`;
+  });
+  return [intro, ...paras, sound].filter((p) => String(p || "").trim()).join("\n\n");
+}
+
+// Step 2's reply for the Default format → { title, intro, sound, prompt }, the prompt
+// put together around `shots`. Throws when the reply isn't its JSON.
+export function parseAroundReply(raw, shots) {
+  const j = replyJson(raw);
+  if (!j || Array.isArray(j)) throw new Error("The LLM's reply wasn't the JSON asked for.");
+  const intro = replyText(j.intro ?? j.introduction ?? j.opening);
+  const sound = /^none\.?$/i.test(replyText(j.sound)) ? "" : replyText(j.sound ?? j.audio);
+  return {
+    title: replyTitle(j.title),
+    intro,
+    sound,
+    prompt: composeDefaultPrompt(intro, shots, sound),
+  };
 }
 
 // One clip's references: the images it listed in `pictures` plus any its text cites
@@ -1692,61 +2602,26 @@ export function parseReply(raw) {
   return { title: "", prompt: t.replace(/^\s*prompt\s*:\s*/i, "").trim() };
 }
 
-// A MiniMax build's reply → { title, minimax, pictures?, videoTitle? } in the stored
-// shape (see app.js, "Stored shape (p.minimax)"). Throws when there's no usable JSON,
-// so the build retries; a reply with only a "prompt" string becomes a single shot.
-// `pictures` and `videoTitle` come from a clip of a longer build (see buildMessages).
-export function parseStructuredReply(raw, format) {
-  let t = stripThinking(raw);
-  const fence = /```(?:json)?\s*([\s\S]*?)```/i.exec(t);
-  if (fence) t = fence[1].trim();
-  const a = t.indexOf("{");
-  const b = t.lastIndexOf("}");
-  let j = null;
-  if (a >= 0 && b > a) {
-    const cand = t.slice(a, b + 1);
-    for (const attempt of [cand, escapeRawNewlines(cand)]) {
-      try {
-        j = JSON.parse(attempt);
-        break;
-      } catch {
-        /* try the next shape */
-      }
-    }
-  }
-  if (!j || typeof j !== "object")
+// A MiniMax reply → { title, minimax, pictures? } in the stored shape (see app.js,
+// "Stored shape (p.minimax)"). Throws when there's no usable JSON, so the job retries.
+// With `fixedShots` (a build: the user's own shots) the reply's shots, if it sent any,
+// are ignored and those go in untouched; without (a revision) the shots are the
+// reply's, and a reply with only a "prompt" string becomes a single shot.
+// `pictures` comes from one prompt of a group (see buildMessages).
+export function parseStructuredReply(raw, format, fixedShots = null) {
+  const j = replyJson(raw);
+  if (!j || Array.isArray(j))
     throw new Error("The LLM's reply wasn't the JSON the MiniMax format needs.");
-  const str = (v) => String(v ?? "").replace(/\\n/g, "\n").trim();
+  const str = replyText;
   const key = (k) =>
     str(k)
       .replace(/^@+/, "")
       .replace(/^<|>$/g, "")
       .replace(/\s+/g, "_")
       .toLowerCase();
-  const secs = (v) => {
-    if (v === null || v === undefined || v === "") return null;
-    if (typeof v === "number") return Number.isFinite(v) ? Math.max(0, v) : null;
-    const m = /^(?:(\d+):)?(\d+(?:\.\d+)?)/.exec(String(v).trim());
-    return m ? Number(m[1] || 0) * 60 + Number(m[2]) : null;
-  };
-  let shots = (Array.isArray(j.shots) ? j.shots : [])
-    .map((x) => (typeof x === "string" ? { text: x } : x || {}))
-    .map((x) => ({
-      len: secs(x.seconds ?? x.len ?? x.length ?? x.duration),
-      at: secs(x.at ?? x.time),
-      text: str(x.text ?? x.description),
-    }))
-    .filter((x) => x.text);
+  let shots = fixedShots ? fixedShots.map(({ len, text }) => ({ len, text })) : readShots(j.shots);
   if (!shots.length && str(j.prompt)) shots = [{ len: null, text: str(j.prompt) }];
   if (!shots.length) throw new Error("The LLM's reply had no shots.");
-  // A reply that gave start times instead of lengths: a shot lasts until the next starts.
-  if (!shots.some((x) => x.len != null) && shots.some((x) => x.at != null))
-    shots.forEach((x, i) => {
-      const from = i === 0 ? 0 : x.at;
-      const to = shots[i + 1]?.at;
-      x.len = from == null || to == null ? null : Math.max(0, Math.round((to - from) * 1000) / 1000);
-    });
-  shots = shots.map(({ len, text }) => ({ len, text }));
   const mm = {
     summary: format === "minimax" ? str(j.summary) : "",
     style: str(j.style),
@@ -1767,15 +2642,41 @@ export function parseStructuredReply(raw, format) {
       : [];
     for (const [k, v] of pairs) if (key(k) && str(v)) mm.retention[`<${key(k)}>`] = str(v);
   }
-  const out = {
-    title: str(j.title).replace(/^["']|["']$/g, "").slice(0, 120),
-    minimax: mm,
-  };
+  const out = { title: replyTitle(j.title), minimax: mm };
   const pics = j.pictures ?? j.images ?? j.references;
   if (Array.isArray(pics)) out.pictures = pics;
-  const vt = str(j.video_title ?? j.videoTitle ?? j.group_title);
-  if (vt) out.videoTitle = vt.replace(/^["']|["']$/g, "").slice(0, 120);
   return out;
+}
+
+// A subject key as the editor writes it (see normKey in app.js).
+const analyzeKey = (k) =>
+  String(k ?? "")
+    .trim()
+    .replace(/^@+/, "")
+    .replace(/^<|>$/g, "")
+    .replace(/\s+/g, "_")
+    .replace(/[^\p{L}\p{N}_-]/gu, "")
+    .toLowerCase()
+    .slice(0, 40);
+
+// An ✨ Analyze reply → { kind, definition, retention }. The definition is what follows
+// "<key> is …" (the editor's compiler writes that lead-in and the picture numbers), so a
+// model that wrote them anyway has them taken off. Throws without a definition.
+export function parseAnalysis(raw, key = "") {
+  const j = replyJson(raw);
+  if (!j || Array.isArray(j)) throw new Error("The LLM's reply wasn't the JSON asked for.");
+  const esc = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const definition = replyText(j.definition ?? j.description)
+    .replace(new RegExp(`^<${esc}>\\s*(?:,[^,]*,\\s*)?(?:is\\b)?\\s*`, "i"), "")
+    .replace(/^is\s+/i, "")
+    .replace(/^seen in <Picture \d+>(?:(?:,| and) <Picture \d+>)*,?\s*(?:is\s+)?/i, "")
+    .trim();
+  if (!definition) throw new Error("The LLM's reply had no definition.");
+  let retention = replyText(j.retention).replace(/\s*\(appears in[^)]*\)\.?\s*$/i, "");
+  // A bare list of what's kept gets the marker it was asked for.
+  if (retention && !/^(fully_preserved|partially_preserved|attribute_transfer|weak_reference|fully_copy|partially_copy|reference)\b/i.test(retention))
+    retention = `fully_preserved - ${retention}`;
+  return { kind: replyText(j.kind).toLowerCase().slice(0, 20), definition, retention };
 }
 
 // Models often put real line breaks inside JSON strings, which JSON.parse rejects:

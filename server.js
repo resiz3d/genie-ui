@@ -13,6 +13,7 @@ import {
   progressPasses,
 } from "./comfy-recognize.js";
 import { createLlm } from "./llm.js";
+import { registerVideoEditor } from "./video-editor.js";
 import "dotenv/config";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -5094,7 +5095,8 @@ app.get("/api/llm/status", async (req, res) => {
   });
 });
 
-// The ✨ Build form as last left in this project, plus its recent builds' inputs.
+// The ✨ Build form as last left in this project, its recent builds' inputs, and the
+// shot list being worked on. PUT saves `draft`, `shotList` (null clears it), or both.
 app.get("/api/llm/builder", (req, res) => {
   try {
     res.json({ code: 200, msg: "success", data: llm.readBuilder(req.query.projectId) });
@@ -5104,8 +5106,8 @@ app.get("/api/llm/builder", (req, res) => {
 });
 app.put("/api/llm/builder", (req, res) => {
   try {
-    const draft = llm.saveDraft(req.body?.projectId, req.body?.draft || {});
-    res.json({ code: 200, msg: "saved", data: draft });
+    const saved = llm.saveBuilder(req.body?.projectId, req.body || {});
+    res.json({ code: 200, msg: "saved", data: saved });
   } catch (err) {
     llmFail(res, err);
   }
@@ -5121,6 +5123,28 @@ app.post("/api/llm/revise", (req, res) => {
   }
 });
 
+// ✨ Analyze: describe each subject's reference image(s). The results build up on the
+// job (data.result.subjects) as each one is done; the editor fills them in.
+app.post("/api/llm/analyze", (req, res) => {
+  try {
+    res.json({ code: 200, msg: "queued", data: llm.startAnalyze(req.body || {}) });
+  } catch (err) {
+    llmFail(res, err);
+  }
+});
+
+// A build, step 1: the shot list alone. It lands in the project's builder data
+// (GET /api/llm/builder → data.shotList) when the job is done.
+app.post("/api/llm/shots", (req, res) => {
+  try {
+    res.json({ code: 200, msg: "queued", data: llm.startShots(req.body || {}) });
+  } catch (err) {
+    llmFail(res, err);
+  }
+});
+
+// Step 2: the prompts around that shot list (`shots`, with the user's edits and
+// breaks) — one saved prompt per run of shots between breaks.
 app.post("/api/llm/build", (req, res) => {
   try {
     res.json({ code: 200, msg: "queued", data: llm.startBuild(req.body || {}) });
@@ -5143,8 +5167,10 @@ app.post("/api/llm/jobs/:id/cancel", (req, res) => {
 
 app.post("/api/llm/unload", async (req, res) => {
   try {
-    const did = await llm.unloadNow();
-    res.json({ code: 200, msg: did ? "unloaded" : "nothing loaded" });
+    // With a sourceId: that "CPU only" server's model. Without: the build's.
+    const id = req.body?.sourceId;
+    const did = await (id ? llm.unloadCpu(String(id)) : llm.unloadNow());
+    res.json({ code: 200, msg: did ? "unloaded" : "nothing loaded", data: { unloaded: did } });
   } catch (err) {
     llmFail(res, err, 409);
   }
@@ -5161,6 +5187,8 @@ function lanUrls(port) {
   }
   return urls;
 }
+
+registerVideoEditor(app);
 
 app.listen(PORT, HOST, () => {
   const loopback =

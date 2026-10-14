@@ -104,15 +104,24 @@ submit a prompt + reference media, then polls until the result is ready.
   and result file. Zip the folder to share it — it needs no server. Exports one
   project at a time (pick a specific project in the History filter first); override
   the location with `EXPORTS_DIR` in `.env`.
+- **✂ Video editor** — a standalone editor in the header: open video files from your
+  file explorer, step through them frame by frame, cut off the start or end or cut
+  parts out of the middle, **Prepend** / **Append** more clips and reorder them, and
+  save the joined result wherever you choose. Cuts are frame-accurate and the result is
+  re-encoded as H.264 MP4 at near-lossless quality. When clips differ in size or frame
+  rate a warning spells out what will happen to each one, and you choose which clip's
+  size the result takes and whether the others get black bars (**Fit**) or are cropped
+  (**Fill**). Needs [ffmpeg](docs/FFMPEG.md).
 - **Reload-safe** — the in-flight task id is saved to `localStorage`, so closing or
   reloading the tab mid-generation resumes polling automatically on the next load
   (generations can take 5+ minutes; nothing is held on an open connection).
 
 - **✨ Build with AI** — a local vision LLM (LM Studio, text-generation-webui,
   Ollama, or any OpenAI-compatible server) looks at gallery images and writes
-  prompts from a short description and theme, saved straight to Saved Prompts with
-  the images as references (a MiniMax video longer than 15s becomes a prompt group,
-  one prompt per clip). GENie loads the model only when ComfyUI is idle and
+  a shot list from a short description and theme. You edit the shots and add breaks;
+  it then writes the rest of each prompt around its shots, unchanged, and saves them
+  to Saved Prompts with the images as references (several runs of shots become a
+  prompt group, one prompt per run). GENie loads the model only when ComfyUI is idle and
   VRAM allows (freeing ComfyUI's models if needed), and unloads it the moment a
   generation starts. See [`docs/LLM.md`](docs/LLM.md).
 
@@ -161,6 +170,11 @@ npm start
 Open <http://localhost:3000> in your browser.
 
 For auto-restart while developing: `npm run dev`.
+
+**Optional: [install ffmpeg](docs/FFMPEG.md)** (Windows: `winget install Gyan.FFmpeg`,
+macOS: `brew install ffmpeg`, Debian/Ubuntu: `sudo apt install ffmpeg`) for the
+✂ Video editor and for exact frame rates in the frame picker. Everything else works
+without it.
 
 To run **local ComfyUI workflows**, point GENie at your ComfyUI instance (defaults to
 `http://127.0.0.1:8188`) — see [`docs/COMFYUI.md`](docs/COMFYUI.md). No API key needed
@@ -315,6 +329,8 @@ public/style.css   styling
 public/app.js      form handling, image upload, polling, history
 public/llm.js      ✨ Build with AI dialog and LLM settings
 llm.js             LLM sources, GPU turn-taking with ComfyUI, prompt-build jobs
+public/video-editor.js  ✂ Video editor dialog
+video-editor.js    the video editor's uploads, ffmpeg export jobs and download
 .env.example       template — copy to .env and add your key
 output/<project>/   downloaded result videos (git-ignored, created at runtime)
 input/<project>/  saved reference media — images/video/audio (git-ignored, created at runtime)

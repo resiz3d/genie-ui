@@ -10,8 +10,56 @@ heading for that version with the date, commit, then tag the commit `vX.Y.Z`.
 
 ## [Unreleased]
 
+### Changed
+
+- **✨ Build with AI works in two steps, for every format.** *How many* is now **Shot
+  count**: the model first writes only a shot list — that many shots, adding up to the
+  **Duration** — shown under the form as editable shot cards. Add a **✂ break**
+  between shots wherever a new prompt should start, then **✨ Write prompts**: the
+  model writes the rest of each prompt (subjects, summary, retention, style,
+  soundscape, music) around its shots, which go in exactly as you left them. Breaks
+  make a prompt group, one prompt per run of shots; the automatic split every 15
+  seconds and the variations count are gone. The shot list is kept on the server per
+  project.
+
+### Removed
+
+- The "over 15s" warning under a MiniMax prompt's shots.
+
 ### Added
 
+- **✂ Video editor**, a standalone editor in the header. Open video files from your
+  file explorer (or drop them in), step through a clip frame by frame, then
+  **Start here** / **End here** to trim its ends or **Mark in** / **Mark out** →
+  **Cut selection** to remove a part from the middle. **Prepend** and **Append** add
+  more clips before or after; the clip strip switches between them, reorders them (◀ ▶)
+  and removes them (×), and each clip keeps its own cuts. Play previews the result,
+  skipping what's cut and running on into the next clip. **Save as…** re-encodes it all
+  as one file (H.264 MP4, near-lossless) and asks where to put it — in browsers without
+  a save dialog for web pages it goes to the browser's downloads. When clips differ in
+  size or frame rate, a warning lists what will happen to each clip, with two choices:
+  which clip the result takes its size and frame rate from (the largest, unless you
+  pick one) and whether the others **Fit** inside it with black bars or **Fill** it and
+  lose their edges — never stretched. A clip without sound gets silence. It doesn't touch the gallery or history. Needs ffmpeg on the PATH, or
+  `FFMPEG_PATH` in `.env` — see [`docs/FFMPEG.md`](docs/FFMPEG.md) for installing it
+  on Windows, macOS and Linux.
+- **⧉ Copy** on a saved prompt's card copies the prompt as Generate would send it —
+  compiled, `$variables` filled in and each `%wildcard%` picked afresh — for pasting
+  somewhere else.
+- **✨ Analyze images** in a MiniMax prompt's `subject_definitions`: a vision LLM looks
+  at each reference image that has a `@key` and fills in that subject's definition and
+  `retention_analysis`, keeping what you'd already written as its notes. **↶ Undo** puts
+  it back. The Gallery's **Edit** dialog has it too, for the definition saved on the
+  file. Choose its server and image size in ⚙ LLM settings.
+- **CPU only** servers (⚙ LLM settings): a model kept in system RAM skips the GPU
+  turn-taking with ComfyUI, runs while a video generates, and stays loaded — made for
+  Analyze. **⏏ Unload model** on the server's settings frees its RAM. See
+  [`docs/LLM.md`](docs/LLM.md).
+- **llama.cpp server (GENie runs it)**, a new server type in ⚙ LLM settings: give it
+  the path to `llama-server`, a model `.gguf`, its vision projector and a port, and
+  GENie starts it when a job first needs the model and stops it to unload and on exit.
+  With **CPU only** it runs with `--device none`, so the model and its projector use no
+  VRAM — the recommended server for Analyze.
 - **Qwen Image 2.1 Image Edit** ships as a default workflow. Load one or more images
   (up to 16) — each thumbnail shows the `<image1>`, `<image2>` tag to use in the
   prompt — with LoRAs, a custom output size, and pickers for the diffusion model, CLIP,

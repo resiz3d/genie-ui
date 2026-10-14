@@ -128,6 +128,26 @@ header {
   text-decoration: none;
 }
 
+/* The credits pill with the ⚙ LLM settings link under it (llm.js). */
+.llm-head-col {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.2rem;
+}
+.llm-head-settings {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+.llm-head-settings:hover {
+  color: var(--text);
+}
+@media (max-width: 600px) {
+  .llm-head-col {
+    align-items: flex-start;
+  }
+}
+
 a.credits-label:hover {
   color: var(--text);
   text-decoration: underline;
@@ -2967,9 +2987,6 @@ textarea.wc-hl-on {
   gap: 0.15rem;
   margin-left: auto;
 }
-.hint.pe-mm-over {
-  color: #e0b060;
-}
 .sp-run-group {
   display: flex;
   flex-direction: row;
@@ -3130,6 +3147,15 @@ textarea.wc-hl-on {
   margin: -0.4rem 0 0;
   font-size: 0.8rem;
 }
+.llm-s-llama {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+.llm-s-llama-hint {
+  margin: 0;
+  font-size: 0.8rem;
+}
 .llm-s-args,
 .llm-o-instr {
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
@@ -3275,6 +3301,72 @@ textarea.wc-hl-on {
 .llm-rules {
   font-size: 0.88rem;
 }
+/* The shot list between a build's two steps: shot cards (as in the prompt editor)
+   with a break wherever a new prompt starts. */
+.llm-shots {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
+}
+.llm-sl-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+.llm-shots .pe-mm-shot textarea {
+  font-size: 0.82rem;
+  padding: 0.4rem 0.55rem;
+  width: 100%;
+  min-width: 0;
+  min-height: 4.2em;
+  field-sizing: content;
+}
+.llm-shots input[type="text"].pe-mm-at {
+  width: 4.2em;
+  flex: 0 0 auto;
+  padding: 0.15rem 0.35rem;
+  font-size: 0.82rem;
+  text-align: center;
+}
+.llm-shots .pe-mm-shot-head {
+  flex-wrap: wrap;
+}
+.llm-sl-group {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.2rem 0.6rem;
+  padding-top: 0.2rem;
+  font-size: 0.82rem;
+}
+.llm-sl-group.brk {
+  margin-top: 0.6rem;
+  padding-top: 0.45rem;
+  border-top: 2px solid var(--accent);
+}
+.llm-sl-group .link-btn {
+  margin-left: auto;
+  font-size: 0.78rem;
+}
+.llm-sl-gap {
+  display: flex;
+  justify-content: center;
+}
+.llm-sl-gap .link-btn {
+  font-size: 0.75rem;
+  opacity: 0.6;
+}
+.llm-sl-gap .link-btn:hover {
+  opacity: 1;
+}
+.llm-sl-foot {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
 /* ✨ Revise with AI, in the saved-prompt editor. */
 .llm-rev {
   border: 1px solid var(--border);
@@ -3316,6 +3408,32 @@ textarea.wc-hl-on {
 .llm-rev-status {
   margin: 0;
   font-size: 0.82rem;
+}
+/* ✨ Analyze images, under the subjects in the MiniMax form. */
+.llm-an {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+  padding-top: 0.5rem;
+  border-top: 1px dashed var(--border);
+}
+.llm-an .btn-secondary {
+  padding: 0.45rem 0.8rem;
+  border-radius: 8px;
+}
+.llm-an-gallery {
+  padding-top: 0;
+  border-top: 0;
+}
+.llm-an-status {
+  flex: 1 1 12rem;
+  min-width: 0;
+  font-size: 0.82rem;
+}
+.llm-h4 .hint {
+  font-weight: 400;
+  font-size: 0.78rem;
 }
 .llm-rev-status:empty {
   display: none;
@@ -3504,6 +3622,211 @@ textarea.wc-hl-on {
   }
   .fp-box .modal-actions {
     flex-wrap: wrap;
+  }
+}
+
+/* ✂ Video editor (reuses the frame picker's stage, scrubber and step buttons) */
+.tool-pill {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text);
+  padding: 0.35rem 0.8rem;
+  font: inherit;
+  font-size: 0.85rem;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.tool-pill:hover {
+  background: var(--panel);
+  border-color: var(--accent);
+}
+.ve-editor,
+.ve-work {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.ve-clips-row {
+  display: flex;
+  align-items: stretch;
+  gap: 0.4rem;
+}
+.ve-clips-row > button {
+  flex: none;
+  padding: 0.3rem 0.6rem;
+}
+.ve-clips {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  gap: 0.4rem;
+  overflow-x: auto;
+  padding-bottom: 0.2rem;
+}
+.ve-clip {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  max-width: 17rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.3rem 0.45rem;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.ve-clip.active {
+  border-color: var(--accent);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+.ve-clip-n {
+  flex: none;
+  min-width: 1.3rem;
+  text-align: center;
+  border-radius: 999px;
+  background: var(--border);
+  font-variant-numeric: tabular-nums;
+}
+.ve-clip.active .ve-clip-n {
+  background: var(--accent);
+  color: #fff;
+}
+.ve-clip-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ve-clip-dur {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+.ve-clip .link-btn {
+  flex: none;
+  font-size: 0.8rem;
+}
+.ve-clip .link-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+.ve-work.ve-busy > :not(.fp-stage) {
+  opacity: 0.45;
+  pointer-events: none;
+}
+.ve-drop {
+  cursor: pointer;
+  padding: 2.5rem 1rem;
+  text-align: center;
+}
+.ve-cut-badge {
+  background: var(--error);
+}
+.ve-track {
+  position: relative;
+  height: 14px;
+  margin: -0.3rem 8px 0;
+  background: color-mix(in srgb, var(--accent) 30%, var(--bg));
+  border-radius: 3px;
+  overflow: hidden;
+  cursor: pointer;
+}
+.ve-track span {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+}
+.ve-cut-region {
+  background: repeating-linear-gradient(
+    45deg,
+    #5a2a2e 0 4px,
+    var(--bg) 4px 8px
+  );
+}
+.ve-sel {
+  min-width: 2px;
+  background: rgba(255, 255, 255, 0.35);
+  box-shadow: inset 2px 0 0 #fff, inset -2px 0 0 #fff;
+}
+.ve-head {
+  width: 2px;
+  margin-left: -1px;
+  background: #fff;
+}
+.ve-edit {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 0.35rem;
+}
+.ve-edit button {
+  min-height: 44px;
+  padding: 0.3rem 0.2rem;
+}
+.ve-edit button.on {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.ve-cuts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+.ve-cuts:empty {
+  display: none;
+}
+.ve-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.15rem 0.2rem 0.15rem 0.6rem;
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+.ve-chip .fp-x {
+  position: static;
+}
+.ve-status {
+  margin: 0;
+  font-size: 0.85rem;
+}
+.ve-mix {
+  border: 1px solid #8a6d1f;
+  border-radius: 8px;
+  background: rgba(255, 196, 0, 0.07);
+  padding: 0.55rem 0.7rem;
+  font-size: 0.85rem;
+}
+.ve-mix-head {
+  margin: 0;
+  color: #ffd166;
+}
+.ve-mix-list {
+  margin: 0.3rem 0 0.5rem;
+  padding-left: 1.2rem;
+}
+.ve-mix-opts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+}
+.ve-mix-opts label {
+  flex: 1 1 14rem;
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+.ve-mix-opts select {
+  width: 100%;
+}
+@media (max-width: 520px) {
+  .ve-edit {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .ve-edit .ve-cut {
+    grid-column: 1 / -1;
   }
 }
 

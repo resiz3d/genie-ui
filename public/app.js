@@ -4670,10 +4670,6 @@ function shotsFromStarts(shots) {
   });
 }
 
-// Most models' longest clip. A prompt's shots may run longer (the editor only warns);
-// a longer video is a prompt group, one whole prompt per clip.
-const CLIP_MAX_SECONDS = 15;
-
 // How long a run of shots lasts, or null when one of them has no length.
 function shotsSeconds(shots) {
   return shots.some((s) => s.len == null) ? null : (
@@ -7359,7 +7355,28 @@ function makeSavedPromptCard(p, part = null) {
     e.stopPropagation(); // not a click on the card (which opens the editor)
     setActiveSavedPrompt(isActive ? null : p.id);
   });
-  head.prepend(use);
+  // ⧉ copies the prompt as Generate would send it — compiled, $variables filled in
+  // and each %wildcard% picked afresh — for pasting somewhere else.
+  const copy = document.createElement("button");
+  copy.type = "button";
+  copy.className = "sp-use sp-copy";
+  copy.textContent = "⧉ Copy";
+  copy.title =
+    "Copy this prompt to the clipboard as Generate would send it: wildcards picked (new ones every time) and variables filled in";
+  copy.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    let done = "Copy failed";
+    try {
+      const text = resolveWildcards(exportSavedPromptText(p)).trim();
+      hide(errorEl);
+      if (await copyText(text)) done = "Copied!";
+    } catch (err) {
+      setError(err.message || String(err)); // e.g. an unknown %wildcard%
+    }
+    copy.textContent = done;
+    setTimeout(() => (copy.textContent = "⧉ Copy"), 1200);
+  });
+  head.prepend(use, copy);
   if (isMmType(p.type)) {
     const badge = document.createElement("span");
     badge.className = "sp-type";
@@ -8129,6 +8146,9 @@ function renderMinimaxRefParts(mm) {
       ?.focus();
   });
   subj.appendChild(addSubj);
+  // ✨ Analyze images (llm.js): a vision LLM writes the definitions and retention lines.
+  const analyze = window.genieAnalyzeBar?.();
+  if (analyze) subj.appendChild(analyze);
   peMinimax.appendChild(subj);
 
   // The references, right under the subjects they define — you look at the images while
@@ -8360,7 +8380,7 @@ function refreshMinimaxDerived() {
   });
 
   // Each shot's start time, a note on a missing length (only the last shot may leave
-  // it empty), and the shots' total — with a warning past one clip's length.
+  // it empty), and the shots' total.
   const secs = (n) => `${+n.toFixed(3)}s`;
   const lastShot = mm.shots.length - 1;
   const starts = shotStarts(mm.shots);
@@ -8377,15 +8397,10 @@ function refreshMinimaxDerived() {
   const totalEl = document.getElementById("mmShotTotal");
   if (totalEl) {
     const sum = mm.shots.reduce((a, s) => a + (Number(s.len) || 0), 0);
-    const over = sum > CLIP_MAX_SECONDS;
     totalEl.textContent =
-      (mm.shots[lastShot].len == null ?
+      mm.shots[lastShot].len == null ?
         `${secs(sum)} of shots, then the last runs to the end`
-      : `Shots total ${secs(sum)}`) +
-      (over ?
-        ` ⚠ over ${CLIP_MAX_SECONDS}s — longer than most models make in one clip. Put the rest in the next prompt of a group.`
-      : "");
-    totalEl.classList.toggle("pe-mm-over", over);
+      : `Shots total ${secs(sum)}`;
   }
 
   const out = document.getElementById("mmCompiled");

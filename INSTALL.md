@@ -106,6 +106,18 @@ and go to:
 
 That's it — you're running. 🎬
 
+### Optional — Install ffmpeg (for the ✂ Video editor)
+
+You can skip this; everything else works without it. To trim and join videos with
+**✂ Video editor**, open a terminal and run:
+
+```
+winget install Gyan.FFmpeg
+```
+
+Then close the terminal, open a new one (Step 3) and run `npm start` again. More
+options are in [docs/FFMPEG.md](docs/FFMPEG.md).
+
 ### Everyday use (after the first install)
 
 - **To start the app:** open the terminal in the project folder (Step 3) and
@@ -142,6 +154,9 @@ Same four ideas, slightly different clicks:
    from <https://kie.ai/api-key>, then save and close.
 5. **Start it** — run `npm start`, then open <http://localhost:3000> in your
    browser. Stop it later with **Ctrl+C** in the Terminal.
+6. **Optional: ffmpeg** — for the **✂ Video editor**, install
+   [Homebrew](https://brew.sh) and run `brew install ffmpeg`, then start GENie
+   again from a new Terminal window. See [docs/FFMPEG.md](docs/FFMPEG.md).
 
 ---
 
@@ -153,6 +168,7 @@ Same four ideas, slightly different clicks:
 | `No KIE_API_KEY set` when starting, and the kie.ai models say no key is configured | Step 5 didn't stick — make sure the file is named exactly `.env` (not `.env.txt`) and contains your real key. Redo the two commands in Step 5. (Without a key the app still runs ComfyUI workflows.) |
 | `EADDRINUSE: address already in use` | The app is already running in another window, or something else is using port 3000. Close other terminals, or edit `.env` and change `PORT=3000` to `PORT=3001` (then browse to localhost:3001). |
 | Red "Server not reachable" banner in the browser | The terminal running `npm start` was closed. Start it again (Everyday use, above). |
+| ✂ Video editor says "ffmpeg was not found" | ffmpeg isn't installed, or the app was started before you installed it. See [docs/FFMPEG.md](docs/FFMPEG.md), then start the app from a **new** terminal. |
 | A generation fails with "Insufficient credits" | Your kie.ai account is out of credits — top up at <https://kie.ai>. |
 
 ## Updating to a newer version
