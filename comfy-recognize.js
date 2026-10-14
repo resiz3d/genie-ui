@@ -574,7 +574,10 @@ export function applyReferenceCollections(workflow, references, provided) {
       };
       for (const w of ref.wires || []) {
         const inputs = wireNode(workflow, ref, w)?.inputs;
-        if (inputs) inputs[`${w.prefix}${i + (w.start || 0)}`] = [loaderId, w.slot];
+        // An `exact` wire is a plain single input (GetVideoComponents.video): the prefix
+        // is the whole input name, with no slot number appended.
+        const key = w.exact ? w.prefix : `${w.prefix}${i + (w.start || 0)}`;
+        if (inputs) inputs[key] = [loaderId, w.slot];
       }
     });
     // Prune the export's original loaders if nothing references them any more.

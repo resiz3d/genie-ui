@@ -104,10 +104,17 @@ submit a prompt + reference media, then polls until the result is ready.
   and result file. Zip the folder to share it — it needs no server. Exports one
   project at a time (pick a specific project in the History filter first); override
   the location with `EXPORTS_DIR` in `.env`.
-- **✂ Video editor** — a standalone editor in the header: open video files from your
-  file explorer, step through them frame by frame, cut off the start or end or cut
-  parts out of the middle, **Prepend** / **Append** more clips and reorder them, and
-  save the joined result wherever you choose. Cuts are frame-accurate and the result is
+- **✂ Video editor** — in the header, and as **✂ Edit video** on every History card and
+  Gallery video: open videos from your file explorer or **import** them from GENie (the
+  project's History results, Gallery videos and earlier edits), step through them frame
+  by frame, cut off the start or end or cut parts out of the middle, and **Prepend** /
+  **Append** more clips and reorder them. Its **Frames** row picks stills — any frame,
+  or **⇥ Last frame** to start the next clip from — and saves them to the gallery or
+  downloads them. Opened from a card, Save adds the edit to the card as another video,
+  or replaces the card's video when **Overwrite** is ticked (off by default).
+  **Save** writes the joined result as a new file in `output/<project>/edited_videos/`
+  — it never overwrites a file, and your source videos are never changed — and
+  **Save as…** puts it wherever you choose. Cuts are frame-accurate and the result is
   re-encoded as H.264 MP4 at near-lossless quality. When clips differ in size or frame
   rate a warning spells out what will happen to each one, and you choose which clip's
   size the result takes and whether the others get black bars (**Fit**) or are cropped
@@ -173,7 +180,7 @@ For auto-restart while developing: `npm run dev`.
 
 **Optional: [install ffmpeg](docs/FFMPEG.md)** (Windows: `winget install Gyan.FFmpeg`,
 macOS: `brew install ffmpeg`, Debian/Ubuntu: `sudo apt install ffmpeg`) for the
-✂ Video editor and for exact frame rates in the frame picker. Everything else works
+✂ Video editor's cutting and saving, and for exact frame rates. Everything else works
 without it.
 
 To run **local ComfyUI workflows**, point GENie at your ComfyUI instance (defaults to
@@ -333,6 +340,7 @@ public/video-editor.js  ✂ Video editor dialog
 video-editor.js    the video editor's uploads, ffmpeg export jobs and download
 .env.example       template — copy to .env and add your key
 output/<project>/   downloaded result videos (git-ignored, created at runtime)
+output/<project>/edited_videos/  what the ✂ Video editor's Save button writes
 input/<project>/  saved reference media — images/video/audio (git-ignored, created at runtime)
 exports/<name>/    shareable history bundles from the Export button (git-ignored, created at runtime)
 history.json       generation history (git-ignored, created at runtime)

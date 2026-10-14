@@ -129,6 +129,9 @@ Add a `references` array to a variant (alongside or instead of `expose`):
 - A wire's optional **`start`** is the index of its first slot (default `0`). Qwen
   Image 2.1's encoder numbers its pictures from 1 (`images.image_1`), so its wire is
   `{ "prefix": "images.image_", "slot": 0, "start": 1 }`.
+- A wire's optional **`exact`** (`true`) makes its prefix the whole input name, with
+  no slot number appended — for a plain single input such as Get Video Components'
+  `video` (`{ "prefix": "video", "slot": 0, "exact": true }`, with `max: 1`).
 - **`mirrors`** name other nodes that must receive the same files — e.g. the Batch
   Images node that hands a prompt enhancer the pictures the encoder also gets. Each is
   `{ class_type, prefix, slot, start }`, resolved to the node of that class already

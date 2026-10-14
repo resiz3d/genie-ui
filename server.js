@@ -1074,13 +1074,67 @@ app.put("/api/comfy/settings", (req, res) => {
   if (!p) return res.status(400).json({ code: 400, msg: "file is required" });
   try {
     fs.mkdirSync(path.dirname(p), { recursive: true });
-    writeJson(p, req.body && typeof req.body === "object" ? req.body : {});
+    const data = req.body && typeof req.body === "object" ? req.body : {};
+    // The form saves its whole state on every run; the auto-tag list is edited on its
+    // own (PUT /api/comfy/auto-tags), so a form save that doesn't name it keeps it.
+    if (!("autoTags" in data)) {
+      const prev = readComfySettings(req.query.file);
+      if (Array.isArray(prev.autoTags)) data.autoTags = prev.autoTags;
+    }
+    writeJson(p, data);
     res.json({ code: 200, msg: "saved" });
   } catch (err) {
     console.error("Failed to save comfy settings:", err);
     res.status(500).json({ code: 500, msg: "Failed to save settings" });
   }
 });
+
+function readComfySettings(file) {
+  const p = comfySettingsPath(file);
+  if (!p || !fs.existsSync(p)) return {};
+  try {
+    return plainObject(JSON.parse(fs.readFileSync(p, "utf8")));
+  } catch {
+    return {};
+  }
+}
+
+// A workflow's auto-tags: your own labels ("upscaled", …) that every run of it gets on
+// its History entry when it finishes. Trimmed, deduplicated ignoring case, capped.
+function cleanTags(list) {
+  const out = [];
+  const seen = new Set();
+  for (const raw of Array.isArray(list) ? list : []) {
+    const t = String(raw ?? "").trim().replace(/\s+/g, " ").slice(0, 32);
+    if (!t || seen.has(t.toLowerCase())) continue;
+    seen.add(t.toLowerCase());
+    out.push(t);
+    if (out.length >= 20) break;
+  }
+  return out;
+}
+app.put("/api/comfy/auto-tags", (req, res) => {
+  const p = comfySettingsPath(req.query.file);
+  if (!p) return res.status(400).json({ code: 400, msg: "file is required" });
+  try {
+    const data = readComfySettings(req.query.file);
+    data.autoTags = cleanTags(req.body?.tags);
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    writeJson(p, data);
+    res.json({ code: 200, msg: "saved", data: data.autoTags });
+  } catch (err) {
+    console.error("Failed to save auto-tags:", err);
+    res.status(500).json({ code: 500, msg: "Failed to save auto-tags" });
+  }
+});
+
+// Stamp a finished ComfyUI run with its workflow's auto-tags, as they are when it ends.
+function applyAutoTags(entry) {
+  const model = entry?.input?.model || "";
+  if (!model.startsWith("comfy:")) return;
+  const auto = cleanTags(readComfySettings(model.slice("comfy:".length)).autoTags);
+  if (auto.length) entry.tags = cleanTags([...(entry.tags || []), ...auto]);
+}
 
 // Upload one image into ComfyUI's input folder; returns the LoadImage-ready name.
 // Source is either a base64 data URL or a saved gallery item `id` (so ComfyUI
@@ -1146,41 +1200,6 @@ app.get("/api/comfy/probe", async (req, res) => {
             "ffprobe was not found on PATH"
           : "Could not read the video's length",
       });
-  }
-  res.json({ code: 200, msg: "success", data: probe });
-});
-
-// Frame rate / count of any served video (/output/… or /input/…), for the frame
-// picker's frame-accurate stepping. The path must stay inside its media folder.
-app.get("/api/video/probe", async (req, res) => {
-  const url = String(req.query.url || "").split("?")[0];
-  let file = null;
-  for (const [prefix, dir] of [
-    ["/output/", OUTPUT_DIR],
-    ["/input/", INPUT_DIR],
-  ]) {
-    if (!url.startsWith(prefix)) continue;
-    let rel;
-    try {
-      rel = decodeURIComponent(url.slice(prefix.length));
-    } catch {
-      break;
-    }
-    const full = path.resolve(dir, rel);
-    if (full.startsWith(dir + path.sep)) file = full;
-    break;
-  }
-  if (!file || !fs.existsSync(file))
-    return res.status(404).json({ code: 404, msg: "video not found" });
-  const probe = await probeVideo(file);
-  if (!probe) {
-    return res.status(422).json({
-      code: 422,
-      msg:
-        ffprobeMissing ?
-          "ffprobe was not found on PATH"
-        : "Could not read the video's frame rate",
-    });
   }
   res.json({ code: 200, msg: "success", data: probe });
 });
@@ -1287,9 +1306,13 @@ function enrichToken(token, nodeMap, objectInfo, workflow = null) {
   // A combo (enum) is reported one of two ways: legacy nodes put the choices array
   // directly in `type` (e.g. VAELoader.vae_name); newer-schema nodes report the
   // string "COMBO" with the choices in cfg.options (e.g. KSamplerSelect.sampler_name).
+  // A DynamicCombo (SaveVideo's `format`, its nested `format.codec`) lists its choices
+  // as option objects, each keyed by the choice.
   const comboOptions =
     Array.isArray(type) ? type
     : type === "COMBO" ? cfg?.options
+    : type === "COMFY_DYNAMICCOMBO_V3" && Array.isArray(cfg?.options) ?
+      cfg.options.map((o) => o?.key).filter((k) => k != null)
     : null;
   if (Array.isArray(comboOptions)) {
     const key = (loc.input || "").toLowerCase();
@@ -1440,9 +1463,14 @@ const MEDIA_LOADER_INPUTS = [
 ];
 
 // The loader's filename input, e.g. ["image", "she-hulk.webp"] — null for anything else.
+// Core LoadVideo names its input `file`, not `video`.
 function mediaLoaderInput(node) {
   if (!/load/i.test(node?.class_type || "")) return null;
-  for (const [input, kind] of MEDIA_LOADER_INPUTS) {
+  const inputs =
+    node.class_type === "LoadVideo" ?
+      [["file", "video"], ...MEDIA_LOADER_INPUTS]
+    : MEDIA_LOADER_INPUTS;
+  for (const [input, kind] of inputs) {
     const v = node.inputs?.[input];
     if (typeof v === "string" && v.trim()) return { input, kind, file: v };
   }
@@ -1506,13 +1534,21 @@ function applyWorkflowMedia(workflow, media) {
 
 // The files in ComfyUI's input folder, per kind — what those loaders can be pointed at.
 function mediaOptionsFrom(objectInfo) {
-  const opts = (cls, input) => objectInfo?.[cls]?.input?.required?.[input]?.[0];
+  // Legacy nodes put the file list in the spec's first slot; newer-schema ones (core
+  // LoadVideo) report "COMBO" there with the list in cfg.options.
+  const opts = (cls, input) => {
+    const spec = objectInfo?.[cls]?.input?.required?.[input];
+    if (!Array.isArray(spec)) return null;
+    return Array.isArray(spec[0]) ? spec[0]
+      : spec[0] === "COMBO" ? spec[1]?.options
+      : null;
+  };
   const list = (v) =>
     Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
   return {
     image: list(opts("LoadImage", "image")),
     audio: list(opts("LoadAudio", "audio")),
-    video: list(opts("LoadVideo", "video")),
+    video: list(opts("LoadVideo", "file") || opts("VHS_LoadVideo", "video")),
   };
 }
 
@@ -2357,6 +2393,9 @@ function collectComfyOutputs(entry) {
   for (const out of Object.values(entry.outputs || {})) {
     for (const key of ["videos", "gifs", "images"]) {
       for (const f of out[key] || []) {
+        // Core LoadVideo reports the file it loaded (type "input") as a UI preview —
+        // that's the source, not something the run made.
+        if (f.type === "input") continue;
         (key === "images" ? stills : moving).push(
           `${COMFYUI_URL}/view?filename=${encodeURIComponent(f.filename)}` +
             `&subfolder=${encodeURIComponent(f.subfolder || "")}&type=${encodeURIComponent(f.type || "output")}`,
@@ -2565,6 +2604,7 @@ async function finalizePendingComfy(
   if (urls.length) {
     await attachOutputs(entry, urls); // downloads every output (a batch can be several)
     entry.status = "done";
+    applyAutoTags(entry);
     if (typeof enhancedPrompt === "string") entry.enhancedPrompt = enhancedPrompt;
     // Prefer ComfyUI's own per-prompt execution time; fall back to since-created only
     // when it's unavailable (older ComfyUI / missing timestamps).
@@ -2924,6 +2964,7 @@ function entryTagSet(entry) {
   if (entry.favorite) tags.add("favorite");
   if (entry.draft) tags.add("draft");
   if (entry.hidden) tags.add("hidden");
+  for (const t of Array.isArray(entry.tags) ? entry.tags : []) tags.add(t); // auto-tags
   return tags;
 }
 
@@ -3656,6 +3697,8 @@ function sanitizeMinimax(mm) {
       .map((s) => ({
         key: normalizeMediaKey(s?.key),
         definition: str(s?.definition, 4000),
+        // "Previous scene": the gallery image keyed as this subject on this prompt only.
+        ...(s?.scene ? { scene: true, sceneId: str(s.sceneId, 100) } : {}),
       })),
     retention: Object.fromEntries(
       Object.entries(retention)
@@ -4439,6 +4482,16 @@ app.post("/api/prompt-groups/:id/next", (req, res) => {
   if (STRUCTURED_PROMPT_TYPES.has(copy.type)) {
     copy.minimax = { ...sanitizeMinimax(last.minimax), summary: "", shots: [{ len: null, text: "" }] };
     copy.duration = null;
+    // The previous scene is the clip before this one: its frame and staging are to be
+    // picked anew, so the old frame leaves the references and its retention resets.
+    for (const s of copy.minimax.subjects) {
+      if (!s.scene) continue;
+      if (s.sceneId) copy.refs = (copy.refs || []).filter((r) => r.id !== s.sceneId);
+      s.sceneId = "";
+      if (!s.key) continue;
+      copy.minimax.retention[`<${s.key}>`] = "partially_preserved - keep the staging and the set: ";
+      copy.minimax.shots[0].text = `Continuing from the staging in <${s.key}>: `;
+    }
   }
   delete copy.llm;
   list.splice(list.indexOf(last) + 1, 0, copy);
@@ -4689,6 +4742,7 @@ app.post("/api/history/:id/result", async (req, res) => {
   }
   if (typeof costCredits === "number") entry.costCredits = costCredits;
   entry.status = "done";
+  if (urls.length) applyAutoTags(entry);
   // A run whose prompt went through an enhancer: read the rewritten text back.
   if (entry.promptEchoNode && entry.taskId) {
     try {
@@ -4736,8 +4790,19 @@ app.post("/api/history/:id/redownload", async (req, res) => {
         msg: "This entry has no source URL to re-download from.",
       });
   }
+  // Videos the editor added to the card have no source link; keep them after the
+  // re-downloaded ones.
+  const edits = (entry.outputs || []).filter((o) => !o.resultUrl && o.localVideo);
+  // An edit saved over a generated video is replaced by the fresh download.
+  const replaced = (entry.outputs || [])
+    .filter((o) => o.resultUrl && o.edited && o.localVideo?.startsWith("/output/"))
+    .map((o) => o.localVideo);
   try {
     await attachOutputs(entry, urls);
+    if (edits.length) entry.outputs = [...entry.outputs, ...edits];
+    for (const url of replaced)
+      if (!entry.outputs.some((o) => o.localVideo === url))
+        fs.rmSync(path.join(OUTPUT_DIR, url.slice("/output/".length)), { force: true });
   } catch (err) {
     console.error(`redownload failed for entry ${entry.id}:`, err);
     return res
@@ -4935,13 +5000,16 @@ app.delete("/api/history/:id", (req, res) => {
     return res.status(404).json({ code: 404, msg: "history entry not found" });
 
   const entry = entries[idx];
-  // Best-effort removal of the saved output file (input gallery media is shared,
-  // so it's left alone).
-  if (entry.localVideo?.startsWith("/output/")) {
+  // Best-effort removal of the saved output files — every one of a batch or of the
+  // video editor's additions (input gallery media is shared, so it's left alone).
+  const files = new Set(
+    [entry.localVideo, ...(entry.outputs || []).map((o) => o.localVideo)].filter((u) =>
+      u?.startsWith("/output/"),
+    ),
+  );
+  for (const url of files) {
     try {
-      fs.unlinkSync(
-        path.join(OUTPUT_DIR, entry.localVideo.slice("/output/".length)),
-      );
+      fs.unlinkSync(path.join(OUTPUT_DIR, url.slice("/output/".length)));
     } catch (err) {
       if (err.code !== "ENOENT")
         console.error("Failed to delete output file:", err.message);
@@ -5188,7 +5256,107 @@ function lanUrls(port) {
   return urls;
 }
 
-registerVideoEditor(app);
+// Copy `src` into `dir` as <base>.<ext>, or <base>-2.<ext>, … — whichever name is
+// free. COPYFILE_EXCL fails rather than replace a file, so nothing is written over.
+function copyToFreeName(src, dir, base, ext) {
+  fs.mkdirSync(dir, { recursive: true });
+  for (let n = 1; ; n++) {
+    const name = `${base}${n > 1 ? `-${n}` : ""}.${ext}`;
+    try {
+      fs.copyFileSync(src, path.join(dir, name), fs.constants.COPYFILE_EXCL);
+      return name;
+    } catch (err) {
+      if (err.code !== "EEXIST" || n >= 10000) throw err;
+    }
+  }
+}
+
+const httpError = (status, msg) => Object.assign(new Error(msg), { status });
+
+// The ✂ Video editor saving an edit back to where it was opened from. `file` is the
+// finished export; it is copied in under a new name. With `overwrite` the copy takes
+// the old video's place and the old file is deleted; otherwise it is added — as one
+// more video on the History card, or as a new Gallery video beside the original.
+function saveEditedVideo({ kind, id, index = 0, overwrite = false }, file, name) {
+  if (kind === "history") {
+    const entries = readJson(HISTORY_FILE);
+    const entry = entries.find((e) => e.id === id);
+    if (!entry) throw httpError(404, "That History card no longer exists");
+    const outs =
+      entry.outputs?.length ? entry.outputs
+      : entry.localVideo || entry.resultUrl ?
+        [{ resultUrl: entry.resultUrl || null, localVideo: entry.localVideo || null }]
+      : [];
+    if (overwrite && !outs[index]) throw httpError(404, "That video is no longer on the card");
+    const proj = resolveProject(entry.projectId);
+    const sub = outputSubfolder(entry);
+    const saved = copyToFreeName(file, path.join(OUTPUT_DIR, proj.slug + sub), `${entry.id}-edit`, "mp4");
+    const url = `/output/${proj.slug}${sub}/${saved}`;
+    let at = index;
+    if (overwrite) {
+      const old = outs[index].localVideo;
+      // The source stays on the output as resultUrl, so ⟳ Refresh can still bring
+      // a generated original back while its link lasts.
+      outs[index] = { ...outs[index], localVideo: url, edited: true };
+      if (old?.startsWith("/output/") && !outs.some((o) => o.localVideo === old))
+        fs.rmSync(path.join(OUTPUT_DIR, old.slice("/output/".length)), { force: true });
+    } else {
+      outs.push({ resultUrl: null, localVideo: url, edited: true });
+      at = outs.length - 1;
+    }
+    entry.outputs = outs;
+    entry.localVideo = outs[0].localVideo;
+    saveHistoryEntry(entry, entries);
+    return { kind, id, index: at, url, name: saved, count: outs.length };
+  }
+  if (kind === "gallery") {
+    const images = readJson(IMAGES_FILE);
+    const item = images.find((i) => i.id === id);
+    if (!item) throw httpError(404, "That Gallery video no longer exists");
+    const proj = resolveProject(item.projectId);
+    const newId = randomUUID();
+    copyToFreeName(file, path.join(INPUT_DIR, proj.slug), newId, "mp4");
+    const storedName = `${proj.slug}/${newId}.mp4`;
+    const base = String(item.name || "video").replace(/\.[^.]+$/, "");
+    if (overwrite) {
+      // The entry keeps its id, so saved prompts using it now get the edit.
+      const old = item.storedName;
+      Object.assign(item, {
+        storedName,
+        localUrl: `/input/${storedName}`,
+        mime: "video/mp4",
+        name: `${base}.mp4`,
+      });
+      if (old && old !== storedName) fs.rmSync(path.join(INPUT_DIR, old), { force: true });
+      writeJson(IMAGES_FILE, images);
+      return { kind, id: item.id, url: item.localUrl, name: item.name };
+    }
+    const added = {
+      id: newId,
+      kind: "video",
+      projectId: proj.id,
+      storedName,
+      name: `${base}-edited.mp4`,
+      mime: "video/mp4",
+      localUrl: `/input/${storedName}`,
+      createdAt: new Date().toISOString(),
+    };
+    images.unshift(added);
+    writeJson(IMAGES_FILE, images);
+    return { kind, id: added.id, url: added.localUrl, name: added.name };
+  }
+  throw httpError(400, "Unknown place to save to");
+}
+
+registerVideoEditor(app, {
+  outputDir: OUTPUT_DIR,
+  inputDir: INPUT_DIR,
+  resolveProject,
+  projects: ensureDefaultProject,
+  history: () => readJson(HISTORY_FILE),
+  gallery: () => readJson(IMAGES_FILE),
+  saveToCard: saveEditedVideo,
+});
 
 app.listen(PORT, HOST, () => {
   const loopback =

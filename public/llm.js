@@ -1601,23 +1601,35 @@
 
   // The subjects to look at: every image reference with a key, grouped by key, with
   // what's written for it now (the model keeps those facts and builds on them).
-  function analyzeSubjects() {
+  // `only`: just that key (✨ Analyze scene). The Previous scene frame goes as a scene,
+  // with the other subjects' definitions so the model can name who is where.
+  function analyzeSubjects(only = null) {
     const mm = editing.mm;
+    const refs = editorLiveRefs();
     const byKey = new Map();
-    for (const ref of editorLiveRefs()) {
+    for (const ref of refs) {
       const key = normKey(ref.key);
       if (ref.missing || ref.kind !== "image" || !key) continue;
+      if (only && key !== only) continue;
       let sub = byKey.get(key);
       if (!sub) {
         sub = { key, refs: [], note: "", retention: mm.retention?.[`<${key}>`] || "" };
         byKey.set(key, sub);
       }
       sub.refs.push(ref);
+      if (ref.scene) sub.scene = true;
       if (!sub.note) sub.note = String(ref.definition || "").trim();
     }
     for (const sub of byKey.values()) {
       const typed = (mm.subjects || []).find((x) => normKey(x.key) === sub.key);
       if (String(typed?.definition || "").trim()) sub.note = typed.definition.trim();
+      if (!sub.scene) continue;
+      // The filled-in templates say nothing about this frame — not notes.
+      if (sub.note === PREV_SCENE_DEF) sub.note = "";
+      if (sub.retention.trim() === PREV_SCENE_RET.trim()) sub.retention = "";
+      sub.others = minimaxSubjects(mm, refs)
+        .filter((x) => x.label && x.label !== `<${sub.key}>` && !x.audio)
+        .map((x) => ({ key: x.label.slice(1, -1), definition: x.definition }));
     }
     return [...byKey.values()];
   }
@@ -1650,11 +1662,23 @@
       st.undo ||= {
         subjects: structuredClone(mm.subjects),
         retention: structuredClone(mm.retention),
+        shots: structuredClone(mm.shots),
       };
       let row = mm.subjects.find((x) => normKey(x.key) === key);
       if (!row) mm.subjects.push((row = { key, definition: "" }));
       row.definition = res.definition;
       if (res.retention) mm.retention[`<${key}>`] = res.retention;
+      // A scene's opening staging goes right after Shot 1's lead, before what the
+      // author wrote there (a re-run replaces the sentence it put there last time).
+      if (res.kind === "scene" && res.shot1 && mm.shots[0]) {
+        const lead = prevSceneShotLead(key);
+        let rest = String(mm.shots[0].text || "");
+        if (rest.startsWith(lead.trim())) rest = rest.slice(lead.trim().length).trimStart();
+        if (row.sceneShot1 && rest.startsWith(row.sceneShot1))
+          rest = rest.slice(row.sceneShot1.length).trimStart();
+        mm.shots[0].text = `${lead}${res.shot1}${rest ? ` ${rest}` : " "}`;
+        row.sceneShot1 = res.shot1;
+      }
       st.applied.add(key);
       changed = true;
     }
@@ -1700,14 +1724,19 @@
       anTimer = setTimeout(pollAn, 1500);
   }
 
-  async function startAn() {
+  async function startAn(only = null) {
     if (!editing) return;
     const id = curId();
+    if (anState.get(id)?.job && ACTIVE.includes(anState.get(id).job.status)) return;
     const st = { jobId: null, job: null, applied: new Set(), undo: null, note: "", starting: true };
     try {
-      const subs = analyzeSubjects();
+      const subs = analyzeSubjects(typeof only === "string" ? only : null);
       if (!subs.length)
-        throw new Error("Give an image a @key in reference media first — that's the subject it defines.");
+        throw new Error(
+          typeof only === "string" ?
+            "Pick the previous scene's frame first."
+          : "Give an image a @key in reference media first — that's the subject it defines.",
+        );
       anState.set(id, st);
       st.note = "Preparing the images…";
       paintAn();
@@ -1720,7 +1749,13 @@
           const url = await scaledImage(ref.url, cfg.analyzeImageSize || 768).catch(() => "");
           images.push({ id: ref.id, url });
         }
-        subjects.push({ key: sub.key, note: sub.note, retention: sub.retention, images });
+        subjects.push({
+          key: sub.key,
+          note: sub.note,
+          retention: sub.retention,
+          images,
+          ...(sub.scene ? { scene: true, others: sub.others } : {}),
+        });
       }
       const job = await api("/api/llm/analyze", "POST", {
         projectId: editing.projectId,
@@ -1736,6 +1771,12 @@
       paintAn();
     }
   }
+
+  // ✨ Analyze scene (app.js's Previous scene panel): just that subject.
+  window.genieAnalyze = (key) => {
+    startAn(key);
+    peMinimax.querySelector(".llm-an")?.scrollIntoView({ block: "nearest" });
+  };
 
   // Called by app.js while it builds the subject_definitions section.
   window.genieAnalyzeBar = () => {
@@ -1762,6 +1803,7 @@
       if (!st?.undo || !editing) return;
       editing.mm.subjects = st.undo.subjects;
       editing.mm.retention = st.undo.retention;
+      editing.mm.shots = st.undo.shots;
       anState.delete(curId());
       renderMinimaxForm();
     });

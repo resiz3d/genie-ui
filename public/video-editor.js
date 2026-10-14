@@ -1,8 +1,12 @@
-// --- ✂ Video editor: trim clips, cut parts out, join clips, save the result ---------
-// A standalone tool, opened from the header: it takes files from the device's file
-// explorer (not the gallery) and saves the result wherever the user chooses. The
-// browser previews the files itself; the server (video-editor.js, ffmpeg) does the
-// re-encode.
+// --- ✂ Video editor: trim clips, cut parts out, join clips, pick frames -------------
+// Opened from the header, or from a History card's / Gallery video's ✂ Edit video.
+// Clips come from the device's file explorer or from GENie's own videos (History,
+// Gallery, earlier edits). The result is saved as a new file in the project's
+// edited_videos folder, wherever the user chooses, or — opened from a card — added to
+// that card as another video (or, ticked, in place of its video). Picked frames go to
+// the gallery as images or download as PNGs. The browser previews the clips itself;
+// the server (video-editor.js, ffmpeg) does the re-encode. Without ffmpeg, frames can
+// still be picked, at an assumed frame rate.
 (() => {
   const $ = (sel, root = document) => root.querySelector(sel);
   const API = "/api/video-editor";
@@ -19,12 +23,13 @@
     <div class="dropzone ve-drop">
       <p class="dz-hint">Drop videos here or <span class="browse">browse</span></p>
     </div>
+    <button type="button" class="btn-secondary ve-import" title="Open videos from this project's History, Gallery or earlier edits">📚 Import from GENie…</button>
     <input type="file" class="ve-file" accept="video/*,.mkv,.mov" multiple hidden />
     <div class="ve-editor hidden">
       <div class="ve-clips-row">
-        <button type="button" class="btn-secondary ve-prepend" title="Add videos before the first clip">＋ Prepend</button>
+        <button type="button" class="btn-secondary ve-prepend" title="Add videos before the first clip — from GENie or from this device">＋ Prepend</button>
         <div class="ve-clips"></div>
-        <button type="button" class="btn-secondary ve-append" title="Add videos after the last clip">Append ＋</button>
+        <button type="button" class="btn-secondary ve-append" title="Add videos after the last clip — from GENie or from this device">Append ＋</button>
       </div>
       <div class="ve-work">
         <div class="fp-stage">
@@ -58,6 +63,18 @@
           <button type="button" class="link-btn ve-restore hidden">Restore all</button>
         </div>
         <div class="ve-cuts"></div>
+        <div class="ve-frames">
+          <span class="ve-frames-title">Frames</span>
+          <button type="button" class="btn-secondary ve-pick" title="Pick / unpick the frame on screen, to save as an image (Enter)">＋ Pick frame</button>
+          <button type="button" class="btn-secondary ve-lastframe" title="Pick this clip's last kept frame — e.g. to start the next generation from it (L)">⇥ Last frame</button>
+          <span class="ve-fcount muted">No frames picked.</span>
+          <button type="button" class="link-btn ve-fclear hidden">Clear</button>
+          <span class="ve-frames-actions">
+            <button type="button" class="btn-secondary ve-fdownload" disabled title="Download the picked frames as PNG files">⬇ Download</button>
+            <button type="button" class="btn-secondary ve-fsave" disabled title="Save the picked frames to the project's gallery as images">Save to gallery</button>
+          </span>
+        </div>
+        <div class="fp-strip ve-fstrip"></div>
       </div>
     </div>
     <div class="ve-mix hidden">
@@ -75,29 +92,65 @@
         </label>
       </div>
     </div>
+    <div class="ve-target hidden">
+      <label class="inline"><input type="checkbox" class="ve-overwrite" /> <span class="ve-overwrite-label"></span></label>
+      <span class="muted ve-thint"></span>
+    </div>
     <p class="muted ve-status ve-msg hidden"></p>
     <p class="sp-save-warn hidden ve-err"></p>
     <div class="modal-actions">
       <button type="button" class="btn-secondary ve-reset hidden" title="Remove every clip">Start over</button>
       <button type="button" class="btn-secondary ve-close">Close</button>
       <button type="button" class="btn-secondary ve-cancel hidden">Cancel export</button>
-      <button type="button" class="ve-save" disabled title="Re-encode the result and choose where to save it">💾 Save as…</button>
+      <button type="button" class="btn-secondary ve-saveas" disabled title="Re-encode the result and choose where on this device to save it">Save as…</button>
+      <button type="button" class="ve-save" disabled title="Re-encode the result and save it as a new file in this project's output folder (edited_videos) — existing files are never overwritten">💾 Save</button>
     </div>
   </div>`;
   document.body.appendChild(modal);
+
+  // The "add videos" picker: GENie's own videos, or on to the device's file explorer.
+  const lib = document.createElement("div");
+  lib.id = "videoEditorLibrary";
+  lib.className = "modal hidden";
+  lib.innerHTML = `
+  <div class="modal-box fp-box ve-lib-box" role="dialog" aria-labelledby="veLibHeading">
+    <div class="pe-head">
+      <h3 id="veLibHeading" class="ve-lib-title">Add videos</h3>
+      <button type="button" class="link-btn pe-close ve-lib-close" title="Close (Esc)">×</button>
+    </div>
+    <div class="ve-lib-bar">
+      <button type="button" class="btn-secondary ve-lib-device">📁 From this device…</button>
+      <label class="inline" title="Show every project's videos, not only the active project's">
+        <input type="checkbox" class="ve-lib-all" /> All projects
+      </label>
+      <span class="muted ve-lib-count"></span>
+    </div>
+    <p class="dz-hint ve-lib-empty hidden"></p>
+    <div class="ve-lib-grid"></div>
+    <button type="button" class="btn-secondary ve-lib-more hidden">Show more</button>
+    <div class="modal-actions">
+      <button type="button" class="btn-secondary ve-lib-close">Cancel</button>
+      <button type="button" class="ve-lib-add" disabled>Add</button>
+    </div>
+  </div>`;
+  document.body.appendChild(lib);
 
   const el = {};
   for (const k of [
     "name", "drop", "file", "editor", "clips", "prepend", "append", "work", "scrub",
     "track", "pos", "result", "play", "start", "end", "in", "out", "cut", "count",
     "restore", "cuts", "mix", "size", "fit", "msg", "err", "reset", "cancel", "save",
+    "saveas", "import", "pick", "lastframe", "fcount", "fclear", "fdownload", "fsave",
+    "fstrip", "target", "overwrite", "thint",
   ])
     el[k] = $(`.ve-${k}`, modal);
   el.badge = $(".ve-cut-badge", modal);
   const v = $("video", modal);
 
-  // A clip: { file, url, name, id, fps, frames, width, height, cur, markIn, markOut,
-  //   cuts: [[start, end), …] sorted and merged, ready (uploaded and measured), sent }
+  // A clip: { file | remote, url, name, id, fps, frames, width, height, cur, markIn,
+  //   markOut, cuts: [[start, end), …] sorted and merged, ready (on the server and
+  //   measured), sent } — `file` is a picked file to upload, `remote` one of GENie's
+  //   own videos, used where it lies.
   let clips = []; // in playing order
   let st = null; // the clip on screen — every frame edit applies to it
   let loaded = false; // the player has decoded st
@@ -110,6 +163,14 @@
   let addWhere = "append";
   let sizeFrom = null; // the clip the result takes its size from; null = the largest
   let fit = "fit"; // how clips of another shape meet that size: "fit" | "fill"
+  // Where Save puts the result when the editor was opened from a card:
+  // { kind: "history" | "gallery", id, index, projectId } — null for the plain tool.
+  let target = null;
+  // Picked frames: { clip (null once its clip has gone), n, base, blob, thumb, last,
+  //   savedId }.
+  let picks = [];
+  let savingFrames = false;
+  const FALLBACK_FPS = 24; // without ffmpeg there's no way to read the real rate
 
   const live = () => !!st && st.ready && loaded;
   const show = (node, msg) => {
@@ -118,6 +179,11 @@
   };
   const showErr = (msg) => show(el.err, msg);
   const showStatus = (msg) => show(el.msg, msg);
+  const noFfmpeg = () =>
+    ffmpegHint ?
+      `${ffmpegHint}. Until then you can step through videos and save frames (at an assumed ${FALLBACK_FPS} fps), but not cut, join or save video.`
+    : "";
+  const baseName = (clip) => String(clip.name || "video").replace(/\.[^.]+$/, "");
   const fmtTime = (s) => {
     const m = Math.floor(s / 60);
     return `${String(m).padStart(2, "0")}:${(s - m * 60).toFixed(3).padStart(6, "0")}`;
@@ -175,6 +241,13 @@
     el.pos.textContent = `Frame ${n + 1} / ${st.frames} · ${fmtTime(n / st.fps)}`;
     el.badge.classList.toggle("hidden", !cutAt(n));
     el.play.textContent = v.paused ? "▶︎" : "❚❚";
+    const picked = picks.some((p) => p.clip === st && p.n === n);
+    el.pick.textContent = picked ? "✓ Picked — unpick" : "＋ Pick frame";
+    el.pick.classList.toggle("on", picked);
+    for (const t of el.fstrip.children) {
+      const p = picks[Number(t.dataset.k)];
+      t.classList.toggle("cur", !!p && p.clip === st && p.n === n);
+    }
     let head = $(".ve-head", el.track);
     if (!head) {
       head = document.createElement("span");
@@ -199,7 +272,9 @@
         `<button type="button" class="link-btn" data-act="remove" title="Remove this clip">×</button>`;
       $(".ve-clip-name", chip).textContent = clip.name;
       $(".ve-clip-dur", chip).textContent =
-        clip.ready ? fmtTime(keptFrames(clip) / clip.fps) : `${clip.sent}%`;
+        !clip.ready ? `${clip.sent}%`
+        : clip.estimated && !clip.measured ? "…"
+        : fmtTime(keptFrames(clip) / clip.fps);
       $('[data-act="left"]', chip).disabled = i === 0;
       $('[data-act="right"]', chip).disabled = i === clips.length - 1;
       chip.addEventListener("click", (e) => {
@@ -291,7 +366,9 @@
         `Result: ${fmtTime(seconds)}${clips.length > 1 ? ` · ${plural(clips.length, "clip")}` : ""}`
       : "";
     renderMix();
-    el.save.disabled =
+    renderFrames();
+    renderTarget();
+    el.save.disabled = el.saveas.disabled =
       !!job || !!ffmpegHint || !edited || !clips.length || done.length < clips.length || !(seconds > 0);
     el.name.textContent = st ? `— ${st.name}` : "";
     el.work.classList.toggle("ve-busy", !live());
@@ -415,6 +492,14 @@
   // Once the clip on screen is both decoded and measured, show it.
   function enter() {
     if (!live()) return;
+    // Without ffmpeg the length comes from the browser, in frames at the assumed rate.
+    if (st.estimated && !st.measured && Number.isFinite(v.duration))
+      Object.assign(st, {
+        frames: Math.max(1, Math.round(v.duration * st.fps)),
+        width: v.videoWidth,
+        height: v.videoHeight,
+        measured: true,
+      });
     el.scrub.max = String(st.frames - 1);
     renderAll();
     const first = kept()[0];
@@ -475,9 +560,27 @@
   const forget = (id) =>
     id && fetch(`${API}/source/${id}`, { method: "DELETE", keepalive: true }).catch(() => {});
 
+  // Get a clip onto the server: link one of GENie's own videos, or upload a file.
+  const register = (clip) =>
+    clip.remote ?
+      api(`${API}/import`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: clip.url }),
+      })
+    : upload(clip);
+
   async function send(clip) {
+    if (ffmpegHint) {
+      // No ffmpeg on the server: nothing to measure or export with, so the clip is
+      // previewed as it is, for stepping through and picking frames.
+      Object.assign(clip, { fps: FALLBACK_FPS, estimated: true, ready: true });
+      if (clip === st && loaded) enter();
+      else renderAll();
+      return;
+    }
     try {
-      const info = await upload(clip);
+      const info = await register(clip);
       if (!clips.includes(clip)) return forget(info.id);
       Object.assign(clip, {
         id: info.id,
@@ -496,29 +599,37 @@
     }
   }
 
-  function addFiles(files, where) {
-    const added = [...files]
-      .filter((f) => f.type.startsWith("video/") || /\.(mp4|mov|mkv|webm|m4v|avi)$/i.test(f.name))
-      .map((file) => ({
-        file,
-        url: URL.createObjectURL(file),
-        name: file.name || "video.mp4",
-        id: null,
-        fps: 0,
-        frames: 1,
-        width: 0,
-        height: 0,
-        cur: 0,
-        cuts: [],
-        markIn: null,
-        markOut: null,
-        ready: false,
-        sent: 0,
-      }));
+  const newClip = (from) => ({
+    id: null,
+    fps: 0,
+    frames: 1,
+    width: 0,
+    height: 0,
+    cur: 0,
+    cuts: [],
+    markIn: null,
+    markOut: null,
+    ready: false,
+    sent: 0,
+    ...from,
+  });
+
+  const addFiles = (files, where) =>
+    addClips(
+      [...files]
+        .filter((f) => f.type.startsWith("video/") || /\.(mp4|mov|mkv|webm|m4v|avi)$/i.test(f.name))
+        .map((file) =>
+          newClip({ file, url: URL.createObjectURL(file), name: file.name || "video.mp4" }),
+        ),
+      where,
+    );
+
+  function addClips(added, where) {
     if (!added.length) return;
     dirty = dirty || clips.length > 0;
     clips = where === "prepend" ? [...added, ...clips] : [...clips, ...added];
     el.drop.classList.add("hidden");
+    el.import.classList.add("hidden");
     el.editor.classList.remove("hidden");
     el.reset.classList.remove("hidden");
     showStatus("");
@@ -529,7 +640,7 @@
   function release(clip) {
     clip.xhr?.abort();
     forget(clip.id);
-    URL.revokeObjectURL(clip.url);
+    if (clip.file) URL.revokeObjectURL(clip.url);
   }
 
   function unloadPlayer() {
@@ -548,12 +659,15 @@
     if (i < 0) return;
     clips.splice(i, 1);
     release(clip);
-    if (!clips.length) return clear();
+    for (const p of picks) if (p.clip === clip) p.clip = null; // keep its frames
+    if (!clips.length) return clear({ keepFrames: true, keepTarget: true });
     if (clip === st) activate(clips[Math.min(i, clips.length - 1)]);
     else renderAll();
   }
 
-  function clear() {
+  // keepFrames: picked frames stay (unlinked from their clips); keepTarget: Save still
+  // goes to the card the editor was opened from.
+  function clear({ keepFrames = false, keepTarget = false } = {}) {
     if (job && job !== "starting")
       fetch(`${API}/jobs/${job}`, { method: "DELETE", keepalive: true }).catch(() => {});
     job = null;
@@ -563,14 +677,20 @@
     unloadPlayer();
     el.name.textContent = "";
     el.drop.classList.remove("hidden");
+    el.import.classList.remove("hidden");
     el.editor.classList.add("hidden");
     el.reset.classList.add("hidden");
     el.cancel.classList.add("hidden");
-    el.save.disabled = true;
+    el.save.disabled = el.saveas.disabled = true;
     sizeFrom = null;
     el.mix.classList.add("hidden");
+    if (keepFrames) for (const p of picks) p.clip = null;
+    else picks = [];
+    if (!keepTarget) target = null;
+    renderFrames();
+    renderTarget();
     showStatus("");
-    showErr(ffmpegHint || "");
+    showErr(noFfmpeg());
   }
 
   // ------------------------------------------------------------- saving
@@ -594,7 +714,8 @@
           fit,
         }),
       });
-    // The server sweeps uploads after some hours; send again whichever it names.
+    // The server sweeps uploads after some hours and forgets its links to GENie's own
+    // videos when it restarts; register again whichever it names.
     for (let tries = 0; ; tries++) {
       try {
         return await post();
@@ -602,13 +723,23 @@
         const gone = err.status === 404 && list.find((c) => c.id === err.id);
         if (!gone || tries >= list.length) throw err;
         showStatus(`Sending ${gone.name} to GENie again…`);
-        gone.id = (await upload(gone)).id;
+        gone.id = (await register(gone)).id;
       }
     }
   }
 
-  async function save() {
+  // toFile: hand the result to the browser (a save dialog, or its downloads) instead
+  // of keeping it in the project's edited_videos folder.
+  async function save(toFile) {
     if (job || el.save.disabled) return;
+    const toCard = !toFile && target ? { ...target, overwrite: el.overwrite.checked } : null;
+    if (
+      toCard?.overwrite &&
+      !confirm(
+        `Replace ${toCard.kind === "history" ? "the card's video" : "this Gallery video"} with the edit? The current file is deleted.`,
+      )
+    )
+      return;
     const list = clips.filter((c) => keptFrames(c) > 0);
     const mine = clips; // the clip list this export belongs to
     const outName = `${list[0].name.replace(/\.[^.]+$/, "")}-edited.mp4`;
@@ -618,7 +749,7 @@
     // Chromium offers this, and only to localhost / https pages; elsewhere the result
     // goes through the browser's normal download.
     let handle = null;
-    if (window.showSaveFilePicker) {
+    if (toFile && window.showSaveFilePicker) {
       try {
         handle = await window.showSaveFilePicker({
           suggestedName: outName,
@@ -629,10 +760,11 @@
       }
     }
 
-    el.save.disabled = true;
+    el.save.disabled = el.saveas.disabled = true;
     el.cancel.classList.remove("hidden");
     const still = (id) => clips === mine && job === id;
     let jobId = null;
+    let replaced = null; // what an overwrite saved, to carry on editing from
     try {
       job = "starting";
       showStatus("Starting…");
@@ -648,7 +780,42 @@
         await sleep(400);
       }
       const fileUrl = `${API}/jobs/${jobId}/file?name=${encodeURIComponent(outName)}`;
-      if (handle) {
+      if (toCard) {
+        showStatus("Saving…");
+        const saved = await api(`${API}/jobs/${jobId}/save`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: outName, target: toCard }),
+        });
+        jobId = null; // the server has moved it out of its temp folder
+        if (saved.kind === "history" && typeof loadHistory === "function") loadHistory();
+        if (saved.kind === "gallery" && typeof loadGallery === "function") loadGallery();
+        if (toCard.overwrite) replaced = saved;
+        else
+          showStatus(
+            saved.kind === "history" ?
+              `Added to the card as video ${saved.index + 1} of ${saved.count}.`
+            : `Added to the Gallery as ${saved.name}.`,
+          );
+      } else if (!toFile) {
+        showStatus("Saving…");
+        const saved = await api(`${API}/jobs/${jobId}/save`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: outName,
+            projectId: typeof activeProjectId !== "undefined" ? activeProjectId : "default",
+          }),
+        });
+        jobId = null; // the server has moved it out of its temp folder
+        showStatus(`Saved to ${saved.folder} as `);
+        const a = document.createElement("a");
+        a.href = saved.url;
+        a.target = "_blank";
+        a.textContent = saved.name;
+        a.title = "Open the saved video";
+        el.msg.append(a, ".");
+      } else if (handle) {
         showStatus("Saving…");
         const res = await fetch(fileUrl);
         if (!res.ok) throw new Error(`Couldn't fetch the result (HTTP ${res.status})`);
@@ -679,20 +846,417 @@
         renderAll();
       }
     }
+    // The card's old file is gone, so carry on from the saved edit: it is the card's
+    // video now, uncut. Picked frames stay.
+    if (replaced && clips === mine) {
+      const card = { ...target, index: replaced.index ?? target.index };
+      clear({ keepFrames: true, keepTarget: true });
+      target = card;
+      renderTarget();
+      addClips([newClip({ remote: true, url: replaced.url, name: mine[0]?.name || replaced.name })], "append");
+      showStatus(
+        replaced.kind === "history" ?
+          "Replaced the card's video — now editing the saved version."
+        : "Replaced the Gallery video — now editing the saved version.",
+      );
+    }
   }
 
-  // ------------------------------------------------------------- open / close
-  const confirmDiscard = () => !dirty || confirm("Discard the edit you haven't saved?");
+  // The "save to the card" choice, shown only when the editor was opened from one.
+  function renderTarget() {
+    el.target.classList.toggle("hidden", !target);
+    const card = target?.kind === "history";
+    const over = !!target && el.overwrite.checked;
+    $(".ve-overwrite-label", el.target).textContent =
+      card ? "Overwrite the card's current video" : "Overwrite the Gallery video";
+    el.thint.textContent =
+      !target ? ""
+      : over ?
+        card ? "Save replaces the card's video with the edit and deletes the current file."
+        : "Save replaces the Gallery video with the edit (prompts using it get the edit) and deletes the current file."
+      : card ? "Save adds the edit to the card as another video; the current one stays."
+      : "Save adds the edit to the Gallery as a new video; this one stays.";
+    el.save.textContent =
+      !target ? "💾 Save"
+      : over ? "💾 Overwrite video"
+      : card ? "💾 Add to card"
+      : "💾 Add to Gallery";
+    el.save.title =
+      target ? el.thint.textContent : (
+        "Re-encode the result and save it as a new file in this project's output folder (edited_videos) — existing files are never overwritten"
+      );
+  }
 
-  async function open() {
+  // ------------------------------------------------------------- frames
+  const frameFile = (p) =>
+    `${p.base}-${p.last ? "last-frame" : `f${String(p.n + 1).padStart(4, "0")}`}.png`;
+  const unsavedFrames = () => picks.filter((p) => !p.savedId).length;
+  const projectFor = () =>
+    target?.projectId || (typeof activeProjectId !== "undefined" ? activeProjectId : "default");
+
+  // The frame on screen as a full-size PNG plus a small thumbnail.
+  function grab() {
+    const c = document.createElement("canvas");
+    c.width = v.videoWidth;
+    c.height = v.videoHeight;
+    c.getContext("2d").drawImage(v, 0, 0);
+    const tc = document.createElement("canvas");
+    tc.height = 96;
+    tc.width = Math.max(1, Math.round((v.videoWidth / v.videoHeight) * tc.height));
+    tc.getContext("2d").drawImage(c, 0, 0, tc.width, tc.height);
+    return new Promise((resolve, reject) =>
+      c.toBlob(
+        (blob) =>
+          blob ? resolve({ blob, thumb: tc.toDataURL("image/jpeg", 0.8) })
+          : reject(new Error("This browser couldn't read the frame.")),
+        "image/png",
+      ),
+    );
+  }
+
+  // Resolves once the player has landed on the frame it was sent to.
+  const settle = () =>
+    new Promise((r) => {
+      if (!seeking && pending == null) return r();
+      const done = () => {
+        if (seeking || pending != null) return;
+        v.removeEventListener("seeked", done);
+        r();
+      };
+      v.addEventListener("seeked", done);
+    });
+
+  // Pick (or unpick) the frame on screen; `last` picks the clip's last kept frame.
+  async function pickFrame(last = false) {
+    if (!live()) return;
+    if (last) {
+      const segs = kept();
+      if (!segs.length) return;
+      go(segs[segs.length - 1][1] - 1);
+    } else if (!v.paused) go(frameAt(v.currentTime)); // settle on a whole frame
+    await settle();
+    if (!live()) return;
+    const clip = st;
+    const n = st.cur;
+    const at = picks.findIndex((p) => p.clip === clip && p.n === n);
+    if (at >= 0) {
+      if (last) picks[at].last = true;
+      else picks.splice(at, 1);
+      return renderAll();
+    }
+    try {
+      const { blob, thumb } = await grab();
+      picks.push({ clip, n, base: baseName(clip), blob, thumb, last });
+      renderAll();
+    } catch (err) {
+      showErr(err.message || String(err));
+    }
+  }
+
+  function showPick(p) {
+    if (p.clip === st) return go(p.n);
+    p.clip.cur = p.n;
+    activate(p.clip);
+  }
+
+  function renderFrames() {
+    const order = (p) => (p.clip ? clips.indexOf(p.clip) : -1);
+    el.fstrip.innerHTML = "";
+    picks.sort((a, b) => order(a) - order(b) || a.n - b.n);
+    picks.forEach((p, k) => {
+      const t = document.createElement("div");
+      t.className = `fp-thumb${p.savedId ? " saved" : ""}`;
+      t.dataset.k = String(k);
+      t.title = `${frameFile(p)}${p.savedId ? " (saved to the gallery)" : ""}${p.clip ? " — click to go there" : ""}`;
+      t.innerHTML = `<img alt="" /><span></span><button type="button" class="fp-x" title="Unpick">×</button>`;
+      $("img", t).src = p.thumb;
+      const where = p.last ? "last" : String(p.n + 1);
+      $("span", t).textContent =
+        `${p.savedId ? "✓ " : ""}${clips.length > 1 && p.clip ? `${order(p) + 1}:` : ""}${where}`;
+      t.addEventListener("click", (e) => {
+        if (e.target.closest(".fp-x")) {
+          picks = picks.filter((x) => x !== p);
+          return renderAll();
+        }
+        if (p.clip && clips.includes(p.clip)) showPick(p);
+      });
+      el.fstrip.appendChild(t);
+    });
+    const c = picks.length;
+    const todo = unsavedFrames();
+    el.fcount.textContent =
+      !c ? "No frames picked." : `${plural(c, "frame")} picked${c - todo ? ` · ${c - todo} saved` : ""}`;
+    el.fclear.classList.toggle("hidden", !c);
+    el.fdownload.disabled = !c;
+    if (!savingFrames) {
+      el.fsave.disabled = !todo;
+      el.fsave.textContent =
+        todo ? `Save ${todo} to gallery`
+        : c ? "All saved ✓"
+        : "Save to gallery";
+    }
+    el.pick.disabled = el.lastframe.disabled = !live();
+  }
+
+  const blobToDataUrl = (blob) =>
+    new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(r.result);
+      r.onerror = () => reject(r.error);
+      r.readAsDataURL(blob);
+    });
+
+  // One frame to the gallery, retried: a phone on Wi-Fi drops the odd large upload
+  // ("Load failed" in Safari). Returns the new gallery entry's id.
+  async function uploadFrame(p, projectId) {
+    const base64Data = await blobToDataUrl(p.blob);
+    let lastErr;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        const res = await fetch("/api/upload", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ base64Data, fileName: frameFile(p), projectId }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data.image?.id) return data.image.id;
+        lastErr = new Error(data.msg || `HTTP ${res.status}`);
+        if (res.status >= 400 && res.status < 500) break; // the server refused it — retrying won't help
+      } catch (err) {
+        lastErr = err; // network drop: try again
+      }
+      if (attempt < 3) await sleep(attempt * 1500);
+    }
+    throw lastErr;
+  }
+
+  // Saves only the picks that aren't in the gallery yet, so pressing Save again after
+  // a failure never duplicates the ones that made it.
+  async function saveFrames() {
+    if (savingFrames) return;
+    const todo = picks.filter((p) => !p.savedId);
+    if (!todo.length) return;
+    savingFrames = true;
+    el.fsave.disabled = true;
+    showErr("");
+    const projectId = projectFor();
+    const failed = [];
+    for (let i = 0; i < todo.length; i++) {
+      el.fsave.textContent = `Saving ${i + 1} of ${todo.length}…`;
+      try {
+        todo[i].savedId = await uploadFrame(todo[i], projectId);
+      } catch (err) {
+        failed.push(`${frameFile(todo[i])} (${err.message || err})`);
+      }
+      renderFrames(); // ✓ on each thumbnail as it lands
+    }
+    savingFrames = false;
+    if (typeof loadGallery === "function") loadGallery();
+    if (failed.length)
+      showErr(
+        `${failed.join(", ")} didn't save after 3 tries — press Save again to retry just ${failed.length === 1 ? "that one" : "those"}.`,
+      );
+    renderFrames();
+  }
+
+  async function downloadFrames() {
+    for (const p of [...picks]) {
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(p.blob);
+      a.download = frameFile(p);
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+      await sleep(250); // browsers drop rapid-fire downloads
+    }
+  }
+
+  // ------------------------------------------------------------- the picker
+  const LIB_PAGE = 24;
+  const L = {};
+  for (const k of ["title", "device", "all", "count", "empty", "grid", "more", "add"])
+    L[k] = $(`.ve-lib-${k}`, lib);
+  let libWhere = "append";
+  let libItems = [];
+  let libShown = 0;
+  let libPicked = []; // in the order they were clicked, which is the order they're added
+
+  function renderLibraryPicks() {
+    for (const tile of L.grid.children) {
+      const at = libPicked.indexOf(libItems[Number(tile.dataset.i)]);
+      tile.classList.toggle("picked", at >= 0);
+      $(".ve-lib-pick", tile).textContent = at >= 0 ? String(at + 1) : "";
+    }
+    L.add.disabled = !libPicked.length;
+    L.add.textContent = libPicked.length ? `Add ${plural(libPicked.length, "video")}` : "Add";
+  }
+
+  const libDate = (item) =>
+    item.date ?
+      new Date(item.date).toLocaleString(undefined, {
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+      })
+    : "";
+
+  // Watch a picker video full size, with sound, in the app's lightbox; its ‹ › step
+  // through the picker's videos.
+  function previewLibrary(item) {
+    if (typeof openLightbox !== "function") return window.open(item.url, "_blank");
+    const items = libItems.map((it) => ({
+      kind: "video",
+      src: it.url,
+      name: [it.source, libDate(it), it.label || it.name].filter(Boolean).join(" · "),
+    }));
+    const index = libItems.indexOf(item);
+    openLightbox("video", items[index].src, items[index].name, { items, index });
+  }
+
+  // A tile: the video (playing muted while hovered), its source, its date and length,
+  // ⛶ to watch it full size, and the pick order once picked. Click picks or unpicks.
+  function showMoreLibrary() {
+    for (const item of libItems.slice(libShown, libShown + LIB_PAGE)) {
+      const tile = document.createElement("div");
+      tile.className = "ve-lib-item";
+      tile.tabIndex = 0;
+      tile.setAttribute("role", "button");
+      tile.dataset.i = String(libItems.indexOf(item));
+      tile.title = `${item.name}${item.label ? `\n${item.label}` : ""}`;
+      tile.innerHTML =
+        `<video muted loop playsinline preload="metadata"></video><span class="ve-lib-src"></span>` +
+        `<span class="ve-lib-pick"></span>` +
+        `<button type="button" class="ve-lib-view" title="Watch it full size, with sound">⛶</button>` +
+        `<span class="ve-lib-label"></span>`;
+      const vid = $("video", tile);
+      vid.src = `${item.url}#t=0.1`;
+      $(".ve-lib-src", tile).textContent = item.source;
+      const label = $(".ve-lib-label", tile);
+      label.textContent = libDate(item) || item.name;
+      vid.addEventListener("loadedmetadata", () => {
+        if (Number.isFinite(vid.duration))
+          label.textContent = [libDate(item), `${vid.duration.toFixed(1)}s`].filter(Boolean).join(" · ");
+      });
+      tile.addEventListener("mouseenter", () => vid.play().catch(() => {}));
+      tile.addEventListener("mouseleave", () => {
+        vid.pause();
+        vid.currentTime = 0.1;
+      });
+      $(".ve-lib-view", tile).addEventListener("click", (e) => {
+        e.stopPropagation();
+        previewLibrary(item);
+      });
+      const toggle = () => {
+        const at = libPicked.indexOf(item);
+        if (at >= 0) libPicked.splice(at, 1);
+        else libPicked.push(item);
+        renderLibraryPicks();
+      };
+      tile.addEventListener("click", toggle);
+      tile.addEventListener("keydown", (e) => {
+        if (e.target !== tile || (e.key !== "Enter" && e.key !== " ")) return;
+        e.preventDefault();
+        toggle();
+      });
+      L.grid.appendChild(tile);
+    }
+    libShown = Math.min(libItems.length, libShown + LIB_PAGE);
+    L.more.classList.toggle("hidden", libShown >= libItems.length);
+    L.count.textContent = libItems.length ? `Showing ${libShown} of ${libItems.length}` : "";
+    renderLibraryPicks();
+  }
+
+  async function loadLibrary() {
+    L.grid.innerHTML = "";
+    libItems = [];
+    libShown = 0;
+    libPicked = [];
+    L.more.classList.add("hidden");
+    L.count.textContent = "";
+    show(L.empty, "Loading…");
+    renderLibraryPicks();
+    const all = L.all.checked;
+    const projectId =
+      all ? "all"
+      : typeof activeProjectId !== "undefined" ? activeProjectId
+      : "default";
+    try {
+      const items = await api(`${API}/library?projectId=${encodeURIComponent(projectId)}`);
+      if (lib.classList.contains("hidden") || all !== L.all.checked) return;
+      libItems = items;
+      show(
+        L.empty,
+        items.length ? "" : (
+          `No videos in ${all ? "any project" : "this project"} yet — its History results, Gallery videos and saved edits show up here.`
+        ),
+      );
+      showMoreLibrary();
+    } catch (err) {
+      show(L.empty, `Couldn't list GENie's videos: ${err.message || err}`);
+    }
+  }
+
+  function openLibrary(where) {
+    if (job) return;
+    libWhere = where;
+    L.title.textContent =
+      !clips.length ? "Open videos"
+      : where === "prepend" ? "Add videos before the first clip"
+      : "Add videos after the last clip";
+    lib.classList.remove("hidden");
+    loadLibrary();
+  }
+
+  function closeLibrary() {
+    lib.classList.add("hidden");
+    L.grid.innerHTML = ""; // let go of the thumbnails' decoders
+  }
+
+  L.all.addEventListener("change", loadLibrary);
+  L.more.addEventListener("click", showMoreLibrary);
+  L.device.addEventListener("click", () => {
+    closeLibrary();
+    pick(libWhere)();
+  });
+  L.add.addEventListener("click", () => {
+    const added = libPicked.map((item) => newClip({ remote: true, url: item.url, name: item.name }));
+    closeLibrary();
+    addClips(added, libWhere);
+  });
+  lib.querySelectorAll(".ve-lib-close").forEach((b) => b.addEventListener("click", closeLibrary));
+  lib.addEventListener("click", (e) => {
+    if (e.target === lib) closeLibrary();
+  });
+
+  // ------------------------------------------------------------- open / close
+  const confirmDiscard = () => {
+    const frames = unsavedFrames();
+    if (!dirty && !frames) return true;
+    const what = [dirty && "the edit", frames && plural(frames, "picked frame")].filter(Boolean);
+    return confirm(`Discard ${what.join(" and ")} you haven't saved?`);
+  };
+
+  // opts (from a card's ✂ Edit video): { url, name, projectId, card: { kind:
+  // "history" | "gallery", id, index } } — opens the editor on that video, with Save
+  // going back to the card. Without it, the plain tool.
+  async function open(opts) {
+    const from = opts?.url ? opts : null;
+    if (from && !confirmDiscard()) return;
     modal.classList.remove("hidden");
-    if (!clips.length) clear();
+    if (from || !clips.length) clear();
     try {
       ffmpegHint = (await api(`${API}/status`)).hint || "";
     } catch {
       ffmpegHint = "";
     }
-    if (!clips.length) clear();
+    if (from) {
+      showErr(noFfmpeg());
+      target = from.card ? { ...from.card, projectId: from.projectId || "default" } : null;
+      el.overwrite.checked = false;
+      addClips([newClip({ remote: true, url: from.url, name: from.name || "video" })], "append");
+    } else if (!clips.length) clear();
     else renderAll();
   }
 
@@ -709,8 +1273,9 @@
     el.file.click();
   };
   el.drop.addEventListener("click", pick("append"));
-  el.append.addEventListener("click", pick("append"));
-  el.prepend.addEventListener("click", pick("prepend"));
+  el.import.addEventListener("click", () => openLibrary("append"));
+  el.append.addEventListener("click", () => openLibrary("append"));
+  el.prepend.addEventListener("click", () => openLibrary("prepend"));
   el.file.addEventListener("change", () => {
     addFiles(el.file.files, addWhere);
     el.file.value = "";
@@ -783,7 +1348,19 @@
     renderAll();
   });
 
-  el.save.addEventListener("click", save);
+  el.pick.addEventListener("click", () => pickFrame());
+  el.lastframe.addEventListener("click", () => pickFrame(true));
+  el.fsave.addEventListener("click", saveFrames);
+  el.fdownload.addEventListener("click", downloadFrames);
+  el.fclear.addEventListener("click", () => {
+    if (picks.length && confirm("Unpick all frames?")) {
+      picks = [];
+      renderAll();
+    }
+  });
+  el.overwrite.addEventListener("change", renderTarget);
+  el.save.addEventListener("click", () => save(false));
+  el.saveas.addEventListener("click", () => save(true));
   el.cancel.addEventListener("click", () => {
     if (!job) return;
     if (job !== "starting") fetch(`${API}/jobs/${job}`, { method: "DELETE" }).catch(() => {});
@@ -797,6 +1374,17 @@
 
   document.addEventListener("keydown", (e) => {
     if (modal.classList.contains("hidden")) return;
+    // a preview open in the lightbox handles its own keys (Esc closes just it)
+    if (document.getElementById("lightbox")?.classList.contains("hidden") === false) return;
+    if (!lib.classList.contains("hidden")) {
+      // the picker is on top: Esc closes it, and the editor's shortcuts wait
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        closeLibrary();
+      }
+      return;
+    }
     if (e.key === "Escape") {
       e.preventDefault();
       e.stopPropagation();
@@ -817,6 +1405,9 @@
       i: markIn,
       o: markOut,
       x: cutSelection,
+      Enter: () => pickFrame(),
+      s: () => pickFrame(),
+      l: () => pickFrame(true),
     };
     const fn = keys[e.key.length === 1 ? e.key.toLowerCase() : e.key];
     if (!fn) return;
@@ -827,5 +1418,5 @@
 
   // ------------------------------------------------------------- entry point
   window.openVideoEditor = open;
-  document.getElementById("openVideoEditor")?.addEventListener("click", open);
+  document.getElementById("openVideoEditor")?.addEventListener("click", () => open());
 })();

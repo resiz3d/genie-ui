@@ -1162,72 +1162,43 @@ function renderGallery(items) {
   for (const item of visible) galleryEl.appendChild(makeGalleryCard(item));
 }
 
-// The final frame of a same-origin video as a PNG blob, decoded by the browser (no
-// ffmpeg needed). Seeking to the duration parks the player on the last frame.
-function captureLastFrame(url) {
-  return new Promise((resolve, reject) => {
-    const v = document.createElement("video");
-    v.muted = true;
-    v.preload = "auto";
-    const fail = () =>
-      reject(new Error("This browser couldn't decode the video to read its last frame."));
-    v.addEventListener("error", fail);
-    v.addEventListener("loadedmetadata", () => {
-      if (!Number.isFinite(v.duration) || !v.videoWidth) return fail();
-      v.currentTime = v.duration;
+// "✂ Edit video": opens the video editor on one video of a History card or on a
+// Gallery video. Saving there adds the edit to the card (or replaces its video), and
+// its Frames row saves stills — e.g. the last frame — to the gallery. `videos` lists
+// the card's videos as { url, index }; with several, the control is a menu.
+function makeEditVideoControl(videos, { name, projectId, kind, id }, { iconOnly = false } = {}) {
+  if (!videos.length || typeof openVideoEditor !== "function") return null;
+  const open = ({ url, index }) =>
+    openVideoEditor({
+      url,
+      name: videos.length > 1 && index ? `${name}-${index + 1}` : name,
+      projectId,
+      card: { kind, id, index },
     });
-    v.addEventListener("seeked", () => {
-      const canvas = document.createElement("canvas");
-      canvas.width = v.videoWidth;
-      canvas.height = v.videoHeight;
-      canvas.getContext("2d").drawImage(v, 0, 0);
-      canvas.toBlob((blob) => (blob ? resolve(blob) : fail()), "image/png");
-      v.removeAttribute("src");
-      v.load(); // release the decoder
-    });
-    v.src = url;
+  const title =
+    "Trim or cut this video, join others to it, or pick frames from it (e.g. the last frame) for the gallery";
+  if (videos.length === 1) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "btn-secondary";
+    btn.innerHTML = iconOnly ? "✂" : '<span class="btn-ico">✂</span> Edit video';
+    btn.title = title;
+    btn.addEventListener("click", () => open(videos[0]));
+    return btn;
+  }
+  const sel = document.createElement("select");
+  sel.className = "hist-project";
+  sel.title = title;
+  const ph = new Option("✂ Edit video…", "", true, true);
+  ph.disabled = true;
+  sel.appendChild(ph);
+  videos.forEach((vid, i) => sel.appendChild(new Option(`Video ${vid.index + 1}`, String(i))));
+  sel.addEventListener("change", () => {
+    const vid = videos[Number(sel.value)];
+    sel.value = "";
+    if (vid) open(vid);
   });
-}
-
-// Save a video's last frame to a project's gallery as "<name>-last-frame.png".
-// Returns the new gallery entry, or null if the save failed (already reported).
-async function saveLastFrame(url, name, projectId) {
-  const blob = await captureLastFrame(url);
-  const base = String(name || "video").replace(/\.[^.]+$/, "");
-  const file = new File([blob], `${base}-last-frame.png`, { type: "image/png" });
-  return (await uploadToGallery([file], projectId))[0] || null;
-}
-
-// A "Last frame" button: grabs the final frame of the video at `url` into the gallery.
-// `iconOnly` drops the words (the gallery cards' compact action row).
-function makeLastFrameButton(url, name, projectId, { iconOnly = false } = {}) {
-  const btn = document.createElement("button");
-  btn.type = "button";
-  btn.className = "btn-secondary";
-  const label = iconOnly ? "⇥" : '<span class="btn-ico">⇥</span> Last frame';
-  btn.innerHTML = label;
-  btn.title =
-    "Save this video's last frame to the gallery as an image (e.g. to start the next clip from it)";
-  btn.addEventListener("click", async () => {
-    btn.disabled = true;
-    btn.innerHTML = iconOnly ? "…" : "Grabbing…";
-    try {
-      const saved = await saveLastFrame(url, name, projectId);
-      btn.innerHTML =
-        !saved ? label
-        : iconOnly ? "✓"
-        : "Added to gallery!";
-    } catch (err) {
-      alert(err.message || String(err));
-      btn.innerHTML = label;
-    }
-    setTimeout(() => {
-      // the gallery re-render may already have replaced this card
-      btn.innerHTML = label;
-      btn.disabled = false;
-    }, 1500);
-  });
-  return btn;
+  return sel;
 }
 
 // One card of the main Gallery panel: the preview and its details side by side,
@@ -1301,18 +1272,12 @@ function makeGalleryCard(item) {
     () => openGalleryEdit(item),
   );
   if (kind === "video") {
-    actions.appendChild(
-      makeLastFrameButton(item.localUrl, item.name, item.projectId || "default", {
-        iconOnly: true,
-      }),
+    const edit = makeEditVideoControl(
+      [{ url: item.localUrl, index: 0 }],
+      { name: item.name, projectId: item.projectId || "default", kind: "gallery", id: item.id },
+      { iconOnly: true },
     );
-    if (typeof makeFramesButton === "function") {
-      actions.appendChild(
-        makeFramesButton(item.localUrl, item.name, item.projectId || "default", {
-          iconOnly: true,
-        }),
-      );
-    }
+    if (edit) actions.appendChild(edit);
   }
 
   // move to another project (file physically moves)
@@ -3076,6 +3041,8 @@ async function renderComfyControls() {
   );
   comfyLoraControl.setLoras([]); // the workflow's own LoRAs, before any saved loadout
   comfyControlsEl.appendChild(comfyLoraControl.el);
+  const autoTagsControl = makeComfyAutoTagsControl(wf.file);
+  comfyControlsEl.appendChild(autoTagsControl.el);
   if (body.childElementCount) comfyControlsEl.appendChild(details);
 
   // Transparency: node types GENie has no controls for. They run exactly as saved
@@ -3120,6 +3087,7 @@ async function renderComfyControls() {
       comfyMediaControl.setMedia(settings.workflowMedia);
     if (comfyBypassControl && Array.isArray(settings.bypass))
       comfyBypassControl.setDisabled(settings.bypass);
+    autoTagsControl.setTags(settings.autoTags);
   } catch {
     /* no saved settings — token defaults stand */
   }
@@ -3304,6 +3272,65 @@ function makeComfyMediaControl(workflowMedia, mediaOptions, offline) {
         row.chk.dispatchEvent(new Event("change"));
         row.sel.dispatchEvent?.(new Event("change", { bubbles: false })); // "overriding" tag
       }
+    },
+  };
+}
+
+// This workflow's auto-tags: your own labels, added to a run's History entry when it
+// finishes (server-side, so a run finished by the background sweep gets them too). Kept
+// in the workflow's server-side settings file — not with the form values, so the list
+// saves as you edit it rather than on the next run.
+function makeComfyAutoTagsControl(file) {
+  const field = document.createElement("div");
+  field.className = "field comfy-autotags";
+  field.style.gridColumn = "span 12";
+  field.innerHTML =
+    `<label class="field-head" for="comfyAutoTags"><span>Auto-tags ` +
+    `<span class="hint">(added to every run of this workflow in History when it finishes — comma-separated)</span></span>` +
+    `<span class="autotags-status hint" aria-live="polite"></span></label>` +
+    `<input id="comfyAutoTags" type="text" placeholder="e.g. upscaled, video" autocomplete="off" />`;
+  const input = field.querySelector("input");
+  const status = field.querySelector(".autotags-status");
+  const parse = () =>
+    input.value
+      .split(",")
+      .map((t) => t.trim())
+      .filter(Boolean);
+  let saved = "";
+  const save = async () => {
+    const tags = parse();
+    if (tags.join(",") === saved) return;
+    try {
+      const r = await fetch(
+        `/api/comfy/auto-tags?file=${encodeURIComponent(file)}`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ tags }),
+        },
+      ).then((x) => x.json());
+      if (r.code !== 200) throw new Error(r.msg || "save failed");
+      saved = (r.data || []).join(",");
+      input.value = (r.data || []).join(", ");
+      status.textContent = "saved";
+      setTimeout(() => (status.textContent = ""), 1500);
+    } catch (err) {
+      status.textContent = `not saved: ${err.message || err}`;
+    }
+  };
+  input.addEventListener("change", save);
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      save();
+    }
+  });
+  return {
+    el: field,
+    setTags: (tags) => {
+      const list = Array.isArray(tags) ? tags : [];
+      saved = list.join(",");
+      input.value = list.join(", ");
     },
   };
 }
@@ -3851,7 +3878,10 @@ function makeComfyMediaMulti(
     title: label,
     label,
     labelSep: " ", // "Picture 1" rather than "Picture1"
-    hint: `(up to ${max}, in order — drag to reorder)`,
+    hint:
+      max > 1 ?
+        `(up to ${max}, in order — drag to reorder)`
+      : "(one file)",
     tail: !!tail, // loader can skip frames → offer a per-file "use last N sec"
     tailGrid: tail?.grid || null,
     onChange: refreshComfyRefTags, // reference tags depend on what's filled
@@ -4698,6 +4728,31 @@ const joinList = (a) =>
     a.join("")
   : `${a.slice(0, -1).join(", ")} and ${a[a.length - 1]}`;
 
+// --- Previous scene -------------------------------------------------------------
+// A typed subject marked "Previous scene" holds `sceneId`: a gallery image (usually the
+// last frame of the clip before) that is a reference for the staging and the set, not a
+// first frame. On this prompt only, that image is keyed as the subject (default
+// <previous_scene>) — its gallery key and definition are left alone, so a frame keyed
+// for something else elsewhere doesn't turn into a second subject here.
+const PREV_SCENE_KEY = "previous_scene";
+const PREV_SCENE_DEF =
+  "the scene at the end of the previous clip: where everyone is in the room, the room's layout and furnishings, and the lighting";
+const PREV_SCENE_RET = "partially_preserved - keep the staging and the set: ";
+const prevSceneShotLead = (key = PREV_SCENE_KEY) =>
+  `Continuing from the staging in <${key}>: `;
+
+const sceneSubject = (mm) => (mm?.subjects || []).find((s) => s?.scene);
+
+// `refs` with the previous-scene image keyed as its subject for this prompt.
+function withSceneRefs(mm, refs) {
+  const s = sceneSubject(mm);
+  if (!s?.sceneId) return refs;
+  const key = normKey(s.key) || PREV_SCENE_KEY;
+  return refs.map((r) =>
+    r.id === s.sceneId ? { ...r, key, definition: "", scene: true } : r,
+  );
+}
+
 // The subjects the prompt defines, in order: references first (grouped by key, so one
 // subject can come from several files), then the extra subjects typed on the prompt.
 // Each: { label, sources: ["<Picture 1>", …], definition, audio, fromRefs }.
@@ -4870,8 +4925,9 @@ function appearsText(r) {
     : "not in any shot yet";
 }
 
-function compileMinimax(mmIn, refs) {
+function compileMinimax(mmIn, refsIn) {
   const mm = normalizeMinimax(mmIn);
+  const refs = withSceneRefs(mm, refsIn);
   const subjects = minimaxSubjects(mm, refs);
   const tokens = minimaxMediaTokens(refs);
   const tok = (t) => resolveMediaTokens(String(t || "").trim(), tokens);
@@ -7555,6 +7611,7 @@ function openPromptEditor(p, projectId = activeProjectId) {
     subjects: new Map(),
     historyId: p.historyId || null,
   };
+  scenePickerOpen = false;
   peTitle.value = p.title;
   pePrompt.value = p.prompt || "";
   peDuration.value = p.duration || "";
@@ -7794,7 +7851,17 @@ function makeRefTile(r, label) {
   name.title = name.textContent;
   info.appendChild(name);
 
-  if (!r.missing) {
+  const scene = editing.type === "minimax" && sceneSubject(editing.mm);
+  if (!r.missing && scene?.sceneId === r.id) {
+    // Keyed by the Previous scene subject on this prompt only (see withSceneRefs).
+    info.appendChild(
+      mmEl(
+        "div",
+        "hint sp-ref-scene",
+        `🎬 Previous scene — <${normKey(scene.key) || PREV_SCENE_KEY}> on this prompt (defined in subject_definitions)`,
+      ),
+    );
+  } else if (!r.missing) {
     // The same file can be listed twice; both tiles edit one shared subject.
     const s = subjectOf(r);
     const key = document.createElement("input");
@@ -7946,10 +8013,13 @@ const peRefsBlock = document.getElementById("peRefsBlock");
 // The editor's references as the compiler sees them: each with its working key +
 // definition (unsaved edits in the reference tiles included).
 function editorLiveRefs() {
-  return editing.refs.map((r) => {
-    const s = editing.subjects.get(r.id);
-    return s ? { ...r, key: normKey(s.key), definition: s.definition } : r;
-  });
+  return withSceneRefs(
+    editing.type === "minimax" ? editing.mm : null,
+    editing.refs.map((r) => {
+      const s = editing.subjects.get(r.id);
+      return s ? { ...r, key: normKey(s.key), definition: s.definition } : r;
+    }),
+  );
 }
 
 function mmEl(tag, cls, text) {
@@ -8005,6 +8075,131 @@ function mmRetentionField(getLabel) {
   });
   wrap.append(head, ta);
   return wrap;
+}
+
+// Turn a typed subject into the prompt's previous scene (or back). On: the key,
+// definition and retention are filled in where empty, and Shot 1 gets the
+// "Continuing from the staging in <key>:" lead. Off: the picked frame leaves the
+// references, and the lead and an untouched retention line come off again.
+let scenePickerOpen = false;
+function setPrevScene(s, on) {
+  const mm = editing.mm;
+  const label = () => `<${s.key}>`;
+  const shot1 = mm.shots[0];
+  if (on) {
+    s.scene = true;
+    if (!s.key) s.key = PREV_SCENE_KEY;
+    if (!String(s.definition || "").trim()) s.definition = PREV_SCENE_DEF;
+    if (!String(mm.retention[label()] || "").trim())
+      mm.retention[label()] = PREV_SCENE_RET;
+    const lead = prevSceneShotLead(s.key);
+    if (shot1 && !String(shot1.text || "").startsWith(lead.trim()))
+      shot1.text = lead + String(shot1.text || "").trimStart();
+    scenePickerOpen = !s.sceneId;
+    return;
+  }
+  if (s.sceneId) editing.refs = editing.refs.filter((r) => r.id !== s.sceneId);
+  if (s.key) {
+    const lead = prevSceneShotLead(s.key).trim();
+    if (shot1 && String(shot1.text || "").startsWith(lead))
+      shot1.text = String(shot1.text).slice(lead.length).trimStart();
+    if (String(mm.retention[label()] || "").trim() === PREV_SCENE_RET.trim())
+      delete mm.retention[label()];
+  }
+  delete s.scene;
+  delete s.sceneId;
+  scenePickerOpen = false;
+}
+
+// The previous scene's frame: replaces the one picked before in the references.
+function pickPrevScene(s, item) {
+  if (s.sceneId && s.sceneId !== item.id)
+    editing.refs = editing.refs.filter((r) => r.id !== s.sceneId);
+  if (!editing.refs.some((r) => r.id === item.id)) addEditorRef(item);
+  s.sceneId = item.id;
+  scenePickerOpen = false;
+  renderEditorRefs();
+  renderMinimaxForm();
+}
+
+// Under a previous-scene subject: its frame (or a gallery grid to pick one), Change,
+// and ✨ Analyze scene. Frame grabs (the video editor's -last-frame / -f0001 PNGs) are
+// listed first.
+function mmScenePanel(s) {
+  const panel = mmEl("div", "pe-mm-scene");
+  const ref = s.sceneId && editing.refs.find((r) => r.id === s.sceneId);
+  if (ref && !ref.missing) {
+    const cur = mmEl("div", "pe-mm-scene-cur");
+    const img = mmEl("img", "pe-mm-scene-img");
+    img.src = ref.url;
+    img.alt = "";
+    img.title = "Open full size";
+    img.addEventListener("click", () => openLightbox("image", ref.url, ref.name));
+    const side = mmEl("div", "pe-mm-scene-side");
+    side.appendChild(mmEl("div", "sp-ref-name", ref.name));
+    const tools = mmEl("div", "pe-mm-scene-tools");
+    const change = mmEl(
+      "button",
+      "btn-secondary",
+      scenePickerOpen ? "Close" : "Change image",
+    );
+    change.type = "button";
+    change.addEventListener("click", () => {
+      scenePickerOpen = !scenePickerOpen;
+      renderMinimaxForm();
+    });
+    tools.appendChild(change);
+    if (window.genieAnalyze) {
+      const an = mmEl("button", "btn-secondary", "✨ Analyze scene");
+      an.type = "button";
+      an.title =
+        "A vision LLM looks at this frame and writes where each subject is and what the room holds — into the definition, the retention line and Shot 1's lead. Pick the server in ⚙ LLM settings.";
+      an.addEventListener("click", () => window.genieAnalyze(normKey(s.key)));
+      tools.appendChild(an);
+    }
+    side.appendChild(tools);
+    cur.append(img, side);
+    panel.appendChild(cur);
+  } else {
+    panel.appendChild(
+      mmEl(
+        "div",
+        "hint",
+        "Pick the frame where the last clip left off (grab it with ✂ Edit video → ⇥ Last frame on a video).",
+      ),
+    );
+  }
+  if (scenePickerOpen || !ref || ref.missing) {
+    const items = galleryItems
+      .filter(
+        (g) =>
+          (g.projectId || "default") === editing.projectId &&
+          (g.kind || "image") === "image",
+      )
+      .map((g, i) => [g, i])
+      .sort(
+        ([a, i], [b, j]) =>
+          /-last-frame|-f\d{4}\./.test(b.name) -
+            /-last-frame|-f\d{4}\./.test(a.name) || i - j,
+      )
+      .map(([g]) => g);
+    const grid = mmEl("div", "thumbs gallery pe-mm-scene-grid");
+    for (const item of items) {
+      const t = makeGalleryThumb(item, {
+        title: `${item.name} — use as the previous scene`,
+        onPick: (it) => pickPrevScene(s, it),
+        refresh: renderMinimaxForm,
+      });
+      t.classList.toggle("picked", item.id === s.sceneId);
+      grid.appendChild(t);
+    }
+    if (!items.length)
+      panel.appendChild(
+        mmEl("div", "hint", "No images in this project's gallery yet."),
+      );
+    panel.appendChild(grid);
+  }
+  return panel;
 }
 
 function renderMinimaxForm() {
@@ -8083,8 +8278,11 @@ function renderMinimaxRefParts(mm) {
   fromRefs.id = "mmRefSubjects"; // rows built by refreshMinimaxDerived (they follow the references)
   subj.appendChild(fromRefs);
   const extras = mmEl("div", "pe-mm-list");
+  const scene = sceneSubject(mm);
   mm.subjects.forEach((s, i) => {
     const row = mmEl("div", "pe-mm-subject");
+    if (s.scene) row.classList.add("pe-mm-scene-row");
+    const keyCol = mmEl("div", "pe-mm-keycol");
     const key = mmEl("input", "pe-mm-key");
     key.type = "text";
     key.placeholder = "key, e.g. new";
@@ -8119,13 +8317,32 @@ function renderMinimaxRefParts(mm) {
     rm.type = "button";
     rm.title = "Remove this subject";
     rm.addEventListener("click", () => {
+      if (s.scene) setPrevScene(s, false);
       mm.subjects.splice(i, 1);
+      renderEditorRefs();
       renderMinimaxForm();
     });
+    const sceneBox = mmEl("label", "pe-mm-scene-check");
+    const cb = mmEl("input");
+    cb.type = "checkbox";
+    cb.checked = !!s.scene;
+    cb.disabled = !!scene && scene !== s; // one previous scene per prompt
+    sceneBox.title =
+      cb.disabled ?
+        `${scene.key ? `<${scene.key}>` : "Another subject"} is already this prompt's previous scene`
+      : "A frame from where the last clip left off — a reference for who stands where and what the room looks like when planning Shot 1 (not a first frame)";
+    cb.addEventListener("change", () => {
+      setPrevScene(s, cb.checked);
+      renderEditorRefs();
+      renderMinimaxForm();
+    });
+    sceneBox.append(cb, document.createTextNode(" Previous scene"));
+    keyCol.append(key, sceneBox);
     row.append(
-      key,
+      keyCol,
       def,
       rm,
+      ...(s.scene ? [mmScenePanel(s)] : []),
       mmRetentionField(() => (s.key ? `<${s.key}>` : null)),
     );
     extras.appendChild(row);
@@ -8146,6 +8363,20 @@ function renderMinimaxRefParts(mm) {
       ?.focus();
   });
   subj.appendChild(addSubj);
+  if (!scene) {
+    const addScene = mmEl("button", "link-btn", "＋ Add previous scene");
+    addScene.type = "button";
+    addScene.title =
+      "Pick the frame where the last clip left off — a reference for staging and the set when planning Shot 1";
+    addScene.addEventListener("click", () => {
+      const s = { key: "", definition: "" };
+      mm.subjects.push(s);
+      setPrevScene(s, true);
+      renderMinimaxForm();
+      peMinimax.querySelector(".pe-mm-scene")?.scrollIntoView({ block: "nearest" });
+    });
+    subj.appendChild(addScene);
+  }
   // ✨ Analyze images (llm.js): a vision LLM writes the definitions and retention lines.
   const analyze = window.genieAnalyzeBar?.();
   if (analyze) subj.appendChild(analyze);
@@ -9500,7 +9731,7 @@ function filterHistory(entries) {
 }
 
 // A history entry's tags: derived kind (image/video, only once there's an output)
-// + the stored favorite/draft.
+// + the stored favorite/draft + the workflow's auto-tags stamped when the run finished.
 function entryTags(entry) {
   const tags = [];
   const src = entry.localVideo || entry.resultUrl || "";
@@ -9514,6 +9745,9 @@ function entryTags(entry) {
   }
   if (entry.favorite) tags.push("favorite");
   if (entry.draft) tags.push("draft");
+  for (const t of Array.isArray(entry.tags) ? entry.tags : [])
+    if (!tags.some((x) => x.toLowerCase() === String(t).toLowerCase()))
+      tags.push(String(t));
   return tags;
 }
 
@@ -9772,14 +10006,26 @@ function buildHistDetails(entry, input, comfyEntry, isImg) {
   fp.textContent = input.prompt || "(no prompt)";
   // A workflow's prompt enhancer rewrote the text before encoding it: show what was
   // typed and what the model was given, each under its own label.
-  const promptBlock = (text, el) => {
+  const promptBlock = (text, el, copy) => {
     const lbl = document.createElement("div");
-    lbl.className = "hist-refs-label";
-    lbl.textContent = text;
+    lbl.className = "hist-refs-label hist-prompt-head";
+    lbl.append(text);
+    if (copy) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "link-btn";
+      btn.textContent = "⧉ Copy";
+      btn.title = "Copy this prompt to the clipboard";
+      btn.addEventListener("click", async () => {
+        btn.textContent = (await copyText(copy)) ? "Copied!" : "Copy failed";
+        setTimeout(() => (btn.textContent = "⧉ Copy"), 1200);
+      });
+      lbl.appendChild(btn);
+    }
     dbody.append(lbl, el);
   };
   if (typeof entry.enhancedPrompt === "string") {
-    promptBlock("Prompt", fp);
+    promptBlock("Prompt", fp, input.prompt);
     const ep = document.createElement("div");
     ep.className = "hist-fullprompt";
     // Blank: the enhancer ran out of tokens before answering, and its (empty) answer
@@ -9790,8 +10036,8 @@ function buildHistDetails(entry, input, comfyEntry, isImg) {
         "The LLM most likely used its whole token limit before answering — raise Max length " +
         "under Prompt Enhancer — LLM Settings, or switch the enhancer off.";
     if (!entry.enhancedPrompt) ep.classList.add("comfy-missing");
-    promptBlock("Enhanced prompt — what the model was given", ep);
-  } else dbody.appendChild(fp);
+    promptBlock("Enhanced prompt — what the model was given", ep, entry.enhancedPrompt);
+  } else promptBlock("Prompt", fp, input.prompt);
   details.appendChild(dbody);
   return details;
 }
@@ -9929,6 +10175,11 @@ function renderHistoryPager(pageCount) {
   );
 }
 
+document.addEventListener("click", (e) => {
+  for (const m of document.querySelectorAll(".hist-more[open]"))
+    if (!m.contains(e.target)) m.open = false;
+});
+
 function renderHistory(entries) {
   renderProjectCredits();
   historyEl.innerHTML = "";
@@ -9954,6 +10205,7 @@ function renderHistory(entries) {
     const comfyEntry = (input.model || "").startsWith("comfy:");
     const output = entry.localVideo || entry.resultUrl;
     const isImg = comfyEntry ? isImageFile(output) : isImageOutput(input.model);
+    let liveCol = null; // an in-flight run's status column, which hosts the body too
     if (!output) {
       const live = entry.status === "pending" ? liveStatus.get(entry.id) : null;
       if (live) {
@@ -9961,6 +10213,7 @@ function renderHistory(entries) {
         // element is re-parented across re-renders so the poller's ref stays valid.
         card.classList.add("hist-card-live");
         card.appendChild(live.el);
+        liveCol = live.el.querySelector(".hist-live-col");
       } else {
         // Pending with no live controller (e.g. before resume polls), or a run that
         // failed/was cancelled. Prompt is preserved; Re-run works.
@@ -9977,11 +10230,18 @@ function renderHistory(entries) {
       // History always shows a thumbnail — a <video preload="metadata"> renders the
       // first frame without downloading the whole file. The media is wrapped in a
       // fixed-width thumb so the flex row can't stretch it to the card's height. A
-      // run that produced several outputs (a batch) shows them all in a grid.
+      // run that produced several outputs (a batch) shows them all in a grid — or,
+      // when they're videos (e.g. edits the video editor added), stacked one above
+      // the other at their own shape.
       const outs = entryOutputs(entry);
       const thumb = document.createElement("div");
+      const anyVideo = outs.some((o) => {
+        const src = o.localVideo || o.resultUrl;
+        return src && !(comfyEntry ? isImageFile(src) : isImageOutput(input.model));
+      });
       thumb.className =
-        "hist-thumb" + (outs.length > 1 ? " hist-thumb-grid" : "");
+        "hist-thumb" +
+        (outs.length > 1 ? ` hist-thumb-grid${anyVideo ? " hist-thumb-stack" : ""}` : "");
       outs.forEach((o, i) => {
         const src = o.localVideo || o.resultUrl;
         if (!src) return;
@@ -10068,46 +10328,59 @@ function renderHistory(entries) {
         `${input.duration === -1 ? "auto" : `${input.duration || "?"}s`}${cost}${rt}${proj}`;
     }
 
-    const actions = document.createElement("div");
-    actions.className = "hist-actions";
+    // Controls, grouped by purpose:
+    //   head  — tag chips with the ☆ favorite / 📝 draft toggles, then the date line
+    //   main  — what to do with this output (Open, ✂ Edit video, ＋ Gallery; Continue
+    //           and Re-roll for a chained workflow), then 🗑 and the ⋯ menu
+    //   org   — where it belongs: the linked saved prompt (✎ to edit it) and project
+    // Re-run, Re-import and ⟳ Refresh are rarely needed, so they live in ⋯ — except on
+    // a run with no output, where re-running is the point. ⧉ Copy is in the details.
+    const button = (html, title, onClick, cls = "") => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = `btn-secondary${cls ? ` ${cls}` : ""}`;
+      b.innerHTML = html;
+      if (title) b.title = title;
+      if (onClick) b.addEventListener("click", onClick);
+      return b;
+    };
+    const main = document.createElement("div");
+    main.className = "hist-actions hist-row";
+    const org = document.createElement("div");
+    org.className = "hist-actions hist-row";
+    const more = document.createElement("details");
+    more.className = "hist-more";
+    more.innerHTML =
+      '<summary class="btn-secondary" title="More actions">⋯</summary><div class="hist-more-menu"></div>';
+    const menu = more.querySelector(".hist-more-menu");
+    menu.addEventListener("click", (e) => {
+      if (e.target.closest("button")) more.open = false;
+    });
 
-    const reimport = document.createElement("button");
-    reimport.type = "button";
-    reimport.className = "btn-secondary";
-    reimport.textContent = "Re-import";
     // Linked to a saved prompt (see makeHistoryPromptLink): Re-import still restores the
     // run's model and settings, then takes the prompt text, references and duration
     // from the saved prompt — its current version, edits included.
     let linkedPrompt = null;
-    reimport.addEventListener("click", async () => {
+    const reimport = button("⤺ Re-import", "", async () => {
       const p = linkedPrompt;
       await applyEntry(entry);
       if (p) await importSavedPrompt(p, { confirmReplace: false });
       window.scrollTo({ top: 0, behavior: "smooth" });
     });
-    actions.appendChild(reimport);
-
-    const editPromptBtn = document.createElement("button");
-    editPromptBtn.type = "button";
-    editPromptBtn.className = "btn-secondary hidden";
-    editPromptBtn.innerHTML = '<span class="btn-ico">✎</span> Edit prompt';
-    editPromptBtn.addEventListener("click", () => {
-      if (linkedPrompt)
-        openPromptEditor(linkedPrompt, entry.projectId || "default");
-    });
-    actions.appendChild(editPromptBtn);
+    const editPromptBtn = button("✎", "", () => {
+      if (linkedPrompt) openPromptEditor(linkedPrompt, entry.projectId || "default");
+    }, "hidden");
     const onLinked = (p) => {
       linkedPrompt = p;
       editPromptBtn.classList.toggle("hidden", !p);
-      editPromptBtn.title =
-        p ? `Edit the linked saved prompt "${p.title}"` : "";
-      reimport.innerHTML =
-        p ? '<span class="btn-ico">📌</span> Re-import' : "Re-import";
+      editPromptBtn.title = p ? `Edit the linked saved prompt "${p.title}"` : "";
+      reimport.innerHTML = p ? "📌 Re-import" : "⤺ Re-import";
       reimport.title =
         p ?
           `Load this run's model and settings with the linked saved prompt "${p.title}" (its text, references and duration)`
         : "Load this run's prompt, references and settings into the form";
     };
+    onLinked(null);
 
     // Continue / Re-roll, for a workflow that declares the continuation tokens and a
     // run that carries a slot. The workflow list is already in memory, so this
@@ -10123,60 +10396,55 @@ function renderHistory(entries) {
     const when = new Date(entry.createdAt || Number(entry.id)).toLocaleString();
 
     if (cont?.slot && roles["continue.in"] && roles["continue.out"] && output) {
-      const contBtn = document.createElement("button");
-      contBtn.type = "button";
-      contBtn.className = "btn-secondary";
-      contBtn.innerHTML = '<span class="btn-ico">⛓</span> Continue';
-      contBtn.title = "Start a new run that continues from this one";
-      contBtn.addEventListener("click", async () => {
-        await applyEntry(entry); // reselects the workflow and prefills everything
-        armContinuation(
-          {
-            parentId: entry.id,
-            from: cont.slot,
-            into: null,
-            file: wfMeta.file,
-            label: when,
+      main.appendChild(
+        button(
+          '<span class="btn-ico">⛓</span> Continue',
+          "Start a new run that continues from this one",
+          async () => {
+            await applyEntry(entry); // reselects the workflow and prefills everything
+            armContinuation(
+              {
+                parentId: entry.id,
+                from: cont.slot,
+                into: null,
+                file: wfMeta.file,
+                label: when,
+              },
+              input.values || {},
+            );
+            window.scrollTo({ top: 0, behavior: "smooth" });
           },
-          input.values || {},
-        );
-        window.scrollTo({ top: 0, behavior: "smooth" });
-      });
-      actions.appendChild(contBtn);
+        ),
+      );
     }
 
     if (cont && roles["continue.out"]) {
       // Redo this run in place, keeping its position so anything continuing from it
-      // stays valid. Plain Re-run below deliberately forks instead — it never
-      // overwrites, which keeps the safe default safe.
-      const rollBtn = document.createElement("button");
-      rollBtn.type = "button";
-      rollBtn.className = "btn-secondary";
-      rollBtn.innerHTML = '<span class="btn-ico">↻</span> Re-roll';
-      rollBtn.title =
-        "Regenerate this run in place, keeping its place in the chain";
-      rollBtn.addEventListener("click", async () => {
-        await applyEntry(entry);
-        armContinuation(
-          {
-            parentId: cont.parentId,
-            from: cont.from,
-            into: cont.slot,
-            file: wfMeta.file,
-            label: when,
+      // stays valid. Plain Re-run deliberately forks instead — it never overwrites,
+      // which keeps the safe default safe.
+      main.appendChild(
+        button(
+          '<span class="btn-ico">↻</span> Re-roll',
+          "Regenerate this run in place, keeping its place in the chain",
+          async () => {
+            await applyEntry(entry);
+            armContinuation(
+              {
+                parentId: cont.parentId,
+                from: cont.from,
+                into: cont.slot,
+                file: wfMeta.file,
+                label: when,
+              },
+              input.values || {},
+            );
+            window.scrollTo({ top: 0, behavior: "smooth" });
           },
-          input.values || {},
-        );
-        window.scrollTo({ top: 0, behavior: "smooth" });
-      });
-      actions.appendChild(rollBtn);
+        ),
+      );
     }
 
-    const rerun = document.createElement("button");
-    rerun.type = "button";
-    rerun.className = "btn-secondary";
-    rerun.textContent = "Re-run";
-    rerun.addEventListener("click", async () => {
+    const rerun = button("▶ Re-run", "Generate this run again with the same settings", async () => {
       const entryProject = entry.projectId || "default";
       if (entryProject !== activeProjectId) {
         const ok = confirm(
@@ -10189,72 +10457,34 @@ function renderHistory(entries) {
       window.scrollTo({ top: 0, behavior: "smooth" });
       form.requestSubmit();
     });
-    actions.appendChild(rerun);
 
-    const copyBtn = document.createElement("button");
-    copyBtn.type = "button";
-    copyBtn.className = "btn-secondary";
-    copyBtn.innerHTML = '<span class="btn-ico">⧉</span> Prompt';
-    copyBtn.title = "Copy the prompt to the clipboard";
-    copyBtn.addEventListener("click", async () => {
-      copyBtn.textContent =
-        (await copyText(input.prompt || "")) ? "Copied!" : "Copy failed";
-      setTimeout(
-        () => (copyBtn.innerHTML = '<span class="btn-ico">⧉</span> Prompt'),
-        1200,
+    if (output) {
+      main.appendChild(
+        button('<span class="btn-ico">⛶</span> Open', "Open full size", () =>
+          openHistoryLightbox(entry),
+        ),
       );
-    });
-    actions.appendChild(copyBtn);
-
-    const openBtn = document.createElement("button");
-    openBtn.type = "button";
-    openBtn.className = "btn-secondary";
-    openBtn.innerHTML = '<span class="btn-ico">⛶</span> Open';
-    openBtn.title = "Open full size";
-    openBtn.addEventListener("click", () => openHistoryLightbox(entry));
-    actions.appendChild(openBtn);
-
-    // Re-download the saved output from its source URL — recovers a run whose local
-    // file failed to save or went missing. Only shown when there's a source to fetch.
-    const hasSource = !!(
-      entry.resultUrl || (entry.outputs || []).some((o) => o.resultUrl)
-    );
-    if (hasSource) {
-      const refreshBtn = document.createElement("button");
-      refreshBtn.type = "button";
-      refreshBtn.className = "btn-secondary";
-      refreshBtn.innerHTML = '<span class="btn-ico">⟳</span> Refresh';
-      refreshBtn.title =
-        "Re-download the output file from the source (fixes a missing or wrong saved file)";
-      refreshBtn.addEventListener("click", async () => {
-        refreshBtn.disabled = true;
-        const prev = refreshBtn.innerHTML;
-        refreshBtn.innerHTML = "Refreshing…";
-        try {
-          const res = await fetch(`/api/history/${entry.id}/redownload`, {
-            method: "POST",
-          });
-          const data = await res.json();
-          if (!res.ok) throw new Error(data.msg || "Re-download failed");
-          refreshBtn.innerHTML = "Refreshed!";
-          await loadHistory(); // re-renders the card with the freshly-saved file
-        } catch (err) {
-          alert(err.message || String(err));
-          refreshBtn.innerHTML = prev;
-          refreshBtn.disabled = false;
-        }
+      // its saved videos open in the ✂ video editor (trim, join, pick frames — e.g.
+      // the last one, as the next clip's starting image)
+      const editVideos = entryOutputs(entry)
+        .map((o, index) => ({ url: o.localVideo, index }))
+        .filter((o) => /^\/output\/.+\.(mp4|webm|mov|mkv)$/i.test(o.url || ""));
+      const edit = makeEditVideoControl(editVideos, {
+        name: `generated-${entry.id}`,
+        projectId: entry.projectId || "default",
+        kind: "history",
+        id: entry.id,
       });
-      actions.appendChild(refreshBtn);
+      if (edit) main.appendChild(edit);
+      menu.append(rerun, reimport);
+    } else {
+      main.append(rerun, reimport); // nothing to open: running it again is the point
     }
 
     // add the generated image to the gallery for its own project
     if (isImg) {
-      const galleryBtn = document.createElement("button");
-      galleryBtn.type = "button";
-      galleryBtn.className = "btn-secondary";
-      galleryBtn.innerHTML = '<span class="btn-ico">＋</span> Gallery';
-      galleryBtn.title = "Add this image to the gallery";
-      galleryBtn.addEventListener("click", async () => {
+      const label = '<span class="btn-ico">＋</span> Gallery';
+      const galleryBtn = button(label, "Add this image to the gallery", async () => {
         galleryBtn.disabled = true;
         try {
           const res = await fetch(`/api/history/${entry.id}/to-gallery`, {
@@ -10265,50 +10495,93 @@ function renderHistory(entries) {
           galleryBtn.innerHTML = "Added!";
           loadGallery();
           setTimeout(() => {
-            galleryBtn.innerHTML = '<span class="btn-ico">＋</span> Gallery';
+            galleryBtn.innerHTML = label;
             galleryBtn.disabled = false;
           }, 1200);
         } catch (err) {
           alert(err.message || String(err));
-          galleryBtn.innerHTML = '<span class="btn-ico">＋</span> Gallery';
+          galleryBtn.innerHTML = label;
           galleryBtn.disabled = false;
         }
       });
-      actions.appendChild(galleryBtn);
+      main.appendChild(galleryBtn);
     }
 
-    // ...and a generated video's last frame, as the next clip's starting image
-    if (/^\/output\/.+\.(mp4|webm|mov|mkv)$/i.test(entry.localVideo || "")) {
-      actions.appendChild(
-        makeLastFrameButton(
-          entry.localVideo,
-          `generated-${entry.id}`,
-          entry.projectId || "default",
-        ),
+    // Re-download the saved output from its source URL — recovers a run whose local
+    // file failed to save or went missing. Only offered when there's a source to fetch.
+    const hasSource = !!(
+      entry.resultUrl || (entry.outputs || []).some((o) => o.resultUrl)
+    );
+    if (hasSource) {
+      const label = "⟳ Refresh";
+      const refreshBtn = button(
+        label,
+        "Re-download the output file from the source (fixes a missing or wrong saved file)",
+        async () => {
+          refreshBtn.disabled = true;
+          refreshBtn.innerHTML = "Refreshing…";
+          try {
+            const res = await fetch(`/api/history/${entry.id}/redownload`, {
+              method: "POST",
+            });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.msg || "Re-download failed");
+            await loadHistory(); // re-renders the card with the freshly-saved file
+          } catch (err) {
+            alert(err.message || String(err));
+            refreshBtn.innerHTML = label;
+            refreshBtn.disabled = false;
+          }
+        },
       );
-      if (typeof makeFramesButton === "function") {
-        actions.appendChild(
-          makeFramesButton(
-            entry.localVideo,
-            `generated-${entry.id}`,
-            entry.projectId || "default",
-          ),
-        );
-      }
+      menu.appendChild(refreshBtn);
     }
 
-    if (output) actions.appendChild(makeHistoryPromptLink(entry, onLinked));
+    // delete this entry (removes the saved output too) — with confirmation
+    const del = button(
+      "🗑",
+      "Delete this history item and its saved files (Ctrl+click to skip confirmation)",
+      async (e) => {
+        // Ctrl (or ⌘) + click deletes immediately, skipping the confirm prompt.
+        const skipConfirm = e.ctrlKey || e.metaKey;
+        if (
+          !skipConfirm &&
+          !confirm(
+            "Delete this history item? This also removes its saved output file and can't be undone.",
+          )
+        )
+          return;
+        del.disabled = true;
+        try {
+          const res = await fetch(`/api/history/${entry.id}`, {
+            method: "DELETE",
+          });
+          if (!res.ok)
+            throw new Error(
+              (await res.json().catch(() => ({}))).msg || "Delete failed",
+            );
+          loadHistory();
+        } catch (err) {
+          alert(err.message || String(err));
+          del.disabled = false;
+        }
+      },
+      "hist-delete",
+    );
+    const end = document.createElement("span");
+    end.className = "hist-row-end";
+    end.appendChild(del);
+    if (menu.childElementCount) end.appendChild(more);
+    main.appendChild(end);
+
+    // Where it belongs: the linked saved prompt (✎ edits it), then the project.
+    if (output) org.append(makeHistoryPromptLink(entry, onLinked), editPromptBtn);
 
     // reassign the entry to another project (files stay where they are)
     const projSel = document.createElement("select");
     projSel.className = "hist-project";
-    projSel.title = "Move this entry (and its saved video) to another project";
-    for (const p of projects) {
-      const opt = document.createElement("option");
-      opt.value = p.id;
-      opt.textContent = p.name;
-      projSel.appendChild(opt);
-    }
+    projSel.title = "Project — move this entry (and its saved files) to another project";
+    for (const p of projects) projSel.appendChild(new Option(`📁 ${p.name}`, p.id));
     const entryProjectId = entry.projectId || "default";
     projSel.value =
       projSel.querySelector(`option[value="${entryProjectId}"]`) ?
@@ -10329,82 +10602,60 @@ function renderHistory(entries) {
         projSel.value = entryProjectId;
       }
     });
-    actions.appendChild(projSel);
+    org.appendChild(projSel);
 
-    // delete this entry (removes the saved output too) — with confirmation
-    const del = document.createElement("button");
-    del.type = "button";
-    del.className = "btn-secondary hist-delete";
-    del.innerHTML = '<span class="btn-ico">🗑</span> Delete';
-    del.title = "Delete this history item (Ctrl+click to skip confirmation)";
-    del.addEventListener("click", async (e) => {
-      // Ctrl (or ⌘) + click deletes immediately, skipping the confirm prompt.
-      const skipConfirm = e.ctrlKey || e.metaKey;
-      if (
-        !skipConfirm &&
-        !confirm(
-          "Delete this history item? This also removes its saved output file and can't be undone.",
-        )
-      )
-        return;
-      del.disabled = true;
-      try {
-        const res = await fetch(`/api/history/${entry.id}`, {
-          method: "DELETE",
-        });
-        if (!res.ok)
-          throw new Error(
-            (await res.json().catch(() => ({}))).msg || "Delete failed",
-          );
-        loadHistory();
-      } catch (err) {
-        alert(err.message || String(err));
-        del.disabled = false;
-      }
-    });
-    actions.appendChild(del);
-
-    // Favorite (star) and draft toggles — tags kept on the entry either way;
-    // both also relocate the saved file server-side.
-    const favBtn = document.createElement("button");
-    favBtn.type = "button";
-    favBtn.className =
-      "btn-secondary hist-tag-toggle" + (entry.favorite ? " active" : "");
-    favBtn.innerHTML = entry.favorite ? "★ Favorite" : "☆ Favorite";
-    favBtn.title =
-      entry.favorite ?
-        "Remove from favorites (moves the file out of favorites/)"
-      : "Mark as favorite (moves the file into favorites/)";
-    favBtn.addEventListener("click", () => toggleHistoryTag(entry, "favorite"));
-    actions.appendChild(favBtn);
-
-    const draftBtn = document.createElement("button");
-    draftBtn.type = "button";
-    draftBtn.className =
-      "btn-secondary hist-tag-toggle" + (entry.draft ? " active" : "");
-    draftBtn.innerHTML = "📝 Draft";
-    draftBtn.title =
-      entry.draft ? "Remove the draft tag" : "Tag this as a draft";
-    draftBtn.addEventListener("click", () => toggleHistoryTag(entry, "draft"));
-    actions.appendChild(draftBtn);
-
-    // Tag chips (kind + favorite/draft), shown at the top of the card body.
+    // Head: the kind and workflow tags, then ☆ favorite / 📝 draft as toggle chips
+    // (both also relocate the saved file server-side), then the date line.
     const tagsRow = document.createElement("div");
     tagsRow.className = "hist-tags";
     for (const t of entryTags(entry)) {
+      if (t === "favorite" || t === "draft") continue; // the toggles below show these
       const chip = document.createElement("span");
-      chip.className = `hist-tag hist-tag-${t}`;
+      chip.className =
+        ["image", "video"].includes(t) ?
+          `hist-tag hist-tag-${t}`
+        : "hist-tag hist-tag-auto"; // a workflow auto-tag
       chip.textContent = t;
       tagsRow.appendChild(chip);
     }
+    const toggle = (tag, on, label, title) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = `hist-tag hist-tag-switch${on ? ` active hist-tag-${tag}` : ""}`;
+      b.textContent = label;
+      b.title = title;
+      b.setAttribute("aria-pressed", String(on));
+      b.addEventListener("click", () => toggleHistoryTag(entry, tag));
+      tagsRow.appendChild(b);
+    };
+    toggle(
+      "favorite",
+      !!entry.favorite,
+      entry.favorite ? "★ favorite" : "☆ favorite",
+      entry.favorite ?
+        "Remove from favorites (moves the file out of favorites/)"
+      : "Mark as favorite (moves the file into favorites/)",
+    );
+    toggle(
+      "draft",
+      !!entry.draft,
+      "📝 draft",
+      entry.draft ? "Remove the draft tag" : "Tag this as a draft",
+    );
+    const head = document.createElement("div");
+    head.className = "hist-card-head";
+    head.append(tagsRow, meta);
 
-    // Right column: tag chips, buttons, the Settings dropdown, then the timestamp,
-    // separated by 2em gaps (see .hist-body spacing).
-    if (tagsRow.childElementCount) body.appendChild(tagsRow);
-    body.appendChild(actions);
+    body.append(head, main);
+    if (org.childElementCount) body.appendChild(org);
     body.appendChild(buildHistDetails(entry, input, comfyEntry, isImg));
-    body.appendChild(meta);
-    card.appendChild(body);
+    // In flight, the body goes under the status and progress bar, beside the live
+    // preview — not wrapped below it. live.el survives re-renders, so drop the body
+    // an earlier render put there.
+    if (liveCol) {
+      liveCol.querySelector(":scope > .hist-body")?.remove();
+      liveCol.appendChild(body);
+    } else card.appendChild(body);
     historyEl.appendChild(card);
   }
 }

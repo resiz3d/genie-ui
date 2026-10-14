@@ -1,0 +1,77 @@
+{
+  "_comment": "NVIDIA RTX Video nodes (comfyui_nvidia_rtx_nodes) plus core GetVideoComponents, for video post-processing chains (Load Video → Get Video Components → Super Resolution → Frame Generation → HDR → Create Video). Super Resolution's `resize_type` and Frame Generation's `generation_type` are DynamicCombos: the API export stores the choice under the combo key and the chosen option's inputs as dotted keys (`resize_type.scale`, `generation_type.multiplier`), which enrich from the option's own spec in /object_info. Only the dotted inputs of the shipped choices (scale by multiplier, frame rate multiplier) are exposed; the choice itself stays as exported, since the other options take different inputs (target width/height, a timestep). A frame multiplier wired from a Primitive Int (so a Math Expression can scale Create Video's fps by the same number) traces to that primitive, so one control drives both. GetVideoComponents takes the source video as a single upload field: a file dropped there is loaded by an injected core LoadVideo, and with none the workflow's own Load Video runs as exported.",
+  "nodes": {
+    "GetVideoComponents": {
+      "display_name": "Get Video Components",
+      "recognize": {
+        "variants": [
+          {
+            "match": [{ "when": "any" }],
+            "group": "Source Video",
+            "references": [
+              {
+                "name": "source_video", "kind": "video", "label": "Source Video", "max": 1, "order": 1,
+                "loader": { "class_type": "LoadVideo", "input": "file" },
+                "wires": [{ "prefix": "video", "slot": 0, "exact": true }]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "RTXVideoSuperResolution": {
+      "display_name": "RTX Video Super Resolution",
+      "recognize": {
+        "variants": [
+          {
+            "match": [{ "when": "any" }],
+            "group": "RTX Super Resolution",
+            "expose": {
+              "resize_type.scale": { "name": "upscale_factor",     "label": "Scale",          "control": "number", "width": "1/4", "order": 40 },
+              "quality":           { "name": "upscale_quality",    "label": "Quality",        "control": "combo",  "width": "1/4", "order": 41 },
+              "strength":          { "name": "upscale_strength",   "label": "Strength",       "control": "number", "width": "1/4", "order": 42 },
+              "image_encoding":    { "name": "upscale_encoding",   "label": "Image encoding", "control": "combo",  "width": "1/4", "order": 43 }
+            }
+          }
+        ]
+      }
+    },
+    "RTXVideoFrameGeneration": {
+      "display_name": "RTX Video Frame Generation",
+      "recognize": {
+        "variants": [
+          {
+            "match": [{ "when": "any" }],
+            "group": "RTX Frame Generation",
+            "expose": {
+              "generation_type.multiplier":      { "name": "frame_multiplier",   "label": "Frame-rate multiplier",    "control": "number", "width": "1/3", "order": 50 },
+              "mode":                            { "name": "framegen_mode",      "label": "Mode",                     "control": "combo",  "width": "1/3", "order": 51 },
+              "image_encoding":                  { "name": "framegen_encoding",  "label": "Image encoding",           "control": "combo",  "width": "1/3", "order": 52 },
+              "automatic_shot_change_detection": { "name": "auto_shot_change",   "label": "Detect shot changes",      "control": "toggle", "width": "1/2", "order": 53 },
+              "shot_change":                     { "name": "shot_change",        "label": "Every pair is a shot change", "control": "toggle", "width": "1/2", "order": 54 }
+            }
+          }
+        ]
+      }
+    },
+    "RTXTrueHDR": {
+      "display_name": "RTX Video HDR",
+      "recognize": {
+        "variants": [
+          {
+            "match": [{ "when": "any" }],
+            "group": "RTX Video HDR",
+            "expose": {
+              "contrast":          { "name": "hdr_contrast",    "label": "Contrast",          "control": "number", "width": "1/4", "order": 60 },
+              "saturation":        { "name": "hdr_saturation",  "label": "Saturation",        "control": "number", "width": "1/4", "order": 61 },
+              "middle_gray":       { "name": "hdr_middle_gray", "label": "Middle gray",       "control": "number", "width": "1/4", "order": 62 },
+              "luminance":         { "name": "hdr_luminance",   "label": "Peak luminance (nits)", "control": "number", "width": "1/4", "order": 63 },
+              "output_colorspace": { "name": "hdr_colorspace",  "label": "Output colorspace", "control": "combo",  "width": "1/2", "order": 64 },
+              "debanding":         { "name": "hdr_debanding",   "label": "Debanding",         "control": "toggle", "width": "1/2", "order": 65 }
+            }
+          }
+        ]
+      }
+    }
+  }
+}

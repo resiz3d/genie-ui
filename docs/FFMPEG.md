@@ -5,12 +5,11 @@ tools use it when it's there:
 
 | Tool | Needs | Without it |
 | --- | --- | --- |
-| **✂ Video editor** (header) | `ffmpeg` | The dialog says ffmpeg wasn't found and can't save. |
-| **🎞 Frames** (frame picker) | `ffprobe` | Works, but assumes 24 fps — set the real rate by hand. |
+| **✂ Video editor** (header, and ✂ Edit video on cards) | `ffmpeg` | You can still step through a video and save frames, at an assumed 24 fps, but not cut, join or save video. |
 | **Use last N sec** on a reference video | `ffprobe` | The run stops with a "couldn't read the length" error. |
 
-`ffprobe` ships with ffmpeg, so one install covers all three. GENie never downloads
-ffmpeg itself.
+`ffprobe` ships with ffmpeg, so one install covers both. GENie never downloads ffmpeg
+itself.
 
 ## Windows
 
@@ -83,8 +82,8 @@ The video editor can be told where ffmpeg is. In `.env`:
 FFMPEG_PATH=C:\ffmpeg\bin\ffmpeg.exe
 ```
 
-Restart GENie afterwards. This covers the video editor only; the two `ffprobe` features
-above still look for `ffprobe` on the PATH.
+Restart GENie afterwards. This covers the video editor only; the `ffprobe` feature
+above still looks for `ffprobe` on the PATH.
 
 ## Troubleshooting
 

@@ -1,8 +1,10 @@
 // --- ✂ Video editor: cut frame ranges out of clips, join clips, re-encode the result --
-// A standalone tool — nothing here touches the gallery, history or projects. The
-// browser uploads each file it picked to a temp folder; an export runs ffmpeg over
-// them as a job the page polls, then downloads. Sources are found on disk by their
-// id, so a server restart loses only a running export, not the uploads.
+// A standalone tool. A clip is either a file the browser uploads to a temp folder or
+// one of GENie's own videos (a History result, a Gallery video, an earlier edit),
+// which is read where it lies and never changed. An export runs ffmpeg as a job the
+// page polls; the result is downloaded, saved as a new file in the project's
+// edited_videos folder, or — when the editor was opened from a History card or a
+// Gallery video — handed to server.js to add to (or replace) that card's video.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -15,6 +17,8 @@ const MAX_CLIPS = 50;
 const MAX_SEGMENTS = 200;
 const STALE_MS = 12 * 60 * 60 * 1000; // temp files older than this are swept
 const UUID = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
+const VIDEO_FILE = /\.(mp4|mov|mkv|webm|m4v)$/i;
+const SAVE_FOLDER = "edited_videos"; // inside the project's output folder
 
 // ffmpeg prints a rounded rate ("23.98 fps"); the NTSC ones are really n·1000/1001.
 // Returns the exact rate for the fps filter and its numeric value.
@@ -28,7 +32,10 @@ function frameRate(shown) {
   return { rate: String(f), fps: f };
 }
 
-export function registerVideoEditor(app) {
+export function registerVideoEditor(
+  app,
+  { outputDir, inputDir, resolveProject, projects, history, gallery, saveToCard },
+) {
   // Read here, not at import: server.js loads .env after its imports are evaluated.
   const FFMPEG = (process.env.FFMPEG_PATH || "").trim() || "ffmpeg";
   const dir = path.join(os.tmpdir(), "genie-video-editor");
@@ -36,6 +43,7 @@ export function registerVideoEditor(app) {
 
   const jobs = new Map(); // jobId → { state, done, total, file, error, proc, sourceIds }
   const probes = new Map(); // sourceId → probe
+  const linked = new Map(); // sourceId → path of one of GENie's own videos (read-only)
 
   const fail = (res, code, msg) => res.status(code).json({ code, msg });
   const MISSING =
@@ -119,6 +127,7 @@ export function registerVideoEditor(app) {
 
   function findSource(id) {
     if (!UUID.test(String(id))) return null;
+    if (linked.has(id)) return fs.existsSync(linked.get(id)) ? linked.get(id) : null;
     const name = fs.readdirSync(dir).find((f) => f.startsWith(`${id}.`));
     return name ? path.join(dir, name) : null;
   }
@@ -188,8 +197,88 @@ export function registerVideoEditor(app) {
     });
   });
 
+  // A served media URL (/output/… or /input/…) as a path, if it stays inside its folder.
+  function mediaFile(url) {
+    url = String(url || "").split("?")[0];
+    for (const [prefix, base] of [
+      ["/output/", outputDir],
+      ["/input/", inputDir],
+    ]) {
+      if (!url.startsWith(prefix)) continue;
+      try {
+        const full = path.resolve(base, decodeURIComponent(url.slice(prefix.length)));
+        return full.startsWith(base + path.sep) && fs.existsSync(full) ? full : null;
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  }
+
+  // GENie's own videos, newest first: History results, Gallery videos and earlier
+  // edits — of one project, or of all of them (projectId "all").
+  app.get("/api/video-editor/library", (req, res) => {
+    const all = req.query.projectId === "all";
+    const proj = resolveProject(req.query.projectId);
+    const mine = (e) => all || (e.projectId || "default") === proj.id;
+    const out = [];
+    for (const e of history()) {
+      if (!mine(e)) continue;
+      const urls = (e.outputs?.length ? e.outputs.map((o) => o.localVideo) : [e.localVideo]).filter(
+        (u) => u && VIDEO_FILE.test(u),
+      );
+      for (const url of urls)
+        out.push({
+          url,
+          source: "History",
+          name: path.basename(url),
+          label: String(e.input?.prompt || "").slice(0, 160),
+          date: e.createdAt || "",
+        });
+    }
+    for (const g of gallery())
+      if (mine(g) && g.kind === "video" && g.localUrl)
+        out.push({
+          url: g.localUrl,
+          source: "Gallery",
+          name: g.name || path.basename(g.localUrl),
+          label: "",
+          date: g.createdAt || "",
+        });
+    for (const p of all ? projects() : [proj]) {
+      const folder = path.join(outputDir, p.slug, SAVE_FOLDER);
+      let names = [];
+      try {
+        names = fs.readdirSync(folder).filter((n) => VIDEO_FILE.test(n));
+      } catch {}
+      for (const name of names)
+        out.push({
+          url: `/output/${p.slug}/${SAVE_FOLDER}/${encodeURIComponent(name)}`,
+          source: "Edited",
+          name,
+          label: "",
+          date: fs.statSync(path.join(folder, name)).mtime.toISOString(),
+        });
+    }
+    out.sort((a, b) => (a.date < b.date ? 1 : -1));
+    res.json({ code: 200, msg: "success", data: out.filter((v) => mediaFile(v.url)) });
+  });
+
+  // Use one of GENie's own videos as a clip: no copy, the export reads it in place.
+  app.post("/api/video-editor/import", async (req, res) => {
+    const file = mediaFile(req.body?.url);
+    if (!file || !VIDEO_FILE.test(file)) return fail(res, 404, "That video is no longer there");
+    const p = await probe(file);
+    if (p.error) return fail(res, 422, p.error);
+    const id = randomUUID();
+    linked.set(id, file);
+    probes.set(id, p);
+    res.json({ code: 200, msg: "success", data: { id, ...p } });
+  });
+
   app.delete("/api/video-editor/source/:id", (req, res) => {
-    const file = findSource(req.params.id);
+    // Only an upload is deleted — a linked video is the user's own file.
+    const file = linked.delete(req.params.id) ? null : findSource(req.params.id);
     if (file) unlink(file);
     probes.delete(req.params.id);
     for (const [jobId, job] of jobs)
@@ -347,6 +436,60 @@ export function registerVideoEditor(app) {
         .replace(/\.[^.]*$/, "")
         .slice(0, 150) || "edited";
     res.download(job.file, `${name}.mp4`);
+  });
+
+  // Keep a finished export: by default in the project's edited_videos folder, under a
+  // name that isn't taken, so an existing file is never overwritten. With `target`
+  // ({ kind: "history" | "gallery", id, index, overwrite }) it goes to that History
+  // card or Gallery video instead.
+  app.post("/api/video-editor/jobs/:id/save", async (req, res) => {
+    const job = jobs.get(req.params.id);
+    if (job?.state !== "done" || !fs.existsSync(job.file))
+      return fail(res, 404, "That export is no longer on the server");
+    if (req.body?.target) {
+      try {
+        const data = saveToCard(req.body.target, job.file, req.body.name);
+        dropJob(req.params.id);
+        return res.json({ code: 200, msg: "success", data });
+      } catch (err) {
+        if (!err.status) console.error("Video editor save to card failed:", err);
+        return fail(res, err.status || 500, err.status ? err.message : `Couldn't save: ${err.message}`);
+      }
+    }
+    const slug = resolveProject(req.body?.projectId).slug;
+    const folder = path.join(outputDir, slug, SAVE_FOLDER);
+    const base =
+      String(req.body?.name || "")
+        .replace(/[\\/:*?"<>|\x00-\x1f]/g, "_")
+        .replace(/\.[^.]*$/, "")
+        .trim()
+        .slice(0, 150) || "edited";
+    try {
+      await fs.promises.mkdir(folder, { recursive: true });
+      for (let n = 1; ; n++) {
+        const name = `${base}${n > 1 ? `-${n}` : ""}.mp4`;
+        try {
+          // COPYFILE_EXCL fails rather than replace a file that's already there
+          await fs.promises.copyFile(job.file, path.join(folder, name), fs.constants.COPYFILE_EXCL);
+        } catch (err) {
+          if (err.code === "EEXIST" && n < 10000) continue;
+          throw err;
+        }
+        dropJob(req.params.id);
+        return res.json({
+          code: 200,
+          msg: "success",
+          data: {
+            name,
+            url: `/output/${slug}/${SAVE_FOLDER}/${encodeURIComponent(name)}`,
+            folder: path.join(path.basename(outputDir), slug, SAVE_FOLDER),
+          },
+        });
+      }
+    } catch (err) {
+      console.error("Video editor save failed:", err);
+      fail(res, 500, `Couldn't save the file: ${err.message}`);
+    }
   });
 
   app.delete("/api/video-editor/jobs/:id", (req, res) => {

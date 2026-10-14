@@ -21,6 +21,22 @@ heading for that version with the date, commit, then tag the commit `vX.Y.Z`.
   make a prompt group, one prompt per run of shots; the automatic split every 15
   seconds and the variations count are gone. The shot list is kept on the server per
   project.
+- **History cards are regrouped.** The top line holds the kind and workflow tags
+  with **☆ favorite** and **📝 draft** as on/off chips, then the date. Under it, one
+  row for the output — ⛶ Open, ✂ Edit video, ＋ Gallery (and ⛓ Continue / ↻ Re-roll
+  for a chained workflow) — ending in a 🗑 delete icon (Ctrl+click still skips the
+  confirmation) and a **⋯** menu holding the rarely used ▶ Re-run, Re-import and
+  ⟳ Refresh. A second row holds where the card belongs: the linked saved prompt
+  (✎ beside it edits that prompt) and the 📁 project. **⧉ Copy** moved into
+  *Settings & full prompt*, beside the prompt it copies. A run with no output keeps
+  Re-run and Re-import in view. Several videos on one card stack one above the other.
+- **⇥ Last frame and 🎞 Frames are now part of the video editor.** History cards and
+  Gallery videos have one **✂ Edit video** button instead (a menu on a card with
+  several videos), which opens the editor on that video. Its **Frames** row does what
+  the two buttons did: **＋ Pick frame** (Enter) and **⇥ Last frame** (L) pick stills,
+  **Save to gallery** adds them as `<name>-f0001.png` / `<name>-last-frame.png`, and
+  **⬇ Download** saves them as PNGs. Without ffmpeg you can still pick frames, at an
+  assumed 24 fps, as before.
 
 ### Removed
 
@@ -28,19 +44,58 @@ heading for that version with the date, commit, then tag the commit `vX.Y.Z`.
 
 ### Added
 
-- **✂ Video editor**, a standalone editor in the header. Open video files from your
-  file explorer (or drop them in), step through a clip frame by frame, then
+- **RTX video upscaling.** GENie recognizes NVIDIA's RTX Video nodes
+  (comfyui_nvidia_rtx_nodes): **Super Resolution** (scale, quality, strength, image
+  encoding), **Frame Generation** (frame-rate multiplier, mode, shot-change options,
+  image encoding) and **Video HDR** (contrast, saturation, middle gray, peak luminance,
+  output colorspace, debanding), each as its own section. A **Source Video** field on
+  Get Video Components takes the video to process (upload or pick from the gallery);
+  left empty, the workflow's own Load Video runs. The shipped `rtx_upscale` workflow
+  wires its frame-rate multiplier from the Multiplier node, so the one control sets both
+  the frames generated and Create Video's fps (source fps × multiplier).
+- **Auto-tags per workflow.** An **Auto-tags** field at the bottom of a ComfyUI
+  workflow's form takes your own comma-separated tags (say `upscaled, video`); every run
+  of that workflow gets them on its History card when it finishes. The list is kept in
+  the workflow's server-side settings, so it's the same on every device, and saves as
+  you edit it.
+
+- **🎬 Previous scene** on a MiniMax prompt's subjects: tick **Previous scene** on a
+  subject (or **＋ Add previous scene**) and pick a gallery image — usually the last
+  frame of the clip before. It joins the references as `<previous_scene>` on that prompt
+  only (its gallery key is left alone), as a reference for the staging and set, not a
+  first frame. The definition, a `partially_preserved - keep the staging and the set:`
+  retention line and Shot 1's "Continuing from the staging in `<previous_scene>`:" lead
+  are filled in for you. **✨ Analyze scene** has a vision LLM write who stands where
+  (by `<key>`, screen-left/right, facing whom), the room's fixed details and lighting
+  into the retention line, and an opening staging sentence into Shot 1. **Next prompt**
+  in a group keeps the subject but clears its frame for the new clip.
+
+- **✂ Video editor**, in the header and as **✂ Edit video** on History cards and
+  Gallery videos. Opened from a card, **💾 Add to card** saves the edit to the card as
+  another video, and ticking **Overwrite the card's current video** replaces that video
+  instead (after a confirmation; the old file is deleted, and ⟳ Refresh can still bring
+  a generated original back). For a Gallery video the same choice adds a new Gallery
+  video or replaces the file in place, so saved prompts using it get the edit.
+  Deleting a card now removes all of its videos, and ⟳ Refresh keeps the ones the
+  editor added. Open video files from your
+  file explorer (or drop them in), or **📚 Import from GENie** — a picker of the
+  project's History results, Gallery videos and earlier edits (tick **All projects**
+  for the rest); imported videos are read where they are, not copied. Step through a
+  clip frame by frame, then
   **Start here** / **End here** to trim its ends or **Mark in** / **Mark out** →
   **Cut selection** to remove a part from the middle. **Prepend** and **Append** add
-  more clips before or after; the clip strip switches between them, reorders them (◀ ▶)
+  more clips before or after, from the same picker or from your device; the clip strip switches between them, reorders them (◀ ▶)
   and removes them (×), and each clip keeps its own cuts. Play previews the result,
-  skipping what's cut and running on into the next clip. **Save as…** re-encodes it all
-  as one file (H.264 MP4, near-lossless) and asks where to put it — in browsers without
-  a save dialog for web pages it goes to the browser's downloads. When clips differ in
+  skipping what's cut and running on into the next clip. **Save** re-encodes it all
+  as one file (H.264 MP4, near-lossless) in `output/<project>/edited_videos/`, where
+  it shows up in the picker for further edits; a name that's taken gets `-2`, `-3`, …
+  so no file is ever overwritten, and the videos you edit are never changed.
+  **Save as…** asks where to put it instead — in browsers without a save dialog for
+  web pages it goes to the browser's downloads. When clips differ in
   size or frame rate, a warning lists what will happen to each clip, with two choices:
   which clip the result takes its size and frame rate from (the largest, unless you
   pick one) and whether the others **Fit** inside it with black bars or **Fill** it and
-  lose their edges — never stretched. A clip without sound gets silence. It doesn't touch the gallery or history. Needs ffmpeg on the PATH, or
+  lose their edges — never stretched. A clip without sound gets silence. It adds nothing to the gallery or history. Needs ffmpeg on the PATH, or
   `FFMPEG_PATH` in `.env` — see [`docs/FFMPEG.md`](docs/FFMPEG.md) for installing it
   on Windows, macOS and Linux.
 - **⧉ Copy** on a saved prompt's card copies the prompt as Generate would send it —
@@ -77,6 +132,15 @@ heading for that version with the date, commit, then tag the commit `vX.Y.Z`.
   and Generate Text), `reports_text`, the `consumes` match predicate, and reference
   collections that count slots from 1 (`start`) or feed a second node (`mirrors`).
   Save Image (Advanced) exposes its filename prefix. See `node_types/README.md`.
+
+### Fixed
+
+- Save Video's **Codec** wrote to a key ComfyUI ignores; it now sets the real codec
+  (`format.codec`), and Container and Codec list their choices.
+- A workflow's core **Load Video** node shows in "Media in this workflow" (it names its
+  input `file`, not `video`), and its file list fills from ComfyUI.
+- A ComfyUI run with a Load Video no longer saves a copy of its source video as the
+  run's first result.
 
 ## [1.3.0] - 2026-10-05
 
