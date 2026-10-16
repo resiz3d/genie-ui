@@ -1,5 +1,5 @@
 {
-  "_comment": "NVIDIA RTX Video nodes (comfyui_nvidia_rtx_nodes) plus core GetVideoComponents, for video post-processing chains (Load Video → Get Video Components → Super Resolution → Frame Generation → HDR → Create Video). Super Resolution's `resize_type` and Frame Generation's `generation_type` are DynamicCombos: the API export stores the choice under the combo key and the chosen option's inputs as dotted keys (`resize_type.scale`, `generation_type.multiplier`), which enrich from the option's own spec in /object_info. Only the dotted inputs of the shipped choices (scale by multiplier, frame rate multiplier) are exposed; the choice itself stays as exported, since the other options take different inputs (target width/height, a timestep). A frame multiplier wired from a Primitive Int (so a Math Expression can scale Create Video's fps by the same number) traces to that primitive, so one control drives both. GetVideoComponents takes the source video as a single upload field: a file dropped there is loaded by an injected core LoadVideo, and with none the workflow's own Load Video runs as exported.",
+  "_comment": "NVIDIA RTX Video nodes (comfyui_nvidia_rtx_nodes) plus core GetVideoComponents, for video post-processing chains (Load Video → Get Video Components → Super Resolution → Frame Generation → HDR → Create Video). Super Resolution's `resize_type` and Frame Generation's `generation_type` are DynamicCombos: the API export stores the choice under the combo key and the chosen option's inputs as dotted keys (`resize_type.scale`, `generation_type.multiplier`), which enrich from the option's own spec in /object_info. Only the dotted inputs of the shipped choices (scale by multiplier, frame rate multiplier) are exposed; the choice itself stays as exported, since the other options take different inputs (target width/height, a timestep). A frame multiplier wired from a Primitive Int (so a Math Expression can scale Create Video's fps by the same number) traces to that primitive, so one control drives both. Frame Generation and Video HDR are `bypassable`: unchecked, the node is removed and its `images` input passes straight through (`bypass_passthrough`, needed because Frame Generation also has the multiplier link). With Video HDR off, the Create Video it fed is set to sRGB for the run (`bypass_sets`), since its frames are SDR then. GetVideoComponents takes the source video as a single upload field: a file dropped there is loaded by an injected core LoadVideo, and with none the workflow's own Load Video runs as exported.",
   "nodes": {
     "GetVideoComponents": {
       "display_name": "Get Video Components",
@@ -37,6 +37,8 @@
       }
     },
     "RTXVideoFrameGeneration": {
+      "bypassable": true,
+      "bypass_passthrough": "images",
       "display_name": "RTX Video Frame Generation",
       "recognize": {
         "variants": [
@@ -55,6 +57,9 @@
       }
     },
     "RTXTrueHDR": {
+      "bypassable": true,
+      "bypass_passthrough": "images",
+      "bypass_sets": { "CreateVideo.color_space": "sRGB" },
       "display_name": "RTX Video HDR",
       "recognize": {
         "variants": [

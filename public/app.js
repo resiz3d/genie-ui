@@ -2931,6 +2931,7 @@ async function renderComfyControls() {
       body = document.createElement("div");
       body.className = "comfy-node-group-body comfy-grid";
       details.append(summary, body);
+      details.dataset.groupKey = String(key);
       comfyControlsEl.appendChild(details);
       if (comfyBypassControl && bypassIds.has(String(token.group.key))) {
         body = comfyBypassControl.mountGroup(body, token.group.key);
@@ -3129,7 +3130,14 @@ function makeComfyBypassControl(bypassable) {
     const controlsEl = document.createElement("div");
     controlsEl.className = "bypass-controls comfy-grid";
     wrapper.append(label, controlsEl);
-    const sync = () => controlsEl.classList.toggle("hidden", !cb.checked);
+    // Nodes removed along with this one (`_meta.bypass_with`) hide their whole section.
+    const sync = () => {
+      controlsEl.classList.toggle("hidden", !cb.checked);
+      for (const dep of b.dependents || [])
+        comfyControlsEl
+          .querySelector(`[data-group-key="${CSS.escape(String(dep))}"]`)
+          ?.classList.toggle("hidden", !cb.checked);
+    };
     cb.addEventListener("change", sync);
     sync();
     nodes.set(String(b.id), {
@@ -3137,6 +3145,7 @@ function makeComfyBypassControl(bypassable) {
       controlsEl,
       wrapper,
       mounted: false,
+      sync,
     });
   }
   return {
@@ -3152,11 +3161,13 @@ function makeComfyBypassControl(bypassable) {
     },
     // Append any toggles that had no controls to render (bare enable/disable).
     mountRemaining(container) {
-      for (const n of nodes.values())
+      for (const n of nodes.values()) {
         if (!n.mounted) {
           container.appendChild(n.wrapper);
           n.mounted = true;
         }
+        n.sync(); // the dependents' sections exist now
+      }
     },
     // Ids of nodes to bypass (the unchecked ones).
     getDisabled: () =>
@@ -3165,7 +3176,7 @@ function makeComfyBypassControl(bypassable) {
       const off = new Set((ids || []).map(String));
       for (const [id, n] of nodes) {
         n.checkbox.checked = !off.has(id);
-        n.controlsEl.classList.toggle("hidden", !n.checkbox.checked);
+        n.sync();
       }
     },
   };
@@ -5211,6 +5222,15 @@ let wildcards = [];
 let wildcardsFilter = "";
 const WILDCARD_RE =
   /%([\p{L}\p{N}_-]+):([\p{L}\p{N}_-]+)(?::(1|0|true|false))?%/gu;
+// A token whose category and/or key is itself a token — %%genre:name:1%:clothing% —
+// resolved to a plain token first (resolveDynamicNames), so with :1 on the inner one
+// every token naming it follows the same pick.
+const WILDCARD_DYNAMIC_RE = (() => {
+  const name = String.raw`[\p{L}\p{N}_-]+`;
+  const part = `(%${name}:${name}(?::(?:1|0|true|false))?%|${name})`;
+  return new RegExp(`%${part}:${part}(?::(1|0|true|false))?%`, "gu");
+})();
+const isDynamicWildcard = (c, k) => c.startsWith("%") || k.startsWith("%");
 const wildcardToken = (w) => `%${w.category}:${w.key}%`;
 
 // As the server stores a category or key (normalizeWildcardName).
@@ -5262,7 +5282,7 @@ function wildcardPick(w, id, memo) {
 // nested too deep, so a run never sends a literal %…% to the model. $variables are
 // filled in first (expandVariables), so this is the one call that readies a prompt.
 function resolveWildcards(text, memo = new Map(), parent = null) {
-  const s = expandVariables(text); // $variables first: their text may hold wildcards
+  const s = resolveDynamicNames(expandVariables(text), memo); // $variables first: their text may hold wildcards
   if (!s.includes("%")) return s;
   const missing = new Set();
   const out = s.replace(WILDCARD_RE, (m, c, k, flag) => {
@@ -5293,6 +5313,24 @@ function resolveWildcards(text, memo = new Map(), parent = null) {
   return out;
 }
 
+// Turn %%genre:name:1%:clothing% into %modern:clothing% (keeping the outer flag) for
+// resolveWildcards' main pass. The inner list's values must be plain names — it's
+// resolved as a nested wildcard, so one holding tokens is refused.
+function resolveDynamicNames(s, memo) {
+  if (!s.includes("%%") && !s.includes(":%")) return s;
+  return s.replace(WILDCARD_DYNAMIC_RE, (m, c, k, flag) => {
+    if (!isDynamicWildcard(c, k)) return m;
+    const name = (part) => {
+      if (!part.startsWith("%")) return part;
+      const v = resolveWildcards(part, memo, m);
+      const n = wildcardName(v);
+      if (!n) throw new Error(`${m}: ${part} gave “${v}”, which isn't a wildcard name.`);
+      return n;
+    };
+    return `%${name(c)}:${name(k)}${flag ? `:${flag}` : ""}%`;
+  });
+}
+
 async function loadWildcards() {
   try {
     const res = await fetch("/api/wildcards");
@@ -5313,7 +5351,8 @@ wildcardsPanel.innerHTML =
   `<div class="sp-toolbar"><button type="button" class="link-btn wc-new">＋ New wildcard</button></div>` +
   `<p class="sp-run-note wc-note">Write <code>%category:key%</code> in a prompt and each run picks one of its values at random. ` +
   `<code>%category:key:1%</code> keeps its pick: a later <code>%category:key%</code> in the same prompt reuses it. ` +
-  `Click a token to copy it; ＋ Insert puts it in the Prompt tab's text.</p>` +
+  `A token can name the list too: <code>%%genre:name:1%:clothing%</code> picks a genre, then that genre's clothing. ` +
+  `Click a key to copy its token; ＋ puts it in the Prompt tab's text.</p>` +
   `<p class="sp-run-note wc-source"></p>` +
   `<p class="dz-hint sp-empty wc-empty"></p>` +
   `<div class="wc-list"></div>`;
@@ -5400,20 +5439,23 @@ function renderWildcards() {
     add.textContent = "＋ Add to " + category;
     add.addEventListener("click", () => openWildcardEditor(null, category));
     head.append(name, count, add);
-    sec.appendChild(head);
-    for (const w of list) sec.appendChild(makeWildcardRow(w));
+    const grid = document.createElement("div");
+    grid.className = "wc-grid";
+    for (const w of list) grid.appendChild(makeWildcardRow(w));
+    sec.append(head, grid);
     wcListEl.appendChild(sec);
   }
   syncWildcardSource();
 }
 
-// A list: its token (click to copy), value count, ＋ Insert, and a peek at the values.
-// Clicking anywhere else opens the editor.
+// A compact list cell: its key (click to copy the full token) and ＋ Insert — the
+// category heading above names the rest. Clicking anywhere else opens the editor.
 function makeWildcardRow(w) {
   const row = document.createElement("div");
   row.className = "sp-card wc-row";
   row.tabIndex = 0;
-  row.title = "Edit this wildcard";
+  row.title =
+    `Edit ${wildcardToken(w)} — ${plural((w.values || []).length, "value")}`;
   row.addEventListener("click", () => openWildcardEditor(w));
   row.addEventListener("keydown", (e) => {
     if (e.target === row && (e.key === "Enter" || e.key === " ")) {
@@ -5426,8 +5468,8 @@ function makeWildcardRow(w) {
   const token = document.createElement("button");
   token.type = "button";
   token.className = "wc-token";
-  token.textContent = wildcardToken(w);
-  token.title = "Copy the token";
+  token.textContent = w.key;
+  token.title = `Copy ${wildcardToken(w)}`;
   token.addEventListener("click", async (e) => {
     e.stopPropagation();
     try {
@@ -5437,27 +5479,20 @@ function makeWildcardRow(w) {
       flashText(token, "Copy failed");
     }
   });
-  const count = document.createElement("span");
-  count.className = "hint wc-count";
-  count.textContent = plural((w.values || []).length, "value");
   const ins = document.createElement("button");
   ins.type = "button";
   ins.className = "link-btn wc-insert";
-  ins.textContent = "＋ Insert";
+  ins.textContent = "＋";
   ins.title = "Put the token in the Prompt tab's text, at the cursor";
   ins.addEventListener("click", (e) => {
     e.stopPropagation();
     flashText(
       ins,
-      insertIntoPrompt(wildcardToken(w)) ? "✓ Inserted" : "No prompt field",
+      insertIntoPrompt(wildcardToken(w)) ? "✓" : "✗",
     );
   });
-  head.append(token, count, ins);
-  const vals = document.createElement("div");
-  vals.className = "sp-snippet wc-values";
-  vals.textContent =
-    (w.values || []).slice(0, 30).join(" · ") || "(empty — add values)";
-  row.append(head, vals);
+  head.append(token, ins);
+  row.append(head);
   return row;
 }
 
@@ -6321,10 +6356,30 @@ function wcHlAttach(ta) {
   wcHlSync(ta);
 }
 
+function dynamicWildcardOk(c, k) {
+  const names = (part) => {
+    if (!part.startsWith("%")) return [part];
+    const [, ic, ik] = part.match(/^%([^:%]+):([^:%]+)/) || [];
+    return (findWildcard(ic, ik)?.values || []).map(wildcardName);
+  };
+  const cs = names(c);
+  const ks = names(k);
+  return (
+    cs.length > 0 &&
+    ks.length > 0 &&
+    cs.every((cn) => ks.every((kn) => findWildcard(cn, kn)?.values?.length))
+  );
+}
+
 function wcHlHtml(text) {
   let html = "";
   let last = 0;
   const marks = [
+    // Whole %%genre:name%:clothing% tokens: ok when every name the inner list can give
+    // makes a list that exists. They start before the inner token, so they win its spot.
+    ...[...text.matchAll(WILDCARD_DYNAMIC_RE)]
+      .filter((m) => isDynamicWildcard(m[1], m[2]))
+      .map((m) => ({ m, cls: dynamicWildcardOk(m[1], m[2]) ? "ok" : "bad" })),
     ...[...text.matchAll(WILDCARD_RE)].map((m) => ({
       m,
       cls: findWildcard(m[1], m[2])?.values?.length ? "ok" : "bad",

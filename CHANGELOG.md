@@ -54,7 +54,10 @@ heading for that version with the date, commit, then tag the commit `vX.Y.Z`.
   Get Video Components takes the video to process (upload or pick from the gallery);
   left empty, the workflow's own Load Video runs. The shipped `rtx_upscale` workflow
   wires its frame-rate multiplier from the Multiplier node, so the one control sets both
-  the frames generated and Create Video's fps (source fps × multiplier).
+  the frames generated and Create Video's fps (source fps × multiplier). Frame
+  Generation and Video HDR each have an on/off checkbox; with Frame Generation off,
+  its Math Expression goes too and the video keeps the source's frame rate. With Video
+  HDR off, Create Video encodes as sRGB for that run.
 - **Auto-tags per workflow.** An **Auto-tags** field at the bottom of a ComfyUI
   workflow's form takes your own comma-separated tags (say `upscaled, video`); every run
   of that workflow gets them on its History card when it finishes. The list is kept in

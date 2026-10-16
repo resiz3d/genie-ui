@@ -139,7 +139,9 @@
     },
     "class_type": "ComfyMathExpression",
     "_meta": {
-      "title": "Math Expression"
+      "title": "Math Expression",
+      "bypass_with": "10",
+      "bypass_passthrough": "values.a"
     }
   }
 }

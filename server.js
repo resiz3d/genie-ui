@@ -981,6 +981,8 @@ app.get("/api/comfy/workflow-meta", async (req, res) => {
   for (const b of libraryBypassable || []) {
     if (!bypassable.some((x) => String(x.id) === b.id)) bypassable.push(b);
   }
+  // Nodes that go with a toggle (`_meta.bypass_with`): the UI hides their sections too.
+  for (const b of bypassable) b.dependents = bypassDependents(workflow, [b.id]);
   // Video references whose loader can skip frames get a per-file "use the last N
   // seconds" control (see tailSupport).
   const withTail = (list) =>
@@ -1704,7 +1706,9 @@ function bypassNode(workflow, id) {
   // Which input carries the signal that should survive the node's removal. Inferring it
   // works for single-in/single-out patches (a `model` input, or the only link input), but
   // a node with several link inputs has to name it: `_meta.bypass_passthrough: "positive"`.
-  const named = node._meta?.bypass_passthrough;
+  const libEntry = loadNodeTypes(NODE_TYPES_DIR).get(node.class_type);
+  applyBypassSets(workflow, id, libEntry?.bypass_sets);
+  const named = node._meta?.bypass_passthrough || libEntry?.bypass_passthrough;
   const src =
     (named && Array.isArray(node.inputs?.[named]) && node.inputs[named]) ||
     (Array.isArray(node.inputs?.model) && node.inputs.model) ||
@@ -1718,6 +1722,48 @@ function bypassNode(workflow, id) {
     }
   }
   delete workflow[id];
+}
+
+// What a node's removal changes further down the graph: `bypass_sets` in its node_types
+// entry maps "Class.input" → value, written on every node of that class the removed
+// node fed, directly or not. Video HDR's sets Create Video's color space to sRGB, since
+// without it the frames reaching Create Video are SDR.
+function applyBypassSets(workflow, id, sets) {
+  if (!sets || typeof sets !== "object") return;
+  const fed = new Set();
+  const stack = [String(id)];
+  while (stack.length) {
+    const cur = stack.pop();
+    for (const [nid, n] of Object.entries(workflow)) {
+      if (fed.has(nid)) continue;
+      const linked = Object.values(n?.inputs || {}).some(
+        (v) => Array.isArray(v) && v.length === 2 && String(v[0]) === cur,
+      );
+      if (linked) {
+        fed.add(nid);
+        stack.push(nid);
+      }
+    }
+  }
+  for (const [target, value] of Object.entries(sets)) {
+    const dot = target.indexOf(".");
+    if (dot <= 0) continue;
+    const cls = target.slice(0, dot);
+    const input = target.slice(dot + 1);
+    for (const nid of fed)
+      if (workflow[nid]?.class_type === cls) workflow[nid].inputs[input] = value;
+  }
+}
+
+// Nodes that only make sense alongside a bypassable one name it with
+// `_meta.bypass_with: "<id>"` (the Math Expression scaling Create Video's fps by the frame
+// generation multiplier) — disabling that node removes them as well, each reconnecting
+// its own passthrough (`_meta.bypass_passthrough`).
+function bypassDependents(workflow, ids) {
+  const off = new Set((ids || []).map(String));
+  return Object.entries(workflow || {})
+    .filter(([id, n]) => !off.has(id) && off.has(String(n?._meta?.bypass_with ?? "")))
+    .map(([id]) => id);
 }
 
 // Nodes an author marked `_meta.bypassable` — the UI offers an enable/disable toggle
@@ -2283,8 +2329,9 @@ app.post("/api/comfy/generate", async (req, res) => {
     applyRecognizedValues(workflow, recognizedControls, runValues); // patch recognized node inputs
     applyReferenceCollections(workflow, recognizedRefs, providedRefs); // inject dynamic ref media loaders
     tailResult = await applyTails(workflow, tokenNodes, tails); // trim references to their last N seconds
-    for (const id of Array.isArray(bypass) ? bypass : [])
-      bypassNode(workflow, String(id)); // disabled patch nodes
+    const bypassIds = (Array.isArray(bypass) ? bypass : []).map(String);
+    for (const id of [...bypassIds, ...bypassDependents(workflow, bypassIds)])
+      bypassNode(workflow, id); // disabled patch nodes, and the nodes that go with them
     applyWorkflowMedia(workflow, mediaState); // the workflow's own media loaders: re-pointed, or removed when off
     applyWorkflowLoras(workflow, loras); // the workflow's own LoRA nodes: edited, or removed when off
     workflow = injectLoras(
