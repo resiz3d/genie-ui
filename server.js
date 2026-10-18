@@ -14,6 +14,7 @@ import {
 } from "./comfy-recognize.js";
 import { createLlm } from "./llm.js";
 import { registerVideoEditor } from "./video-editor.js";
+import { registerImageEditor } from "./image-editor.js";
 import "dotenv/config";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -5327,11 +5328,18 @@ function copyToFreeName(src, dir, base, ext) {
 
 const httpError = (status, msg) => Object.assign(new Error(msg), { status });
 
-// The ✂ Video editor saving an edit back to where it was opened from. `file` is the
-// finished export; it is copied in under a new name. With `overwrite` the copy takes
-// the old video's place and the old file is deleted; otherwise it is added — as one
-// more video on the History card, or as a new Gallery video beside the original.
-function saveEditedVideo({ kind, id, index = 0, overwrite = false }, file, name) {
+// The ✂ Video editor or the 🖼 Image editor saving an edit back to where it was opened
+// from. `file` is the finished export; it is copied in under a new name. With
+// `overwrite` the copy takes the old one's place and the old file is deleted;
+// otherwise it is added — as one more output on the History card, or as a new Gallery
+// item beside the original. `media` says what it is: { kind, ext, mime }.
+const EDITED_VIDEO = { kind: "video", ext: "mp4", mime: "video/mp4" };
+function saveEditedVideo(target, file, name) {
+  return saveEditedMedia(target, file, name, EDITED_VIDEO);
+}
+function saveEditedMedia({ kind, id, index = 0, overwrite = false }, file, name, media) {
+  const { ext, mime } = media;
+  const what = media.kind; // "video" | "image", for messages
   if (kind === "history") {
     const entries = readJson(HISTORY_FILE);
     const entry = entries.find((e) => e.id === id);
@@ -5341,10 +5349,10 @@ function saveEditedVideo({ kind, id, index = 0, overwrite = false }, file, name)
       : entry.localVideo || entry.resultUrl ?
         [{ resultUrl: entry.resultUrl || null, localVideo: entry.localVideo || null }]
       : [];
-    if (overwrite && !outs[index]) throw httpError(404, "That video is no longer on the card");
+    if (overwrite && !outs[index]) throw httpError(404, `That ${what} is no longer on the card`);
     const proj = resolveProject(entry.projectId);
     const sub = outputSubfolder(entry);
-    const saved = copyToFreeName(file, path.join(OUTPUT_DIR, proj.slug + sub), `${entry.id}-edit`, "mp4");
+    const saved = copyToFreeName(file, path.join(OUTPUT_DIR, proj.slug + sub), `${entry.id}-edit`, ext);
     const url = `/output/${proj.slug}${sub}/${saved}`;
     let at = index;
     if (overwrite) {
@@ -5366,20 +5374,20 @@ function saveEditedVideo({ kind, id, index = 0, overwrite = false }, file, name)
   if (kind === "gallery") {
     const images = readJson(IMAGES_FILE);
     const item = images.find((i) => i.id === id);
-    if (!item) throw httpError(404, "That Gallery video no longer exists");
+    if (!item) throw httpError(404, `That Gallery ${what} no longer exists`);
     const proj = resolveProject(item.projectId);
     const newId = randomUUID();
-    copyToFreeName(file, path.join(INPUT_DIR, proj.slug), newId, "mp4");
-    const storedName = `${proj.slug}/${newId}.mp4`;
-    const base = String(item.name || "video").replace(/\.[^.]+$/, "");
+    copyToFreeName(file, path.join(INPUT_DIR, proj.slug), newId, ext);
+    const storedName = `${proj.slug}/${newId}.${ext}`;
+    const base = String(item.name || what).replace(/\.[^.]+$/, "");
     if (overwrite) {
       // The entry keeps its id, so saved prompts using it now get the edit.
       const old = item.storedName;
       Object.assign(item, {
         storedName,
         localUrl: `/input/${storedName}`,
-        mime: "video/mp4",
-        name: `${base}.mp4`,
+        mime,
+        name: `${base}.${ext}`,
       });
       if (old && old !== storedName) fs.rmSync(path.join(INPUT_DIR, old), { force: true });
       writeJson(IMAGES_FILE, images);
@@ -5387,11 +5395,11 @@ function saveEditedVideo({ kind, id, index = 0, overwrite = false }, file, name)
     }
     const added = {
       id: newId,
-      kind: "video",
+      kind: what,
       projectId: proj.id,
       storedName,
-      name: `${base}-edited.mp4`,
-      mime: "video/mp4",
+      name: `${base}-edited.${ext}`,
+      mime,
       localUrl: `/input/${storedName}`,
       createdAt: new Date().toISOString(),
     };
@@ -5411,6 +5419,16 @@ registerVideoEditor(app, {
   gallery: () => readJson(IMAGES_FILE),
   saveToCard: saveEditedVideo,
   editsFile: path.join(__dirname, "video-edits.json"),
+});
+
+registerImageEditor(app, {
+  outputDir: OUTPUT_DIR,
+  inputDir: INPUT_DIR,
+  resolveProject,
+  projects: ensureDefaultProject,
+  history: () => readJson(HISTORY_FILE),
+  gallery: () => readJson(IMAGES_FILE),
+  saveToCard: saveEditedMedia,
 });
 
 app.listen(PORT, HOST, () => {

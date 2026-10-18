@@ -18,6 +18,7 @@
         </div>
         <div class="header-right">
           <button type="button" id="openVideoEditor" class="tool-pill" title="Trim video files, cut parts out and join clips together">✂ Video editor</button>
+          <button type="button" id="openImageEditor" class="tool-pill" title="Crop an image to a common shape — 1:1, 16:9, 9:16 and more">🖼 Image editor</button>
           <div class="project-pill" title="Active project">
             <select id="projectSelect"></select>
             <button type="button" id="newProject" class="link-btn" title="New project">＋</button>
@@ -291,16 +292,16 @@
         <div id="history" class="history"></div>
         <div id="historyPager" class="hist-pager hidden"></div>
         <p id="historyEmpty" class="muted">No generations yet.</p>
-      </section>
 
-      <footer class="app-footer">
-        Unofficial tool, not affiliated with kie.ai or ByteDance. Provided as-is
-        with no warranty — use at your own risk. Generations spend real credits;
-        estimates are approximate. You are responsible for your API key, your
-        costs, and what you create.
-        <a href="https://github.com/resiz3d/genie-ui/blob/main/LICENSE" target="_blank" rel="noopener">MIT License</a>
-        <span id="appVersion" class="app-version"></span>
-      </footer>
+        <footer class="app-footer">
+          Unofficial tool, not affiliated with kie.ai or ByteDance. Provided as-is
+          with no warranty — use at your own risk. Generations spend real credits;
+          estimates are approximate. You are responsible for your API key, your
+          costs, and what you create.
+          <a href="https://github.com/resiz3d/genie-ui/blob/main/LICENSE" target="_blank" rel="noopener">MIT License</a>
+          <span id="appVersion" class="app-version"></span>
+        </footer>
+      </section>
     </main>
 
     <div id="lightbox" class="lightbox hidden">
@@ -471,5 +472,6 @@
     <script src="app.js"></script>
     <script src="llm.js?v=9"></script>
     <script src="video-editor.js?v=5"></script>
+    <script src="image-editor.js?v=2"></script>
   </body>
 </html>

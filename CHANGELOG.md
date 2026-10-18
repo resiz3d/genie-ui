@@ -12,6 +12,15 @@ heading for that version with the date, commit, then tag the commit `vX.Y.Z`.
 
 ### Added
 
+- **🖼 Image editor**, beside the video editor in the header, and as **✂ Crop** on
+  History image cards and Gallery images. Open an image from the device or from
+  GENie (History, Gallery, earlier crops), and crop it: drag inside the box to move
+  it, a corner to resize it, or anywhere else to draw a new one (arrow keys nudge
+  it). Lock it to a shape — Original, 1:1, 2:3, 3:4, 16:9, 9:16, 4:3, 3:2 — or leave
+  it Free. **💾 Save** puts the crop in the project's `edited_images` folder (or,
+  opened from a card, adds it to the card or replaces its image), **＋ Gallery** adds
+  it as a reference image, and **Save as…** saves it on this device. The crop keeps
+  the image's own format (PNG, JPEG or WebP) and full resolution.
 - **Filters in the video editor's Import from GENie picker.** A search box (every
   word must be in the prompt, name or tags; a `-word` must not) and a chip for each
   source and tag in the list — draft, favorite, a workflow's auto-tags. Click a chip
@@ -37,6 +46,11 @@ heading for that version with the date, commit, then tag the commit `vX.Y.Z`.
   its name and ◀ ▶ ⧉ × — and can be dragged to a new place. The grid wraps to the
   dialog's width and scrolls up and down past about two rows; ＋ Prepend and
   Append ＋ sit above it.
+- **A second Generate bar under the prompt**, so a long form doesn't have to be
+  scrolled to its end to run: Generate, ×count, preview mode, the price estimate and
+  the ComfyUI stats line (with Free VRAM), all in step with the ones at the bottom —
+  change either and both follow. It sits at the bottom of whichever prompt is on
+  screen (kie.ai's, or a ComfyUI workflow's), under every prompt tab.
 - **⏹ Cancel all queued** and **🧹 Clear all cancelled** above the History cards.
   Cancel all queued cancels every run still waiting in ComfyUI's queue and leaves
   the one generating now alone; Clear all cancelled deletes every cancelled / failed
@@ -47,9 +61,10 @@ heading for that version with the date, commit, then tag the commit `vX.Y.Z`.
 
 - **🗑 on a cancelled or failed History card deletes it straight away** — there's no
   output file to lose, so no confirmation.
-- **Room to breathe on wide screens.** From 1200px wide the page is two columns: the
-  form (with ComfyUI stats and errors) on the left, sticking to the top and scrolling
-  on its own, and History on the right, one card per row — split 60/40 in the form's
+- **Room to breathe on wide screens.** From 1200px wide the page is two columns under
+  the header, each scrolling on its own and filling the window: the form (with
+  ComfyUI stats and errors) on the left, and History on the right, one card per row
+  and ending with the footer — split 60/40 in the form's
   favor. While History's column is narrow its cards stack as on a phone (media on
   top). Re-import, Re-run and Continue now scroll only
   the form's column, so History stays where you were. The video editor and its

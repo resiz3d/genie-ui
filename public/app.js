@@ -1,6 +1,79 @@
 const form = document.getElementById("genForm");
 const submitBtn = document.getElementById("submitBtn");
 
+// A second Generate bar right under the prompt, so a long form needn't be scrolled to
+// its end to run: a live copy of the real one (Generate, ×count, preview mode, the
+// estimate) and of the ComfyUI stats line. The real controls stay the only ones the
+// code knows: the copy shows whatever they show, and what's done to the copy — a
+// click, a new count, another preview mode — is done to them. syncPromptTabs keeps it
+// at the bottom of whichever prompt field is on screen.
+const quickGenerate = document.createElement("div");
+quickGenerate.className = "quick-generate";
+{
+  const pairs = []; // [real, copy], walked in step when the copy is made
+  const mirror = (real) => {
+    const copy = real.cloneNode(true);
+    const walk = (a, b) => {
+      pairs.push([a, b]);
+      if (b.id) b.removeAttribute("id"); // getElementById keeps finding the real one
+      // Text-like elements are copied whole on each sync; recurse into the rest.
+      if (a.matches("button, span, option")) return;
+      [...a.children].forEach((child, i) => walk(child, b.children[i]));
+    };
+    walk(real, copy);
+    return copy;
+  };
+  const realRow = submitBtn.closest(".submit-row");
+  const realStats = document.getElementById("comfyStats");
+  quickGenerate.append(mirror(realRow), mirror(realStats));
+
+  const sync = () => {
+    for (const [a, b] of pairs) {
+      if (b.className !== a.className) b.className = a.className;
+      b.title = a.title;
+      if ("disabled" in a) b.disabled = a.disabled;
+      if (a.matches("button, span") && b.innerHTML !== a.innerHTML) b.innerHTML = a.innerHTML;
+      if (a.matches("input, select") && document.activeElement !== b) b.value = a.value;
+    }
+  };
+  let queued = false;
+  const later = () => {
+    if (queued) return;
+    queued = true;
+    requestAnimationFrame(() => {
+      queued = false;
+      sync();
+    });
+  };
+  for (const real of [realRow, realStats]) {
+    new MutationObserver(later).observe(real, {
+      attributes: true,
+      childList: true,
+      characterData: true,
+      subtree: true,
+    });
+    real.addEventListener("input", later);
+    real.addEventListener("change", later);
+  }
+
+  for (const [a, b] of pairs) {
+    if (a.matches("input, select"))
+      for (const type of ["input", "change"])
+        b.addEventListener(type, () => {
+          a.value = b.value;
+          a.dispatchEvent(new Event(type, { bubbles: true }));
+        });
+    if (a.matches("button")) {
+      b.type = "button"; // the real Generate is the form's own submit button
+      b.addEventListener("click", (e) => {
+        e.preventDefault();
+        a.click();
+      });
+    }
+  }
+  quickGenerate.sync = sync;
+}
+
 const errorEl = document.getElementById("error");
 
 // Gallery
@@ -1251,6 +1324,43 @@ function makeEditVideoControl(videos, { name, projectId, kind, id }, { iconOnly 
   return sel;
 }
 
+// "✂ Crop": opens the image editor on one image of a History card or on a Gallery
+// image; saving there adds the crop to the card (or replaces its image). `images` lists
+// the card's images as { url, index }; with several, the control is a menu.
+function makeCropImageControl(images, { name, projectId, kind, id }, { iconOnly = false } = {}) {
+  if (!images.length || typeof openImageEditor !== "function") return null;
+  const open = ({ url, index }) =>
+    openImageEditor({
+      url,
+      name: images.length > 1 && index ? `${name}-${index + 1}` : name,
+      projectId,
+      card: { kind, id, index },
+    });
+  const title = "Crop this image to a common shape — 1:1, 16:9, 9:16 and more";
+  if (images.length === 1) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "btn-secondary";
+    btn.innerHTML = iconOnly ? "✂" : '<span class="btn-ico">✂</span> Crop';
+    btn.title = title;
+    btn.addEventListener("click", () => open(images[0]));
+    return btn;
+  }
+  const sel = document.createElement("select");
+  sel.className = "hist-project";
+  sel.title = title;
+  const ph = new Option("✂ Crop…", "", true, true);
+  ph.disabled = true;
+  sel.appendChild(ph);
+  images.forEach((img, i) => sel.appendChild(new Option(`Image ${img.index + 1}`, String(i))));
+  sel.addEventListener("change", () => {
+    const img = images[Number(sel.value)];
+    sel.value = "";
+    if (img) open(img);
+  });
+  return sel;
+}
+
 // One card of the main Gallery panel: the preview and its details side by side,
 // with a row of icon-only actions underneath.
 function makeGalleryCard(item) {
@@ -1328,6 +1438,14 @@ function makeGalleryCard(item) {
       { iconOnly: true },
     );
     if (edit) actions.appendChild(edit);
+  }
+  if (kind === "image" && /\.(png|jpe?g|webp)$/i.test(item.localUrl || "")) {
+    const crop = makeCropImageControl(
+      [{ url: item.localUrl, index: 0 }],
+      { name: item.name, projectId: item.projectId || "default", kind: "gallery", id: item.id },
+      { iconOnly: true },
+    );
+    if (crop) actions.appendChild(crop);
   }
 
   // move to another project (file physically moves)
@@ -6670,6 +6788,11 @@ function syncPromptTabs() {
     host.field.appendChild(variablesPanel);
   wildcardsPanel.classList.toggle("hidden", promptTab !== "wildcards" || !host);
   variablesPanel.classList.toggle("hidden", promptTab !== "variables" || !host);
+  // The quick Generate goes last, under whichever tab is showing.
+  if (host && host.field.lastElementChild !== quickGenerate)
+    host.field.appendChild(quickGenerate);
+  quickGenerate.classList.toggle("hidden", !host);
+  quickGenerate.sync();
   syncGenerateLabel();
 }
 
@@ -10597,6 +10720,17 @@ function renderHistory(entries) {
         id: entry.id,
       });
       if (edit) main.appendChild(edit);
+      // its saved images open in the 🖼 image editor, to crop
+      const cropImages = entryOutputs(entry)
+        .map((o, index) => ({ url: o.localVideo, index }))
+        .filter((o) => /^\/output\/.+\.(png|jpe?g|webp)$/i.test(o.url || ""));
+      const crop = makeCropImageControl(cropImages, {
+        name: `generated-${entry.id}`,
+        projectId: entry.projectId || "default",
+        kind: "history",
+        id: entry.id,
+      });
+      if (crop) main.appendChild(crop);
       menu.append(rerun, reimport);
     } else {
       main.append(rerun, reimport); // nothing to open: running it again is the point

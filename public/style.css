@@ -1013,6 +1013,18 @@ img.zoomable {
   flex: 0 0 auto;
 }
 
+/* The second Generate bar (and ComfyUI stats), at the bottom of the prompt field —
+   a live copy of the real ones (see quickGenerate). */
+.quick-generate {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  margin-top: 0.6rem;
+}
+.quick-generate .comfy-stats {
+  margin-bottom: 0;
+}
+
 .estimate {
   font-size: 0.85rem;
   color: var(--muted);
@@ -2209,7 +2221,8 @@ button.hist-tag-switch.active {
   color: var(--text);
 }
 /* Generate while a saved prompt is active. */
-#submitBtn.from-saved::before {
+#submitBtn.from-saved::before,
+.quick-generate .submit-row > button.from-saved::before {
   content: "📌 ";
 }
 .sp-output-pending {
@@ -4450,26 +4463,155 @@ textarea.wc-hl-on {
   border-color: var(--error);
 }
 
+/* 🖼 Image editor (reuses the video editor's dialog, picker and save-to-card styles).
+   The crop box darkens everything outside it with a huge shadow, shows thirds lines,
+   and has a fingertip-sized handle at each corner. */
+.ie-import {
+  align-self: center;
+  padding: 0.5rem 1rem;
+}
+.ie-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.ie-ratios {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+.ie-ratio {
+  padding: 0.35rem 0.7rem;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+.ie-ratio:hover {
+  background: none;
+  color: var(--text);
+  border-color: var(--muted);
+}
+.ie-ratio.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.ie-stage {
+  display: flex;
+  justify-content: center;
+  padding: 14px; /* room for the corner handles at the image's edges */
+  background: #000;
+  border-radius: 8px;
+  overflow: hidden; /* clips the crop box's shadow to the stage */
+}
+.ie-frame {
+  position: relative;
+  line-height: 0;
+  touch-action: none; /* a drag crops; it never scrolls or zooms the page */
+  user-select: none;
+  cursor: crosshair;
+}
+.ie-img {
+  display: block;
+  max-width: 100%;
+  max-height: 60vh;
+  pointer-events: none;
+}
+.ie-crop {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1px solid #fff;
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.65);
+  cursor: move;
+  background:
+    linear-gradient(to right, transparent calc(33.333% - 0.5px), rgba(255, 255, 255, 0.35) calc(33.333% - 0.5px), rgba(255, 255, 255, 0.35) calc(33.333% + 0.5px), transparent calc(33.333% + 0.5px), transparent calc(66.666% - 0.5px), rgba(255, 255, 255, 0.35) calc(66.666% - 0.5px), rgba(255, 255, 255, 0.35) calc(66.666% + 0.5px), transparent calc(66.666% + 0.5px)),
+    linear-gradient(to bottom, transparent calc(33.333% - 0.5px), rgba(255, 255, 255, 0.35) calc(33.333% - 0.5px), rgba(255, 255, 255, 0.35) calc(33.333% + 0.5px), transparent calc(33.333% + 0.5px), transparent calc(66.666% - 0.5px), rgba(255, 255, 255, 0.35) calc(66.666% - 0.5px), rgba(255, 255, 255, 0.35) calc(66.666% + 0.5px), transparent calc(66.666% + 0.5px));
+}
+.ie-h {
+  position: absolute;
+  width: 22px;
+  height: 22px;
+  margin: -11px;
+  border: 2px solid #fff;
+  border-radius: 4px;
+  background: var(--accent);
+}
+.ie-h[data-h="nw"] {
+  left: 0;
+  top: 0;
+  cursor: nwse-resize;
+}
+.ie-h[data-h="ne"] {
+  right: 0;
+  top: 0;
+  cursor: nesw-resize;
+}
+.ie-h[data-h="sw"] {
+  left: 0;
+  bottom: 0;
+  cursor: nesw-resize;
+}
+.ie-h[data-h="se"] {
+  right: 0;
+  bottom: 0;
+  cursor: nwse-resize;
+}
+@media (pointer: coarse) {
+  .ie-h {
+    width: 30px;
+    height: 30px;
+    margin: -15px;
+  }
+}
+.ie-links {
+  display: flex;
+  gap: 0.75rem;
+}
+.ie-tip {
+  margin: 0;
+}
+.ie-lib-thumb {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  object-fit: contain;
+  background: #000;
+}
+
 /* ---------------------------------------------------------------------------------
    Wide screens. Everything above is the phone-first layout; this only adds room once
-   there's space for it. From 1200px the page is two columns: the form (and what
-   reports on it — ComfyUI stats, errors) on the left, sticking to the top and
-   scrolling on its own, and History on the right, one card per row. The split is
-   60/40 in the work area's favor. The header, project credits and footer span both.
+   there's space for it. From 1200px the page is an app-style screen that doesn't
+   scroll itself: the header and project credits across the top, then two columns
+   that each scroll on their own and fill the rest of the window — the form (and
+   what reports on it: ComfyUI stats, errors) on the left, History (ending with the
+   footer) on the right, one card per row. The split is 60/40 in the form's favor.
    The editor's dialogs grow too. */
 @media (min-width: 1200px) {
+  body {
+    height: 100vh;
+    height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
   main {
+    flex: 1;
+    min-height: 0;
+    width: 100%;
     max-width: 1760px;
-    padding: 1.5rem 2rem 3rem;
+    padding: 1.5rem 2rem 0;
     display: grid;
     grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+    grid-template-rows: auto auto minmax(0, 1fr);
     grid-template-areas:
       "head    head"
       "credits credits"
-      "compose hist"
-      "foot    foot";
+      "compose hist";
     column-gap: 2rem;
-    align-items: start;
   }
   main > header {
     grid-area: head;
@@ -4477,20 +4619,20 @@ textarea.wc-hl-on {
   #projectCredits {
     grid-area: credits;
   }
-  .compose-col {
-    grid-area: compose;
-    position: sticky;
-    top: 0;
-    max-height: 100vh;
+  .compose-col,
+  #historySection {
+    min-height: 0;
     overflow-y: auto;
-    overscroll-behavior: contain; /* scrolling the form never scrolls History */
     scrollbar-gutter: stable;
     padding: 0.75rem 0.75rem 1.5rem 0;
+  }
+  .compose-col {
+    grid-area: compose;
   }
   #historySection {
     grid-area: hist;
     min-width: 0;
-    padding-top: 0.75rem;
+    margin-top: 0; /* level with the form */
   }
   /* Just past the breakpoint the History column is narrow: its cards stack as on a
      phone (media on top) until there's room for media beside details. */
@@ -4510,14 +4652,15 @@ textarea.wc-hl-on {
       width: 100%;
     }
   }
-  .app-footer {
-    grid-area: foot;
-  }
-  .modal-box.fp-box.ve-box {
+  .modal-box.fp-box.ve-box,
+  .modal-box.fp-box.ie-box {
     width: min(1180px, 94vw);
   }
   .ve-box .fp-video {
     max-height: 60vh;
+  }
+  .ie-img {
+    max-height: 68vh;
   }
   .modal-box.ve-lib-box {
     width: min(1100px, 94vw);
