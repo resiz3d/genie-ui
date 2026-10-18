@@ -934,6 +934,16 @@ clearCancelledBtn.addEventListener("click", async () => {
   }
 });
 
+// Bring the form into view after a card fills it (Re-import, Re-run, Continue…). Two
+// columns (a wide screen): the form's own column scrolls to its top and History stays
+// where it is. One column: the page goes back to the top.
+const composeCol = document.getElementById("composeCol");
+const twoColumns = window.matchMedia("(min-width: 1200px)");
+function showForm() {
+  if (twoColumns.matches) composeCol.scrollTo({ top: 0, behavior: "smooth" });
+  else window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
 // Toggle a history entry's tag (draft/favorite) and refresh.
 async function toggleHistoryTag(entry, tag) {
   const next = !entry[tag];
@@ -10476,7 +10486,7 @@ function renderHistory(entries) {
       const p = linkedPrompt;
       await applyEntry(entry);
       if (p) await importSavedPrompt(p, { confirmReplace: false });
-      window.scrollTo({ top: 0, behavior: "smooth" });
+      showForm();
     });
     const editPromptBtn = button("✎", "", () => {
       if (linkedPrompt) openPromptEditor(linkedPrompt, entry.projectId || "default");
@@ -10523,7 +10533,7 @@ function renderHistory(entries) {
               },
               input.values || {},
             );
-            window.scrollTo({ top: 0, behavior: "smooth" });
+            showForm();
           },
         ),
       );
@@ -10549,7 +10559,7 @@ function renderHistory(entries) {
               },
               input.values || {},
             );
-            window.scrollTo({ top: 0, behavior: "smooth" });
+            showForm();
           },
         ),
       );
@@ -10565,7 +10575,7 @@ function renderHistory(entries) {
         if (!ok) return;
       }
       await applyEntry(entry);
-      window.scrollTo({ top: 0, behavior: "smooth" });
+      showForm();
       form.requestSubmit();
     });
 
@@ -10805,7 +10815,7 @@ async function applyEntry(entry) {
       comfyBypassControl.setDisabled(input.bypass);
     await restoreComfyMedia(entry); // re-populate the image/video/audio fields
     // "Generate preview" is a persisted global preference — re-import leaves it as-is.
-    window.scrollTo({ top: 0, behavior: "smooth" });
+    showForm();
     return;
   }
 

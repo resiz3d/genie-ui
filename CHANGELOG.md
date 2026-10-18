@@ -47,6 +47,14 @@ heading for that version with the date, commit, then tag the commit `vX.Y.Z`.
 
 - **🗑 on a cancelled or failed History card deletes it straight away** — there's no
   output file to lose, so no confirmation.
+- **Room to breathe on wide screens.** From 1200px wide the page is two columns: the
+  form (with ComfyUI stats and errors) on the left, sticking to the top and scrolling
+  on its own, and History on the right, one card per row — split 60/40 in the form's
+  favor. While History's column is narrow its cards stack as on a phone (media on
+  top). Re-import, Re-run and Continue now scroll only
+  the form's column, so History stays where you were. The video editor and its
+  Import from GENie picker grow on big screens too. Phones and narrower windows are
+  unchanged.
 
 ## [1.4.0] - 2026-10-14
 

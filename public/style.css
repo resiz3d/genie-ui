@@ -4449,3 +4449,77 @@ textarea.wc-hl-on {
   color: var(--error);
   border-color: var(--error);
 }
+
+/* ---------------------------------------------------------------------------------
+   Wide screens. Everything above is the phone-first layout; this only adds room once
+   there's space for it. From 1200px the page is two columns: the form (and what
+   reports on it — ComfyUI stats, errors) on the left, sticking to the top and
+   scrolling on its own, and History on the right, one card per row. The split is
+   60/40 in the work area's favor. The header, project credits and footer span both.
+   The editor's dialogs grow too. */
+@media (min-width: 1200px) {
+  main {
+    max-width: 1760px;
+    padding: 1.5rem 2rem 3rem;
+    display: grid;
+    grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+    grid-template-areas:
+      "head    head"
+      "credits credits"
+      "compose hist"
+      "foot    foot";
+    column-gap: 2rem;
+    align-items: start;
+  }
+  main > header {
+    grid-area: head;
+  }
+  #projectCredits {
+    grid-area: credits;
+  }
+  .compose-col {
+    grid-area: compose;
+    position: sticky;
+    top: 0;
+    max-height: 100vh;
+    overflow-y: auto;
+    overscroll-behavior: contain; /* scrolling the form never scrolls History */
+    scrollbar-gutter: stable;
+    padding: 0.75rem 0.75rem 1.5rem 0;
+  }
+  #historySection {
+    grid-area: hist;
+    min-width: 0;
+    padding-top: 0.75rem;
+  }
+  /* Just past the breakpoint the History column is narrow: its cards stack as on a
+     phone (media on top) until there's room for media beside details. */
+  .history {
+    container-type: inline-size;
+  }
+  @container (max-width: 520px) {
+    .hist-card,
+    .hist-live.has-preview {
+      flex-direction: column;
+    }
+    .hist-thumb,
+    .hist-live-thumb,
+    .hist-card .hist-placeholder,
+    .hist-card video,
+    .hist-card .hist-img {
+      width: 100%;
+    }
+  }
+  .app-footer {
+    grid-area: foot;
+  }
+  .modal-box.fp-box.ve-box {
+    width: min(1180px, 94vw);
+  }
+  .ve-box .fp-video {
+    max-height: 60vh;
+  }
+  .modal-box.ve-lib-box {
+    width: min(1100px, 94vw);
+  }
+}
