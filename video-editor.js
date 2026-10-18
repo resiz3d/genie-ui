@@ -34,7 +34,7 @@ function frameRate(shown) {
 
 export function registerVideoEditor(
   app,
-  { outputDir, inputDir, resolveProject, projects, history, gallery, saveToCard },
+  { outputDir, inputDir, resolveProject, projects, history, gallery, saveToCard, editsFile },
 ) {
   // Read here, not at import: server.js loads .env after its imports are evaluated.
   const FFMPEG = (process.env.FFMPEG_PATH || "").trim() || "ffmpeg";
@@ -215,6 +215,17 @@ export function registerVideoEditor(
     return null;
   }
 
+  // A History entry's favorite/draft flags and workflow auto-tags, for the picker's
+  // filters.
+  const entryTags = (e) => {
+    const tags = [];
+    if (e.favorite) tags.push("favorite");
+    if (e.draft) tags.push("draft");
+    for (const t of Array.isArray(e.tags) ? e.tags : [])
+      if (!tags.some((x) => x.toLowerCase() === String(t).toLowerCase())) tags.push(String(t));
+    return tags;
+  };
+
   // GENie's own videos, newest first: History results, Gallery videos and earlier
   // edits — of one project, or of all of them (projectId "all").
   app.get("/api/video-editor/library", (req, res) => {
@@ -234,6 +245,7 @@ export function registerVideoEditor(
           name: path.basename(url),
           label: String(e.input?.prompt || "").slice(0, 160),
           date: e.createdAt || "",
+          tags: entryTags(e),
         });
     }
     for (const g of gallery())
@@ -244,6 +256,7 @@ export function registerVideoEditor(
           name: g.name || path.basename(g.localUrl),
           label: "",
           date: g.createdAt || "",
+          tags: [],
         });
     for (const p of all ? projects() : [proj]) {
       const folder = path.join(outputDir, p.slug, SAVE_FOLDER);
@@ -258,6 +271,7 @@ export function registerVideoEditor(
           name,
           label: "",
           date: fs.statSync(path.join(folder, name)).mtime.toISOString(),
+          tags: [],
         });
     }
     out.sort((a, b) => (a.date < b.date ? 1 : -1));
@@ -283,6 +297,192 @@ export function registerVideoEditor(
     probes.delete(req.params.id);
     for (const [jobId, job] of jobs)
       if (job.sourceIds.includes(req.params.id)) dropJob(jobId);
+    res.json({ code: 200, msg: "success" });
+  });
+
+  // ------------------------------------------------------------- saved edits
+  // An edit to come back to and add to: { id, name, projectId, createdAt, updatedAt,
+  // clips: [{ url, name, cuts, markIn, markOut, cur }], sizeFrom (clip index | null),
+  // fit, exports: [{ url, name, at }] — the videos saved from it, newest last }. A clip uploaded from the device is moved out of the temp folder (which is
+  // swept) into the project's edited_videos/sources the first time its edit is saved.
+  const SOURCES = "sources"; // inside SAVE_FOLDER
+  const readEdits = () => {
+    try {
+      const list = JSON.parse(fs.readFileSync(editsFile, "utf8"));
+      return Array.isArray(list) ? list : [];
+    } catch {
+      return [];
+    }
+  };
+  const writeEdits = (list) => fs.writeFileSync(editsFile, JSON.stringify(list, null, 2));
+  const frameNo = (n) => (Number.isInteger(n) && n >= 0 ? n : null);
+  const cleanClip = (c) => ({
+    url: String(c.url || ""),
+    name: String(c.name || "video").slice(0, 200),
+    cuts: (Array.isArray(c.cuts) ? c.cuts : [])
+      .filter((r) => Array.isArray(r) && frameNo(r[0]) != null && frameNo(r[1]) > r[0])
+      .slice(0, MAX_SEGMENTS)
+      .map(([s, e]) => [s, e]),
+    markIn: frameNo(c.markIn),
+    markOut: frameNo(c.markOut),
+    cur: frameNo(c.cur) ?? 0,
+  });
+
+  // Keep an upload for good: move it into the project's sources folder and link its
+  // id there, so the open editor and its exports carry on using it.
+  async function keepUpload(id, name, slug) {
+    const from = findSource(id);
+    if (!from) return null;
+    if (linked.has(id)) return null; // already one of GENie's own files
+    const folder = path.join(outputDir, slug, SAVE_FOLDER, SOURCES);
+    await fs.promises.mkdir(folder, { recursive: true });
+    const base =
+      String(name || "video")
+        .replace(/[\\/:*?"<>|\x00-\x1f]/g, "_")
+        .replace(/\.[^.]*$/, "")
+        .trim()
+        .slice(0, 120) || "video";
+    const ext = path.extname(from);
+    let file;
+    for (let n = 1; ; n++) {
+      file = path.join(folder, `${base}${n > 1 ? `-${n}` : ""}${ext}`);
+      if (!fs.existsSync(file)) break;
+    }
+    try {
+      await fs.promises.rename(from, file);
+    } catch (err) {
+      if (err.code !== "EXDEV") throw err;
+      await fs.promises.copyFile(from, file); // temp folder on another drive
+      await unlink(from);
+    }
+    linked.set(id, file);
+    return `/output/${slug}/${SAVE_FOLDER}/${SOURCES}/${encodeURIComponent(path.basename(file))}`;
+  }
+
+  // A kept upload no saved edit uses any more goes with the last edit that did.
+  async function dropUnusedSources(urls, edits) {
+    const used = new Set(edits.flatMap((e) => e.clips.map((c) => c.url)));
+    for (const url of urls) {
+      if (used.has(url) || !url.includes(`/${SAVE_FOLDER}/${SOURCES}/`)) continue;
+      const file = mediaFile(url);
+      if (file) await unlink(file);
+    }
+  }
+
+  app.get("/api/video-editor/edits", (req, res) => {
+    const names = new Map(projects().map((p) => [p.id, p.name]));
+    const data = readEdits()
+      .map((e) => ({
+        id: e.id,
+        name: e.name,
+        projectId: e.projectId,
+        projectName: names.get(e.projectId) || "",
+        clips: e.clips.length,
+        exports: (e.exports || []).length,
+        firstUrl: e.clips[0]?.url || "",
+        updatedAt: e.updatedAt,
+      }))
+      .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
+    res.json({ code: 200, msg: "success", data });
+  });
+
+  app.get("/api/video-editor/edits/:id", (req, res) => {
+    const edit = readEdits().find((e) => e.id === req.params.id);
+    if (!edit) return fail(res, 404, "That saved edit is gone");
+    // Say which clips' files have gone missing since it was saved.
+    const clips = edit.clips.map((c) => ({ ...c, missing: !mediaFile(c.url) }));
+    const exports = (edit.exports || []).filter((x) => mediaFile(x.url));
+    res.json({ code: 200, msg: "success", data: { ...edit, clips, exports } });
+  });
+
+  // body: { id? (to update), name, projectId, clips: [{ url | sourceId, name, cuts,
+  // markIn, markOut, cur }], sizeFrom, fit } → the saved edit, every clip with a url.
+  app.post("/api/video-editor/edits", async (req, res) => {
+    const body = req.body || {};
+    if (!Array.isArray(body.clips) || !body.clips.length || body.clips.length > MAX_CLIPS)
+      return fail(res, 400, "Nothing to save");
+    const edits = readEdits();
+    const old = body.id ? edits.find((e) => e.id === body.id) : null;
+    if (body.id && !old) return fail(res, 404, "That saved edit is gone");
+    const proj = resolveProject(old?.projectId || body.projectId);
+    const clips = [];
+    const kept = new Map(); // sourceId → url: a split or duplicated clip shares its upload
+    try {
+      for (const c of body.clips) {
+        let url = String(c.url || "");
+        const sid = String(c.sourceId || "");
+        if (!url && sid) {
+          if (!kept.has(sid)) kept.set(sid, (await keepUpload(sid, c.name, proj.slug)) || "");
+          url = kept.get(sid);
+        }
+        if (!mediaFile(url) || !VIDEO_FILE.test(url))
+          return res
+            .status(404)
+            .json({ code: 404, msg: `${c.name || "A clip"} is no longer on the server — add it again`, id: c.sourceId });
+        clips.push(cleanClip({ ...c, url }));
+      }
+    } catch (err) {
+      console.error("Video editor: keeping an upload failed:", err);
+      return fail(res, 500, `Couldn't keep an uploaded clip: ${err.message}`);
+    }
+    const now = new Date().toISOString();
+    const sizeFrom = Number.isInteger(body.sizeFrom) && body.sizeFrom < clips.length ? body.sizeFrom : null;
+    const edit = {
+      id: old?.id || randomUUID(),
+      name: String(body.name || "").trim().slice(0, 120) || clips[0].name.replace(/\.[^.]+$/, ""),
+      projectId: proj.id,
+      createdAt: old?.createdAt || now,
+      updatedAt: now,
+      clips,
+      sizeFrom,
+      fit: body.fit === "fill" ? "fill" : "fit",
+      exports: old?.exports || [],
+    };
+    // Re-read: an upload being kept can take a while, and other saves may have landed.
+    const latest = readEdits();
+    const at = latest.findIndex((e) => e.id === edit.id);
+    if (at >= 0) latest[at] = { ...edit, exports: latest[at].exports || [] };
+    else latest.push(edit);
+    writeEdits(latest);
+    if (old) await dropUnusedSources(old.clips.map((c) => c.url), latest);
+    res.json({ code: 200, msg: "success", data: edit });
+  });
+
+  // body: { url, name } — a video just saved from this project (to its edited_videos,
+  // a card or the Gallery), listed in it to come back to.
+  app.post("/api/video-editor/edits/:id/exports", (req, res) => {
+    const edits = readEdits();
+    const edit = edits.find((e) => e.id === req.params.id);
+    if (!edit) return fail(res, 404, "That saved edit is gone");
+    const url = String(req.body?.url || "");
+    if (!mediaFile(url) || !VIDEO_FILE.test(url)) return fail(res, 404, "That video isn't on the server");
+    edit.exports = (edit.exports || []).filter((x) => x.url !== url);
+    edit.exports.push({
+      url,
+      name: String(req.body?.name || path.basename(url)).slice(0, 200),
+      at: new Date().toISOString(),
+    });
+    writeEdits(edits);
+    res.json({ code: 200, msg: "success", data: edit.exports });
+  });
+
+  app.put("/api/video-editor/edits/:id", (req, res) => {
+    const edits = readEdits();
+    const edit = edits.find((e) => e.id === req.params.id);
+    if (!edit) return fail(res, 404, "That saved edit is gone");
+    const name = String(req.body?.name || "").trim().slice(0, 120);
+    if (name) edit.name = name;
+    writeEdits(edits);
+    res.json({ code: 200, msg: "success", data: { id: edit.id, name: edit.name } });
+  });
+
+  app.delete("/api/video-editor/edits/:id", async (req, res) => {
+    const edits = readEdits();
+    const edit = edits.find((e) => e.id === req.params.id);
+    if (!edit) return fail(res, 404, "That saved edit is gone");
+    const rest = edits.filter((e) => e !== edit);
+    writeEdits(rest);
+    await dropUnusedSources(edit.clips.map((c) => c.url), rest);
     res.json({ code: 200, msg: "success" });
   });
 

@@ -10,6 +10,44 @@ heading for that version with the date, commit, then tag the commit `vX.Y.Z`.
 
 ## [Unreleased]
 
+### Added
+
+- **Filters in the video editor's Import from GENie picker.** A search box (every
+  word must be in the prompt, name or tags; a `-word` must not) and a chip for each
+  source and tag in the list — draft, favorite, a workflow's auto-tags. Click a chip
+  to show only those videos (**+**), again to hide them (**−**), again to clear it;
+  right-click goes straight to hiding. Picks stay picked while filtered out, and the
+  filters are remembered on the server, so they follow you to another device.
+- **Video editor projects.** **💾 Save project** (or Ctrl+S) keeps the clips, their
+  order, cuts and size/fit choices to come back to and add to; **📂 Open project…**
+  lists them to open, rename (✎) or delete. Clips uploaded from your device are moved
+  into the project's `edited_videos/sources` folder when first saved, so they outlive
+  the temp folder's 12-hour sweep. Videos saved while a project is open (to
+  edited_videos, a card or the Gallery) are listed in it under **Saved from this
+  project**, to watch again or add back as a clip. The heading shows the open
+  project, with • while it has unsaved changes. Projects are stored in
+  `video-edits.json`.
+- **⫽ Split here** (B) and **⧉ Duplicate** (D) in the video editor. Split cuts the
+  clip on screen in two at the frame on screen — that frame starts the second part —
+  so each part can be moved, cut or dropped on its own; duplicate puts a copy of a
+  clip, cuts and all, right after it. Both share the original file, so nothing is
+  uploaded or copied again.
+- **The video editor's clips are a grid of cards** instead of one sideways-scrolling
+  row: each shows a still of where the clip starts, its number and kept length, then
+  its name and ◀ ▶ ⧉ × — and can be dragged to a new place. The grid wraps to the
+  dialog's width and scrolls up and down past about two rows; ＋ Prepend and
+  Append ＋ sit above it.
+- **⏹ Cancel all queued** and **🧹 Clear all cancelled** above the History cards.
+  Cancel all queued cancels every run still waiting in ComfyUI's queue and leaves
+  the one generating now alone; Clear all cancelled deletes every cancelled / failed
+  card of the project picked in the History filter. Each shows only when it has
+  something to do, with a count.
+
+### Changed
+
+- **🗑 on a cancelled or failed History card deletes it straight away** — there's no
+  output file to lose, so no confirmation.
+
 ## [1.4.0] - 2026-10-14
 
 ### Changed

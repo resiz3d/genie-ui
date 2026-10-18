@@ -280,6 +280,10 @@
             MP
           </label>
         </div>
+        <div class="hist-bulk">
+          <button type="button" id="cancelQueued" class="btn-secondary hidden" title="Cancel every run still waiting in ComfyUI's queue — the one generating now keeps going">⏹ Cancel all queued</button>
+          <button type="button" id="clearCancelled" class="btn-secondary hidden" title="Delete every cancelled / failed card in this project (they have no output files)">🧹 Clear all cancelled</button>
+        </div>
         <div id="history" class="history"></div>
         <div id="historyPager" class="hist-pager hidden"></div>
         <p id="historyEmpty" class="muted">No generations yet.</p>

@@ -2570,7 +2570,8 @@ app.get("/api/comfy/status", async (req, res) => {
 });
 
 // Cancel one ComfyUI job without stopping ComfyUI: drop it from the queue if it's
-// still pending, or interrupt it if it's the one currently running.
+// still pending, or interrupt it if it's the one currently running — unless
+// `onlyQueued`, which leaves a running job alone.
 app.post("/api/comfy/cancel", async (req, res) => {
   const promptId = req.body?.promptId;
   if (!promptId)
@@ -2589,7 +2590,8 @@ app.post("/api/comfy/cancel", async (req, res) => {
         body: JSON.stringify({ delete: [promptId] }),
       });
     }
-    if (running) await fetch(`${COMFYUI_URL}/interrupt`, { method: "POST" });
+    if (running && !req.body?.onlyQueued)
+      await fetch(`${COMFYUI_URL}/interrupt`, { method: "POST" });
     res.json({ code: 200, msg: "cancelled", data: { running, pending } });
   } catch (err) {
     console.error("ComfyUI cancel error:", err);
@@ -2898,7 +2900,12 @@ app.get("/api/comfy/stats", async (req, res) => {
   } else {
     vram = await comfyVram(); // GPU % unavailable without nvidia-smi
   }
-  res.json({ code: 200, msg: "success", data: { cpu, gpu, vram, ram } });
+  // The prompts waiting in ComfyUI's queue (not the running one), for Cancel all queued.
+  const queued = await fetch(`${COMFYUI_URL}/queue`)
+    .then((r) => r.json())
+    .then((q) => (q.queue_pending || []).map((it) => it[1]))
+    .catch(() => []);
+  res.json({ code: 200, msg: "success", data: { cpu, gpu, vram, ram, queued } });
 });
 
 // --- live preview frames to the browser ---------------------------------------
@@ -5403,6 +5410,7 @@ registerVideoEditor(app, {
   history: () => readJson(HISTORY_FILE),
   gallery: () => readJson(IMAGES_FILE),
   saveToCard: saveEditedVideo,
+  editsFile: path.join(__dirname, "video-edits.json"),
 });
 
 app.listen(PORT, HOST, () => {

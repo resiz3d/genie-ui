@@ -1049,6 +1049,20 @@ img.zoomable {
   margin-bottom: 0.75rem;
 }
 
+.hist-bulk {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+.hist-bulk:not(:has(button:not(.hidden))) {
+  display: none;
+}
+.hist-bulk .btn-secondary {
+  font-size: 0.82rem;
+  padding: 0.35rem 0.6rem;
+}
+
 .hist-head-actions .btn-secondary {
   font-size: 0.82rem;
   padding: 0.35rem 0.6rem;
@@ -3795,64 +3809,107 @@ textarea.wc-hl-on {
   flex-direction: column;
   gap: 0.6rem;
 }
+/* The clips: a header (count, Prepend, Append) over a wrapping grid of cards — a
+   still, its number and kept length, then name and actions. About two rows show;
+   more scroll inside the grid. */
 .ve-clips-row {
   display: flex;
-  align-items: stretch;
+  flex-direction: column;
   gap: 0.4rem;
 }
-.ve-clips-row > button {
-  flex: none;
+.ve-clips-head {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.ve-clips-title {
+  margin-right: auto;
+  font-size: 0.8rem;
+}
+.ve-clips-head > button {
   padding: 0.3rem 0.6rem;
 }
 .ve-clips {
-  flex: 1;
-  min-width: 0;
-  display: flex;
+  position: relative; /* the cards' offsetTop, for keeping the active one in view */
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(124px, 1fr));
   gap: 0.4rem;
-  overflow-x: auto;
-  padding-bottom: 0.2rem;
+  max-height: 260px;
+  overflow-y: auto;
+  padding: 2px;
 }
 .ve-clip {
-  flex: none;
   display: flex;
-  align-items: center;
-  gap: 0.35rem;
-  max-width: 17rem;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
   border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 0.3rem 0.45rem;
-  font-size: 0.8rem;
+  font-size: 0.75rem;
   cursor: pointer;
+}
+.ve-clip:hover {
+  border-color: var(--muted);
 }
 .ve-clip.active {
   border-color: var(--accent);
-  box-shadow: inset 0 -2px 0 var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.ve-clip.drop-before {
+  box-shadow: -3px 0 0 var(--accent);
+}
+.ve-clip.drop-after {
+  box-shadow: 3px 0 0 var(--accent);
+}
+.ve-clip-thumb {
+  position: relative;
+  background: #000;
+}
+.ve-clip-thumb video {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  object-fit: contain;
+  pointer-events: none;
+}
+.ve-clip-n,
+.ve-clip-dur {
+  position: absolute;
+  top: 0.25rem;
+  border-radius: 999px;
+  padding: 0 0.4rem;
+  background: rgba(0, 0, 0, 0.7);
+  color: #fff;
+  font-variant-numeric: tabular-nums;
 }
 .ve-clip-n {
-  flex: none;
-  min-width: 1.3rem;
+  left: 0.25rem;
+  min-width: 1.2rem;
   text-align: center;
-  border-radius: 999px;
-  background: var(--border);
-  font-variant-numeric: tabular-nums;
 }
 .ve-clip.active .ve-clip-n {
   background: var(--accent);
-  color: #fff;
+}
+.ve-clip-dur {
+  right: 0.25rem;
+}
+.ve-clip-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.15rem;
+  padding: 0.2rem 0.35rem;
 }
 .ve-clip-name {
+  flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.ve-clip-dur {
-  flex: none;
-  font-variant-numeric: tabular-nums;
-}
 .ve-clip .link-btn {
   flex: none;
-  font-size: 0.8rem;
+  padding: 0 0.1rem;
+  font-size: 0.75rem;
 }
 .ve-clip .link-btn:disabled {
   opacity: 0.3;
@@ -3871,6 +3928,82 @@ textarea.wc-hl-on {
   align-self: center;
   padding: 0.5rem 1rem;
 }
+/* Edit projects: Open / Save at the left of the editor's buttons, the open one's name
+   in the heading, and the list of saved ones. */
+.ve-proj-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-right: auto;
+}
+.ve-proj {
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--accent);
+}
+.ve-exports {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.6rem;
+  margin-top: 0.5rem;
+}
+.ve-exports-title {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+.ve-exports-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+.ve-export {
+  cursor: pointer;
+}
+.modal-box.ve-projs-box {
+  width: min(620px, 96vw);
+}
+.ve-projs-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+.ve-proj-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.ve-proj-row.current {
+  border-color: var(--accent);
+}
+.ve-proj-row video {
+  flex: none;
+  width: 96px;
+  aspect-ratio: 16 / 10;
+  object-fit: contain;
+  background: #000;
+  border-radius: 4px;
+}
+.ve-proj-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+.ve-proj-info strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ve-proj-info .muted {
+  font-size: 0.78rem;
+}
 .modal-box.ve-lib-box {
   width: min(860px, 96vw);
 }
@@ -3886,6 +4019,54 @@ textarea.wc-hl-on {
 .ve-lib-count {
   margin-left: auto;
   font-size: 0.8rem;
+}
+/* Filters: off chips are faint and dashed; + (only these) is green, − (hide these)
+   red and struck through. Source chips are solid even when off. */
+.ve-lib-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.6rem;
+}
+.ve-lib-q {
+  flex: 1 1 200px;
+  max-width: 300px;
+}
+.ve-lib-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+.ve-lib-chip {
+  padding: 0.15rem 0.6rem;
+  border: 1px dashed var(--border);
+  border-radius: 999px;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+.ve-lib-chip.src {
+  border-style: solid;
+}
+.ve-lib-chip:hover {
+  background: none;
+  color: var(--text);
+  border-color: var(--muted);
+}
+.ve-lib-chip[data-state="in"] {
+  border-style: solid;
+  border-color: #3d6b52;
+  background: rgba(127, 216, 166, 0.12);
+  color: #7fd8a6;
+}
+.ve-lib-chip[data-state="out"] {
+  border-style: solid;
+  border-color: #7d3d3d;
+  background: rgba(255, 110, 110, 0.12);
+  color: #ff8a8a;
+  text-decoration: line-through;
 }
 .ve-lib-grid {
   display: grid;

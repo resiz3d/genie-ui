@@ -894,6 +894,46 @@ previewMethodEl.addEventListener("change", () => {
   if (previewMethod === "off") closePreviewStream();
 });
 
+// Above the cards: ⏹ Cancel all queued (the runs still waiting in ComfyUI's queue —
+// the one generating keeps going) and 🧹 Clear all cancelled (every cancelled/failed
+// card of the History filter's project, hidden ones too — they have no files).
+const cancelQueuedBtn = document.getElementById("cancelQueued");
+const clearCancelledBtn = document.getElementById("clearCancelled");
+let comfyQueued = new Set(); // promptIds pending in ComfyUI, from the stats poll
+const queuedLive = () =>
+  [...liveStatus.values()].filter((l) => l.cancel && comfyQueued.has(l.promptId));
+function renderHistoryBulk() {
+  const queued = queuedLive().length;
+  cancelQueuedBtn.classList.toggle("hidden", !queued);
+  cancelQueuedBtn.textContent = `⏹ Cancel all queued (${queued})`;
+  const dead = historyOfProject(historyEntries).filter(isUnfinished).length;
+  clearCancelledBtn.classList.toggle("hidden", !dead);
+  clearCancelledBtn.textContent = `🧹 Clear all cancelled (${dead})`;
+}
+cancelQueuedBtn.addEventListener("click", async () => {
+  cancelQueuedBtn.disabled = true;
+  try {
+    await Promise.all(queuedLive().map((l) => l.cancel({ onlyQueued: true })));
+  } finally {
+    cancelQueuedBtn.disabled = false;
+  }
+});
+clearCancelledBtn.addEventListener("click", async () => {
+  clearCancelledBtn.disabled = true;
+  try {
+    for (const e of historyOfProject(historyEntries).filter(isUnfinished)) {
+      const res = await fetch(`/api/history/${e.id}`, { method: "DELETE" });
+      if (!res.ok && res.status !== 404)
+        throw new Error((await res.json().catch(() => ({}))).msg || "Delete failed");
+    }
+  } catch (err) {
+    alert(err.message || String(err));
+  } finally {
+    clearCancelledBtn.disabled = false;
+    loadHistory();
+  }
+});
+
 // Toggle a history entry's tag (draft/favorite) and refresh.
 async function toggleHistoryTag(entry, tag) {
   const next = !entry[tag];
@@ -9171,18 +9211,21 @@ function createLiveStatus(job) {
       };
       pre.src = url;
     },
-    // Show a Cancel button; `fn` runs once on click.
+    // Show a Cancel button; `fn` runs on click, or from `cancel(opts)` (Cancel all
+    // queued passes { onlyQueued: true }). `fn` returning false means nothing was
+    // cancelled, and the button is live again.
     enableCancel(fn) {
       cancelBtn.classList.remove("hidden");
-      cancelBtn.addEventListener(
-        "click",
-        async () => {
-          cancelBtn.disabled = true;
-          statusText.textContent = "Cancelling…";
-          await fn();
-        },
-        { once: true },
-      );
+      this.cancel = async (opts = {}) => {
+        if (cancelBtn.disabled) return;
+        cancelBtn.disabled = true;
+        statusText.textContent = "Cancelling…";
+        if ((await fn(opts)) === false) {
+          cancelBtn.disabled = false;
+          paint();
+        }
+      };
+      cancelBtn.addEventListener("click", () => this.cancel());
     },
     stop() {
       this.running = false;
@@ -9228,17 +9271,21 @@ async function failJob(job, msg) {
 function wireComfyCancel(job) {
   const live = liveOf(job);
   if (!live) return;
-  live.enableCancel(async () => {
-    job.cancelled = true;
+  live.enableCancel(async ({ onlyQueued = false } = {}) => {
+    if (!onlyQueued) job.cancelled = true;
     try {
-      await fetch("/api/comfy/cancel", {
+      const res = await fetch("/api/comfy/cancel", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ promptId: job.taskId }),
+        body: JSON.stringify({ promptId: job.taskId, onlyQueued }),
       });
+      // Already running (or done) — Cancel all queued leaves it be.
+      if (onlyQueued && !(await res.json()).data?.pending) return false;
     } catch (err) {
       console.error("Cancel failed:", err);
+      if (onlyQueued) return false;
     }
+    job.cancelled = true;
     await failJob(job, "Cancelled — re-run from History any time.");
   });
 }
@@ -9767,17 +9814,25 @@ async function loadHistory() {
   }
 }
 
+// The entries of the project picked in the History filter (all of them for "all").
+function historyOfProject(entries) {
+  const filter = historyFilter.value || "all";
+  return filter === "all" ? entries : (
+      entries.filter((e) => (e.projectId || "default") === filter)
+    );
+}
+
+// A cancelled or failed run: no output, so nothing but the card goes on delete.
+const isUnfinished = (e) =>
+  e.status === "failed" && !e.localVideo && !e.resultUrl && !e.outputs?.length;
+
 // The history entries the current filter keeps, in display order — shared by
 // the rendered list and the lightbox's ‹ › navigation so they stay in sync.
 // Entries carrying any tag checked in the "Hide:" controls are dropped. The
 // "cancelled" checkbox isn't a card tag — it drops failed/cancelled runs (both
 // land on status "failed"), so it's handled here rather than via entryTags.
 function filterHistory(entries) {
-  const filter = historyFilter.value || "all";
-  const byProject =
-    filter === "all" ? entries : (
-      entries.filter((e) => (e.projectId || "default") === filter)
-    );
+  const byProject = historyOfProject(entries);
   if (!hiddenTags.size) return byProject;
   return byProject.filter((e) => {
     if (hiddenTags.has("cancelled") && e.status === "failed") return false;
@@ -10237,6 +10292,7 @@ document.addEventListener("click", (e) => {
 
 function renderHistory(entries) {
   renderProjectCredits();
+  renderHistoryBulk();
   historyEl.innerHTML = "";
   const filter = historyFilter.value || "all"; // used below for the per-entry project label
   const visible = filterHistory(entries);
@@ -10592,13 +10648,17 @@ function renderHistory(entries) {
       menu.appendChild(refreshBtn);
     }
 
-    // delete this entry (removes the saved output too) — with confirmation
+    // delete this entry (removes the saved output too) — with confirmation, except
+    // for a cancelled/failed run, which has no output to lose
+    const unfinished = isUnfinished(entry);
     const del = button(
       "🗑",
-      "Delete this history item and its saved files (Ctrl+click to skip confirmation)",
+      unfinished ?
+        "Delete this cancelled / failed run"
+      : "Delete this history item and its saved files (Ctrl+click to skip confirmation)",
       async (e) => {
         // Ctrl (or ⌘) + click deletes immediately, skipping the confirm prompt.
-        const skipConfirm = e.ctrlKey || e.metaKey;
+        const skipConfirm = unfinished || e.ctrlKey || e.metaKey;
         if (
           !skipConfirm &&
           !confirm(
@@ -11013,6 +11073,8 @@ async function comfyStatsTick() {
       const r = await fetch("/api/comfy/stats");
       const d = (await r.json())?.data;
       renderComfyStats(d);
+      comfyQueued = new Set(d?.queued || []);
+      renderHistoryBulk();
       comfyStatsEl.classList.remove("hidden");
     } catch {
       /* transient — keep the last reading */
