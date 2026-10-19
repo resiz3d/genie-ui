@@ -1320,8 +1320,8 @@
     else if (!buildModal.classList.contains("hidden")) closeBuilder();
   });
 
-  // The project switcher changes what the builder shows.
-  document.getElementById("projectSelect")?.addEventListener("change", () => {
+  // Switching projects changes what the builder shows.
+  document.addEventListener("projectchange", () => {
     if (draftTimer) saveDraftNow(); // still aimed at the old project
     if (shotTimer) saveShotsNow();
     shotList = null;
@@ -1589,6 +1589,180 @@
     renderRev();
   });
   $(".llm-rev-undo", rev).addEventListener("click", undoRev);
+
+  // ------------------------------------- ✨ Revise with AI (main prompt box)
+  // The quick version for the prompt box itself: its text as it is, what to change,
+  // and plain text back (no JSON, no references). One panel, moved under whichever
+  // prompt box opened it; the result is shown as a diff until Apply puts it in the box.
+  const qrev = document.createElement("div");
+  qrev.className = "llm-rev llm-qrev hidden";
+  qrev.innerHTML = `
+    <div class="llm-qrev-head"><b>✨ Revise with AI</b> <span class="hint">— tell the LLM what to change in the prompt</span>
+      <button type="button" class="link-btn llm-qrev-close" title="Close">✕</button></div>
+    <div class="llm-rev-body">
+      <textarea class="llm-rev-ask" rows="2" placeholder="e.g. Make her lines angrier · translate the dialogue to French · tighten it up"></textarea>
+      <div class="llm-rev-bar">
+        <span class="llm-qrev-opts">
+          <label class="inline" title="A prompting guide for the LLM to follow while it makes the changes">Guide
+            <select class="llm-qrev-guide">
+              <option value="">None — just the edit</option>
+              <option value="default">Video prompt guide (⚙ LLM settings)</option>
+              <option value="minimax">MiniMax H3 Ref2Video guide</option>
+              <option value="minimax_t2v">MiniMax H3 Text2Video guide</option>
+            </select></label>
+          <label class="inline" title="Also follow the Rules from this project's ✨ Build with AI form"><input type="checkbox" class="llm-qrev-rules" /> Follow my Rules</label>
+        </span>
+        <span class="llm-rev-btns">
+          <button type="button" class="btn-secondary llm-rev-cancel hidden">Stop</button>
+          <button type="button" class="llm-rev-go">✨ Revise</button>
+        </span>
+      </div>
+      <p class="muted llm-rev-status"></p>
+      <div class="llm-rev-result hidden">
+        <div class="pe-refs-head">Suggested revision <span class="hint">— <ins>added</ins> / <del>removed</del></span></div>
+        <div class="llm-rev-diff"></div>
+        <div class="llm-rev-actions">
+          <button type="button" class="btn-secondary llm-rev-discard">✕ Discard</button>
+          <button type="button" class="btn-secondary llm-rev-again">↻ Try again</button>
+          <button type="button" class="llm-rev-apply">✓ Apply</button>
+        </div>
+      </div>
+      <p class="llm-rev-applied hidden">Applied. <button type="button" class="link-btn llm-rev-undo">↶ Undo</button></p>
+    </div>`;
+  const q = {
+    ask: $(".llm-rev-ask", qrev),
+    go: $(".llm-rev-go", qrev),
+    stop: $(".llm-rev-cancel", qrev),
+    status: $(".llm-rev-status", qrev),
+    result: $(".llm-rev-result", qrev),
+    diff: $(".llm-rev-diff", qrev),
+    applied: $(".llm-rev-applied", qrev),
+    guide: $(".llm-qrev-guide", qrev),
+    rules: $(".llm-qrev-rules", qrev),
+  };
+  const QGUIDE_KEY = "genie_qrev_guide";
+  const QRULES_KEY = "genie_qrev_rules";
+  q.guide.value = getPref(QGUIDE_KEY, "") || "";
+  if (q.guide.selectedIndex < 0) q.guide.value = "";
+  q.rules.checked = getPref(QRULES_KEY, "0") === "1";
+  q.guide.addEventListener("change", () => setPref(QGUIDE_KEY, q.guide.value));
+  q.rules.addEventListener("change", () => setPref(QRULES_KEY, q.rules.checked ? "1" : "0"));
+  let qta = null; // the prompt box the panel is under
+  let qst = null; // { jobId, job, before, applied }
+  let qundo = null; // { ta, value }
+  let qTimer = null;
+
+  function renderQ() {
+    const job = qst?.job;
+    const running = job && ACTIVE.includes(job.status);
+    q.go.disabled = !!running;
+    q.go.textContent = running ? "Working…" : "✨ Revise";
+    q.stop.classList.toggle("hidden", !running);
+    q.status.textContent =
+      !job || job.status === "done" ? ""
+      : job.status === "failed" ? `⚠ ${job.error || job.message}`
+      : job.status === "cancelled" ? "Stopped."
+      : `${STATUS_ICON[job.status] || ""} ${job.message}`;
+    const res = job?.status === "done" && !qst.applied ? job.result : null;
+    q.result.classList.toggle("hidden", !res);
+    if (res) q.diff.innerHTML = diffHtml(qst.before, res.prompt || "");
+    q.applied.classList.toggle("hidden", !qundo);
+  }
+
+  async function pollQ() {
+    clearTimeout(qTimer);
+    qTimer = null;
+    if (!qst?.job || !ACTIVE.includes(qst.job.status)) return;
+    try {
+      qst.job = await api(`/api/llm/jobs/${qst.jobId}`);
+    } catch (err) {
+      qst.job = { ...qst.job, status: "failed", error: err.message };
+    }
+    renderQ();
+    if (ACTIVE.includes(qst.job.status)) qTimer = setTimeout(pollQ, 1500);
+  }
+
+  async function startQ() {
+    if (!qta) return;
+    const instruction = q.ask.value.trim();
+    if (!instruction) return q.ask.focus();
+    try {
+      if (!cfg) await loadCfg();
+      const src = activeSource();
+      if (!src) throw new Error("Set up an LLM server first (✨ Build with AI → ⚙ LLM settings).");
+      const before = qta.value;
+      const job = await api("/api/llm/revise", "POST", {
+        plain: true,
+        projectId: activeProjectId,
+        sourceId: src.id,
+        title: "prompt box",
+        prompt: before,
+        instruction,
+        guide: q.guide.value,
+        useRules: q.rules.checked,
+      });
+      qst = { jobId: job.id, job, before };
+      renderQ();
+      pollQ();
+    } catch (err) {
+      q.status.textContent = `⚠ ${err.message}`;
+    }
+  }
+
+  const setBox = (ta, value) => {
+    ta.value = value;
+    ta.dispatchEvent(new Event("input", { bubbles: true }));
+  };
+
+  q.go.addEventListener("click", startQ);
+  $(".llm-rev-again", qrev).addEventListener("click", startQ);
+  q.ask.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) startQ();
+  });
+  q.stop.addEventListener("click", async () => {
+    if (!qst) return;
+    try {
+      qst.job = await api(`/api/llm/jobs/${qst.jobId}/cancel`, "POST");
+    } catch {
+      /* already over */
+    }
+    renderQ();
+  });
+  $(".llm-rev-apply", qrev).addEventListener("click", () => {
+    const res = qst?.job?.result;
+    if (!res || !qta) return;
+    qundo = { ta: qta, value: qta.value };
+    setBox(qta, res.prompt || "");
+    qst.applied = true;
+    renderQ();
+  });
+  $(".llm-rev-discard", qrev).addEventListener("click", () => {
+    qst = null;
+    renderQ();
+  });
+  $(".llm-rev-undo", qrev).addEventListener("click", () => {
+    if (!qundo) return;
+    setBox(qundo.ta, qundo.value);
+    qundo = null;
+    if (qst) qst.applied = false; // the suggestion can be applied again
+    renderQ();
+  });
+  $(".llm-qrev-close", qrev).addEventListener("click", () => qrev.classList.add("hidden"));
+
+  // Called by the prompt box's ✨ Revise with AI button (app.js): open the panel
+  // under that box, or close it if it's already open there.
+  window.genieQuickRevise = (ta) => {
+    if (qta === ta && qrev.isConnected && !qrev.classList.contains("hidden")) {
+      qrev.classList.add("hidden");
+      return;
+    }
+    if (qta !== ta) qundo = null;
+    qta = ta;
+    ta.after(qrev);
+    qrev.classList.remove("hidden");
+    renderQ();
+    q.ask.focus();
+  };
 
   // ------------------------------------------- ✨ Analyze images (editor)
   // In a MiniMax prompt's subject_definitions: the LLM looks at each keyed reference

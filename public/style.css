@@ -88,12 +88,37 @@ header {
   white-space: nowrap;
 }
 
-.project-pill select {
+.project-picker-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  min-width: 0;
+  max-width: 320px;
   background: transparent;
   border: none;
   padding: 0 0.2rem;
   font-size: 0.85rem;
-  max-width: 160px;
+  color: inherit;
+  cursor: pointer;
+}
+.project-picker-btn .pp-path {
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 0 1 auto; /* the name keeps its room; the path gets what's left */
+  min-width: 0;
+}
+.project-picker-btn .pp-name {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 0 0 auto;
+  max-width: 75%;
+}
+.project-picker-btn .pp-caret {
+  color: var(--muted);
+  font-size: 0.75rem;
 }
 
 .project-pill .link-btn {
@@ -116,9 +141,8 @@ header {
     flex: 1 1 auto;
     min-width: 0;
   }
-  .project-pill select {
+  .project-picker-btn {
     flex: 1 1 auto;
-    min-width: 0;
     max-width: none;
   }
 }
@@ -1075,6 +1099,66 @@ img.zoomable {
   padding: 0.35rem 0.6rem;
 }
 
+/* ☑ Select mode (app.js): a checkbox on each card, the picked ones outlined, and a
+   bar that stays at the bottom of the screen while the list scrolls under it. */
+.hist-pick {
+  position: absolute;
+  top: 0;
+  right: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.75rem;
+  height: 2.75rem;
+  cursor: pointer;
+}
+.hist-pick input {
+  width: 1.25rem;
+  height: 1.25rem;
+  margin: 0;
+  cursor: pointer;
+  accent-color: var(--accent);
+}
+.hist-card.hist-selectable {
+  cursor: pointer;
+}
+.hist-card.hist-selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent) inset;
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel));
+}
+.hist-select-bar {
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.75rem;
+  padding: 0.6rem 0.75rem;
+  background: var(--panel);
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.45);
+}
+.hist-select-bar.hidden {
+  display: none;
+}
+.hist-sel-count {
+  font-weight: 600;
+  margin-right: auto;
+}
+.hist-select-bar .btn-secondary,
+.hist-select-bar select {
+  font-size: 0.82rem;
+  padding: 0.35rem 0.6rem;
+}
+.hist-select-bar select {
+  max-width: 100%;
+}
+
 .hist-head-actions .btn-secondary {
   font-size: 0.82rem;
   padding: 0.35rem 0.6rem;
@@ -1154,6 +1238,62 @@ img.zoomable {
   flex-shrink: 0;
   height: auto;
   border-radius: 8px;
+}
+/* Thumbnails take a fixed box before their media loads — the run's aspect ratio
+   (--hist-ar, set per card; square if unknown), capped at a standard height — and the
+   media fits inside it. A card's height never changes once drawn, so a delete or
+   refresh can't collapse and regrow the cards above the scroll position. Several
+   outputs scroll inside the same capped box instead of growing the card. */
+.hist-card {
+  position: relative; /* for .hist-count */
+  --hist-thumb-max: 360px;
+}
+.hist-thumb {
+  aspect-ratio: var(--hist-ar, 1 / 1);
+  max-height: var(--hist-thumb-max);
+  min-height: 0; /* else the loaded media's own size overrides the ratio */
+  overflow: hidden;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.25);
+}
+.hist-card .hist-thumb:not(.hist-thumb-grid) > video,
+.hist-card .hist-thumb:not(.hist-thumb-grid) > .hist-img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  box-sizing: border-box;
+}
+.hist-thumb.hist-thumb-grid {
+  aspect-ratio: auto;
+  align-content: start;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.hist-card .hist-thumb-stack video {
+  aspect-ratio: var(--hist-ar, 16 / 9);
+}
+/* Its place in the list as filtered: tucked in the card's top-left corner, over the
+   padding and the thumbnail's corner, clear of every control. */
+.hist-count {
+  position: absolute;
+  top: 3px;
+  left: 4px;
+  z-index: 1;
+  padding: 0 5px;
+  border-radius: 6px;
+  font-size: 0.68rem;
+  line-height: 1.5;
+  color: var(--muted);
+  background: rgba(0, 0, 0, 0.55);
+  pointer-events: none;
+  font-variant-numeric: tabular-nums;
+}
+/* Media on top, full width (phone, or a narrow History column): a taller cap, still
+   fixed (svh doesn't change as a phone's toolbar slides away). */
+@media (max-width: 540px) {
+  .hist-card {
+    --hist-thumb-max: min(520px, 65svh);
+  }
 }
 
 /* Live status/progress hosted inside an in-flight run's pending History card. */
@@ -2512,6 +2652,26 @@ button.hist-tag-switch.active {
 /* History card: the saved-prompt dropdown, highlighted while linked. */
 .hist-actions .hist-prompt-link {
   max-width: 190px;
+}
+/* The where-it-belongs row stays one line whatever the dropdowns hold: the saved-prompt
+   list fills in after the card is drawn (and ✎ appears once it's linked), and a row
+   that wrapped then would grow the card under the reader's scroll position. */
+.hist-actions.hist-org {
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+.hist-org > select {
+  min-width: 0;
+  text-overflow: ellipsis;
+}
+.hist-org > .hist-prompt-link {
+  flex: 0 1 190px;
+}
+.hist-org > .hist-project:not(.hist-prompt-link) {
+  flex: 0 1 auto;
+}
+.hist-org > button {
+  flex-shrink: 0;
 }
 .hist-actions .hist-prompt-link.linked {
   border-color: var(--accent);
@@ -4644,6 +4804,9 @@ textarea.wc-hl-on {
     .hist-live.has-preview {
       flex-direction: column;
     }
+    .hist-card {
+      --hist-thumb-max: min(520px, 65svh);
+    }
     .hist-thumb,
     .hist-live-thumb,
     .hist-card .hist-placeholder,
@@ -4665,4 +4828,223 @@ textarea.wc-hl-on {
   .modal-box.ve-lib-box {
     width: min(1100px, 94vw);
   }
+}
+
+/* ✨ Revise with AI, under the main prompt box. */
+.llm-qrev {
+  margin-top: 0.5rem;
+}
+textarea.hidden + .llm-qrev {
+  display: none;
+}
+.llm-qrev-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  font-size: 0.9rem;
+}
+.llm-qrev-head .hint {
+  flex: 1;
+  min-width: 0;
+}
+.llm-qrev-opts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.9rem;
+  font-size: 0.85rem;
+}
+.llm-qrev-guide {
+  max-width: 100%;
+  margin-left: 0.3rem;
+}
+
+/* 📋 Paste into a drop zone (paste.js): the zone Ctrl+V goes to when the mouse is
+   elsewhere, the flash when something lands, and the "paste" link. */
+.dropzone.paste-target {
+  border-color: rgba(108, 140, 255, 0.55);
+}
+.dropzone.pasted {
+  border-color: var(--accent);
+  background: rgba(108, 140, 255, 0.16);
+}
+.dz-paste-wrap {
+  display: none;
+}
+.can-paste .dz-paste-wrap {
+  display: inline;
+}
+.dz-paste {
+  color: var(--accent);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+/* Project browser: folders and sub-folders of projects (app.js). Full height on a
+   phone; rows are finger-sized, each with a ⋯ that opens its actions underneath. */
+.modal-box.pb-box {
+  width: min(560px, 96vw);
+  height: min(640px, 88vh);
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 1rem;
+}
+.pb-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.pb-head h3 {
+  margin: 0;
+}
+.pb-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+.pb-tip {
+  font-size: 0.75rem;
+}
+.pb-tree {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.25rem;
+}
+.pb-tree.pb-drop {
+  outline: 2px dashed var(--accent, #6aa0ff);
+  outline-offset: -3px;
+}
+.pb-row {
+  display: flex;
+  align-items: center;
+  border-radius: 6px;
+  padding-left: calc(var(--depth, 0) * 1.1rem);
+}
+.pb-row:hover {
+  background: rgba(127, 127, 127, 0.12);
+}
+.pb-row.active {
+  background: rgba(106, 160, 255, 0.18);
+}
+.pb-row.active .pb-name {
+  font-weight: 600;
+}
+.pb-row.pb-drop {
+  outline: 2px dashed var(--accent, #6aa0ff);
+  outline-offset: -2px;
+}
+.pb-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  background: transparent;
+  border: none;
+  color: inherit;
+  text-align: left;
+  font-size: 0.9rem;
+  padding: 0.55rem 0.3rem;
+  cursor: pointer;
+}
+.pb-caret {
+  width: 0.9rem;
+  flex: none;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+.pb-icon {
+  flex: none;
+}
+.pb-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.pb-count,
+.pb-where {
+  color: var(--muted);
+  font-size: 0.75rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pb-count {
+  flex: none;
+}
+.pb-where {
+  margin-left: auto;
+  padding-left: 0.5rem;
+}
+.pb-more {
+  flex: none;
+  padding: 0.4rem 0.6rem;
+  font-size: 1rem;
+}
+.pb-menu {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  padding: 0.3rem 0.3rem 0.5rem calc(var(--depth, 0) * 1.1rem + 1.6rem);
+}
+.pb-menu button,
+.pb-menu select {
+  font-size: 0.8rem;
+  padding: 0.3rem 0.55rem;
+}
+.pb-empty {
+  padding: 0.75rem;
+}
+/* New project form (top of the Projects window) and the folder it'll go in. */
+.pb-create {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 8%, var(--panel));
+}
+.pb-create.hidden {
+  display: none;
+}
+.pb-create-name {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+.pb-create-name input {
+  font-weight: normal;
+}
+.pb-create-where {
+  font-size: 0.82rem;
+  overflow-wrap: anywhere;
+}
+.pb-create-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.4rem;
+}
+.pb-creating #pbSearch,
+.pb-creating #pbNewProject,
+.pb-creating .pb-tip {
+  display: none;
+}
+.pb-creating .pb-row[data-project] {
+  opacity: 0.55;
+}
+.pb-row.pb-target {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  box-shadow: 0 0 0 1px var(--accent) inset;
+}
+.pb-row.pb-target .pb-name {
+  font-weight: 600;
 }

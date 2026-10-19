@@ -102,6 +102,13 @@ Reply with only a JSON object and nothing else:
 // The formats ✨ Build with AI can save as. "default" uses the editable instructions
 // above; the MiniMax formats have their own (their JSON reply fills a structured
 // prompt's fields, so it can't be edited away).
+export const PLAIN_REVISE_INSTRUCTIONS =
+  "You revise text for the user. You get a text and the changes they want; apply those changes and keep everything else exactly as it is — wording, line breaks, markup such as <tags>, [brackets] and {wildcards} — unless a change requires otherwise.";
+const PLAIN_REVISE_REPLY =
+  "Reply with ONLY the complete revised text: no preamble, no explanation, no quotes, no code fences, no markers around it.";
+// The guides a quick revise can follow (see guideFor in createLlm).
+export const PLAIN_REVISE_GUIDES = new Set(["", "default", "minimax", "minimax_t2v"]);
+
 export const BUILD_FORMATS = new Set(["default", "minimax", "minimax_t2v"]);
 
 const LOOK_CLOSELY =
@@ -1369,7 +1376,11 @@ export function createLlm(deps) {
     if (!proj) throw new Error("unknown projectId");
     const instruction = String(body.instruction || "").trim().slice(0, 8000);
     if (!instruction) throw new Error("Say what to change.");
-    const format = BUILD_FORMATS.has(body.format) ? body.format : "default";
+    // `plain`: the main prompt box's quick revise — the text goes in as it is and
+    // comes back as text, no JSON, no video-prompt guidance, no references.
+    const plain = !!body.plain;
+    const guide = plain && PLAIN_REVISE_GUIDES.has(body.guide) ? body.guide : "";
+    const format = !plain && BUILD_FORMATS.has(body.format) ? body.format : "default";
     const structured = format !== "default";
     const prompt = String(body.prompt || "").slice(0, 50000);
     const mm = body.minimax && typeof body.minimax === "object" ? body.minimax : null;
@@ -1381,7 +1392,7 @@ export function createLlm(deps) {
     const gallery = readJson(imagesFile);
     const refs = [];
     const images = [];
-    for (const r of (Array.isArray(body.refs) ? body.refs : []).slice(0, 50)) {
+    for (const r of (plain ? [] : Array.isArray(body.refs) ? body.refs : []).slice(0, 50)) {
       const g = gallery.find((x) => x.id === String(r?.id));
       if (!g) continue;
       const kind = g.kind || (String(g.mime || "").startsWith("image/") ? "image" : r.kind);
@@ -1405,6 +1416,8 @@ export function createLlm(deps) {
     const job = {
       id: randomUUID(),
       kind: "revise",
+      plain,
+      guide,
       projectId: proj.id,
       promptId: String(body.promptId || "").slice(0, 100) || null,
       sourceId: src.id,
@@ -1864,7 +1877,12 @@ export function createLlm(deps) {
         job.done++;
       }
       if (job.kind === "revise") {
-        setJob(job, "done", "Revision ready — review it in the prompt editor.");
+        setJob(
+          job,
+          "done",
+          job.plain ? "Revision ready — review it under the prompt."
+          : "Revision ready — review it in the prompt editor.",
+        );
         return;
       }
       if (job.kind === "analyze") {
@@ -1927,7 +1945,44 @@ export function createLlm(deps) {
     return o;
   }
 
+  // The quick revise: the prompt box's text and what to change, the text back.
+  // A guide is one of the build instructions without its JSON reply format (always
+  // their last paragraph): what makes a good prompt, not how to answer.
+  function guideFor(name) {
+    const whole =
+      name === "minimax" ? MINIMAX_INSTRUCTIONS
+      : name === "minimax_t2v" ? MINIMAX_T2V_INSTRUCTIONS
+      : name === "default" ? readSettings().options.instructions || DEFAULT_INSTRUCTIONS
+      : "";
+    const cut = whole.indexOf("Reply with only");
+    return (cut >= 0 ? whole.slice(0, cut) : whole).trim();
+  }
+
+  function buildPlainReviseMessages(job) {
+    const guide = guideFor(job.guide);
+    const system = [
+      PLAIN_REVISE_INSTRUCTIONS,
+      guide &&
+        "PROMPTING GUIDE — the text is a prompt for an AI video model; follow this guide where it bears on the changes. " +
+          "Where it describes the prompt as JSON fields, those are the text's labelled sections: keep the text's own layout and write plain text, not JSON.\n\n" +
+          guide,
+      job.rules && "RULES — the user's own rules. Follow every one of them:\n" + job.rules,
+      PLAIN_REVISE_REPLY,
+    ].filter(Boolean);
+    return [
+      { role: "system", content: system.join("\n\n") },
+      {
+        role: "user",
+        content:
+          `The text:\n<<<\n${job.current}\n>>>\n\n` +
+          `Changes to make: ${job.instruction}\n\n` +
+          "Reply with only the complete revised text.",
+      },
+    ];
+  }
+
   function buildReviseMessages(job, imageParts) {
+    if (job.plain) return buildPlainReviseMessages(job);
     const opts = readSettings().options;
     const base =
       job.format === "minimax" ? MINIMAX_INSTRUCTIONS
@@ -2161,6 +2216,7 @@ export function createLlm(deps) {
       onProgress,
     );
     // A revised Default prompt is read leniently: a reply that isn't JSON is the prompt.
+    if (job.kind === "revise" && job.plain) return parsePlainReply(text);
     if (job.kind === "revise" && job.format === "default") return parseReply(text);
     const shots = job.kind ? null : job.groups[job.done];
     const parse =
@@ -2624,6 +2680,17 @@ function stripThinking(raw) {
     .replace(/<think>[\s\S]*?<\/think>/gi, "")
     .replace(/^[\s\S]*<\/think>/i, "")
     .trim();
+}
+
+// A quick-revise reply → { prompt }: the text as written, minus a <think> block, a
+// fence around the whole of it and the <<< >>> markers it was sent in.
+function parsePlainReply(raw) {
+  let t = stripThinking(raw);
+  const fence = /^```[\w-]*\n([\s\S]*?)\n?```$/.exec(t);
+  if (fence) t = fence[1];
+  t = t.replace(/^<<<\s*\n/, "").replace(/\n?\s*>>>$/, "").trim();
+  if (!t) throw new Error("The LLM returned an empty reply.");
+  return { title: "", prompt: t };
 }
 
 // The model's reply → { title, prompt }. Tolerates <think> blocks, ``` fences and

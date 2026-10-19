@@ -8,6 +8,7 @@ exports/
 history.json
 images.json
 projects.json
+project-folders.json
 wildcards.json
 variables.json
 video-edits.json

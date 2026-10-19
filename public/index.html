@@ -20,7 +20,7 @@
           <button type="button" id="openVideoEditor" class="tool-pill" title="Trim video files, cut parts out and join clips together">✂ Video editor</button>
           <button type="button" id="openImageEditor" class="tool-pill" title="Crop an image to a common shape — 1:1, 16:9, 9:16 and more">🖼 Image editor</button>
           <div class="project-pill" title="Active project">
-            <select id="projectSelect"></select>
+            <button type="button" id="projectPickerBtn" class="project-picker-btn" aria-haspopup="dialog"><span class="pp-icon">📁</span><span id="projectPickerPath" class="pp-path"></span><span id="projectPickerName" class="pp-name">Default</span><span class="pp-caret">▾</span></button>
             <button type="button" id="newProject" class="link-btn" title="New project">＋</button>
             <button type="button" id="renameProject" class="link-btn" title="Rename project">✎</button>
             <button type="button" id="deleteProject" class="link-btn" title="Delete project (contents move to Default)">🗑</button>
@@ -270,6 +270,7 @@
             <button type="button" id="openFolder" class="btn-secondary" title="Open the output folder in Explorer">📂 Open folder</button>
             <button type="button" id="exportHistory" class="btn-secondary" title="Export the shown history to a shareable, zippable folder">📦 Export</button>
             <select id="historyFilter" title="Filter history by project"></select>
+            <button type="button" id="histSelectToggle" class="btn-secondary" title="Pick several cards to move to another project">☑ Select</button>
           </div>
         </div>
         <div class="hist-head-toggles">
@@ -291,6 +292,14 @@
         </div>
         <div id="history" class="history"></div>
         <div id="historyPager" class="hist-pager hidden"></div>
+        <div id="histSelectBar" class="hist-select-bar hidden" role="toolbar" aria-label="Selected cards">
+          <span id="histSelCount" class="hist-sel-count">0 selected</span>
+          <button type="button" id="histSelPage" class="btn-secondary" title="Select every card on this page">Page</button>
+          <button type="button" id="histSelAll" class="btn-secondary" title="Select every card the filter shows, on all pages">All</button>
+          <button type="button" id="histSelNone" class="btn-secondary">None</button>
+          <select id="histSelMove" title="Move the selected cards (and their saved files) to another project"></select>
+          <button type="button" id="histSelDone" class="btn-secondary">Done</button>
+        </div>
         <p id="historyEmpty" class="muted">No generations yet.</p>
 
         <footer class="app-footer">
@@ -309,6 +318,32 @@
       <button type="button" id="lightboxPrev" class="lightbox-nav lightbox-prev hidden" title="Previous (←)">‹</button>
       <div id="lightboxContent" class="lightbox-content"></div>
       <button type="button" id="lightboxNext" class="lightbox-nav lightbox-next hidden" title="Next (→)">›</button>
+    </div>
+
+    <div id="projectBrowser" class="modal hidden">
+      <div class="modal-box pb-box" role="dialog" aria-labelledby="pbHeading">
+        <div class="pb-head">
+          <h3 id="pbHeading">Projects</h3>
+          <button type="button" id="pbClose" class="link-btn" title="Close">✕</button>
+        </div>
+        <form id="pbCreate" class="pb-create hidden" autocomplete="off">
+          <label class="pb-create-name">New project
+            <input type="text" id="pbCreateName" placeholder="Name — a / makes folders, e.g. Acme/Spot 1" required>
+          </label>
+          <div class="pb-create-where">Goes in <strong id="pbCreateWhere">⌂ Top level</strong> <span class="hint">— tap a folder below to choose</span></div>
+          <div class="pb-create-actions">
+            <button type="button" id="pbCreateCancel" class="btn-secondary">Cancel</button>
+            <button type="submit" id="pbCreateGo">Create</button>
+          </div>
+        </form>
+        <input type="search" id="pbSearch" placeholder="Search projects and folders…" autocomplete="off">
+        <div class="pb-toolbar">
+          <button type="button" id="pbNewProject" class="btn-secondary">＋ Project</button>
+          <button type="button" id="pbNewFolder" class="btn-secondary">＋ Folder</button>
+          <span class="hint pb-tip" id="pbTip">⋯ on a row to rename, move or delete — or drag it onto a folder</span>
+        </div>
+        <div id="pbTree" class="pb-tree"></div>
+      </div>
     </div>
 
     <div id="exportModal" class="modal hidden">
@@ -470,8 +505,9 @@
 
     <script src="settings.js"></script>
     <script src="app.js"></script>
-    <script src="llm.js?v=9"></script>
+    <script src="llm.js?v=10"></script>
     <script src="video-editor.js?v=5"></script>
     <script src="image-editor.js?v=2"></script>
+    <script src="paste.js?v=2"></script>
   </body>
 </html>

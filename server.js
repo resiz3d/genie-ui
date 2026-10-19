@@ -71,6 +71,10 @@ const EXPORTS_DIR = path.resolve(
 const HISTORY_FILE = path.join(__dirname, "history.json");
 const IMAGES_FILE = path.join(__dirname, "images.json");
 const PROJECTS_FILE = path.join(__dirname, "projects.json");
+// Folders for organising the project list: [{ id, name, parentId, createdAt }], a
+// tree by parentId (null = top level). A project's folderId puts it in one. Purely
+// organisational — a project's media folders on disk never move.
+const PROJECT_FOLDERS_FILE = path.join(__dirname, "project-folders.json");
 // Wildcards (shared by every project): named lists a prompt picks from at random.
 const WILDCARDS_FILE = path.join(__dirname, "wildcards.json");
 // Global variables ($name, shared by every project); each project also keeps its own
@@ -218,6 +222,21 @@ function resolveProject(projectId) {
     projects.find((p) => p.id === projectId) ||
     projects.find((p) => p.id === "default")
   );
+}
+
+// Delete a folder if nothing but empty folders is inside it. Best-effort: anything
+// that can't be read or removed is left alone.
+function removeEmptyDirs(dir) {
+  let names;
+  try {
+    names = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const d of names) if (d.isDirectory()) removeEmptyDirs(path.join(dir, d.name));
+  try {
+    fs.rmdirSync(dir); // fails (and is skipped) unless it's empty now
+  } catch {}
 }
 
 function slugify(name, projects) {
@@ -3418,35 +3437,161 @@ app.get("/api/projects", (req, res) => {
   res.json({ code: 200, msg: "success", data: ensureDefaultProject() });
 });
 
+// A name with slashes is a path: "Clients/Acme/Spot 1" files Spot 1 under Acme under
+// Clients (starting from folderId), creating whichever of those folders don't exist.
 app.post("/api/projects", (req, res) => {
   const name = (req.body?.name || "").trim();
   if (!name)
     return res.status(400).json({ code: 400, msg: "name is required" });
+  const proj = createProjectAt(name, validFolderId(req.body?.folderId));
+  if (!proj)
+    return res.status(400).json({ code: 400, msg: "name is required" });
+  res.json({ code: 200, msg: "created", data: proj });
+});
+
+function createProjectRecord(name, folderId) {
   const projects = ensureDefaultProject();
   const proj = {
     id: randomUUID(),
     name,
     slug: slugify(name, projects),
     createdAt: new Date().toISOString(),
+    ...(folderId ? { folderId } : {}),
   };
   projects.push(proj);
   writeJson(PROJECTS_FILE, projects);
   fs.mkdirSync(path.join(INPUT_DIR, proj.slug), { recursive: true });
   fs.mkdirSync(path.join(OUTPUT_DIR, proj.slug), { recursive: true });
-  res.json({ code: 200, msg: "created", data: proj });
-});
+  return proj;
+}
 
+// Resolve "Folder/Sub/Project" below folderId: folders are matched by name (any
+// case) or created; so is the project — an existing one of that name in that
+// folder is reused. Returns the project, or null for an empty path.
+function createProjectAt(pathStr, folderId = null) {
+  const parts = String(pathStr)
+    .split("/")
+    .map((x) => x.trim())
+    .filter(Boolean);
+  const name = parts.pop();
+  if (!name) return null;
+  const same = (a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }) === 0;
+  let folders = readFolders();
+  let at = folderId || null;
+  for (const part of parts) {
+    let f = folders.find((x) => (x.parentId || null) === at && same(x.name, part));
+    if (!f) {
+      f = { id: randomUUID(), name: part, parentId: at, createdAt: new Date().toISOString() };
+      folders.push(f);
+      writeJson(PROJECT_FOLDERS_FILE, folders);
+    }
+    at = f.id;
+  }
+  const existing = ensureDefaultProject().find(
+    (p) => (validFolderId(p.folderId) || null) === at && same(p.name, name),
+  );
+  return existing || createProjectRecord(name, at);
+}
+
+// Rename ({ name }) and/or move into a folder ({ folderId }, null = top level).
 app.put("/api/projects/:id", (req, res) => {
-  const name = (req.body?.name || "").trim();
-  if (!name)
+  const body = req.body || {};
+  const name = typeof body.name === "string" ? body.name.trim() : undefined;
+  if (name === "" || (name === undefined && !("folderId" in body)))
     return res.status(400).json({ code: 400, msg: "name is required" });
   const projects = ensureDefaultProject();
   const proj = projects.find((p) => p.id === req.params.id);
   if (!proj)
     return res.status(404).json({ code: 404, msg: "project not found" });
-  proj.name = name; // slug (and folders) intentionally stay put on rename
+  if (name) proj.name = name; // slug (and folders) intentionally stay put on rename
+  if ("folderId" in body) {
+    const folderId = validFolderId(body.folderId);
+    if (body.folderId && !folderId)
+      return res.status(404).json({ code: 404, msg: "folder not found" });
+    if (folderId) proj.folderId = folderId;
+    else delete proj.folderId;
+  }
   writeJson(PROJECTS_FILE, projects);
-  res.json({ code: 200, msg: "renamed", data: proj });
+  res.json({ code: 200, msg: "updated", data: proj });
+});
+
+// --- project folders ------------------------------------------------------
+const readFolders = () => readJson(PROJECT_FOLDERS_FILE);
+// The id if it names an existing folder, else null (top level).
+function validFolderId(id) {
+  return id && readFolders().some((f) => f.id === id) ? id : null;
+}
+
+app.get("/api/project-folders", (req, res) => {
+  res.json({ code: 200, msg: "success", data: readFolders() });
+});
+
+app.post("/api/project-folders", (req, res) => {
+  const name = (req.body?.name || "").trim();
+  if (!name)
+    return res.status(400).json({ code: 400, msg: "name is required" });
+  const folders = readFolders();
+  const folder = {
+    id: randomUUID(),
+    name,
+    parentId: validFolderId(req.body?.parentId),
+    createdAt: new Date().toISOString(),
+  };
+  folders.push(folder);
+  writeJson(PROJECT_FOLDERS_FILE, folders);
+  res.json({ code: 200, msg: "created", data: folder });
+});
+
+// Rename ({ name }) and/or move ({ parentId }, null = top level). A folder can't
+// move into itself or one of its own sub-folders.
+app.put("/api/project-folders/:id", (req, res) => {
+  const body = req.body || {};
+  const folders = readFolders();
+  const folder = folders.find((f) => f.id === req.params.id);
+  if (!folder)
+    return res.status(404).json({ code: 404, msg: "folder not found" });
+  if (typeof body.name === "string") {
+    const name = body.name.trim();
+    if (!name)
+      return res.status(400).json({ code: 400, msg: "name is required" });
+    folder.name = name;
+  }
+  if ("parentId" in body) {
+    const parentId = validFolderId(body.parentId);
+    if (body.parentId && !parentId)
+      return res.status(404).json({ code: 404, msg: "folder not found" });
+    for (let at = parentId; at; at = folders.find((f) => f.id === at)?.parentId) {
+      if (at === folder.id)
+        return res.status(400).json({
+          code: 400,
+          msg: "A folder can't go inside itself or one of its sub-folders",
+        });
+    }
+    folder.parentId = parentId;
+  }
+  writeJson(PROJECT_FOLDERS_FILE, folders);
+  res.json({ code: 200, msg: "updated", data: folder });
+});
+
+// Delete a folder: its projects and sub-folders move up into its parent.
+app.delete("/api/project-folders/:id", (req, res) => {
+  const folders = readFolders();
+  const folder = folders.find((f) => f.id === req.params.id);
+  if (!folder)
+    return res.status(404).json({ code: 404, msg: "folder not found" });
+  for (const f of folders) if (f.parentId === folder.id) f.parentId = folder.parentId;
+  writeJson(
+    PROJECT_FOLDERS_FILE,
+    folders.filter((f) => f.id !== folder.id),
+  );
+  const projects = ensureDefaultProject();
+  for (const p of projects) {
+    if (p.folderId !== folder.id) continue;
+    if (folder.parentId) p.folderId = folder.parentId;
+    else delete p.folderId;
+  }
+  writeJson(PROJECTS_FILE, projects);
+  res.json({ code: 200, msg: "deleted; contents moved up" });
 });
 
 // Delete a project: its gallery media and history move to Default.
@@ -3519,16 +3664,14 @@ app.delete("/api/projects/:id", (req, res) => {
     PROJECTS_FILE,
     projects.filter((p) => p.id !== proj.id),
   );
-  // remove the now-empty project folders (best-effort)
+  // remove the now-empty project folders (best-effort) — empty sub-folders too
+  // (favorites/, drafts/, edited_videos/…), but never one with a file left in it
   for (const dir of [
     path.join(INPUT_DIR, proj.slug),
     path.join(OUTPUT_DIR, proj.slug),
     path.join(PROJECT_DATA_DIR, proj.slug),
-  ]) {
-    try {
-      fs.rmdirSync(dir);
-    } catch {}
-  }
+  ])
+    removeEmptyDirs(dir);
   res.json({ code: 200, msg: "deleted; contents moved to Default" });
 });
 
@@ -4958,6 +5101,41 @@ app.put("/api/history/:id", (req, res) => {
     writeJson(HISTORY_FILE, entries);
   }
   res.json({ code: 200, msg: "updated", data: entry });
+});
+
+// Move many entries to one project at once: { ids: [...], projectId } — or
+// { ids, newProject: "Folder/Sub/Name" } to make that project first. Each card's
+// saved files move like a single reassign; one that can't move (a file in use) is
+// reported in `failed` and left where it was.
+app.post("/api/history/move", (req, res) => {
+  const { ids, projectId, newProject } = req.body || {};
+  if (!Array.isArray(ids) || !ids.length)
+    return res.status(400).json({ code: 400, msg: "ids is required" });
+  // newProject: a "Folder/Sub/Project" path to create (or reuse) and move into.
+  const proj =
+    typeof newProject === "string" && newProject.trim() ?
+      createProjectAt(newProject)
+    : ensureDefaultProject().find((p) => p.id === projectId);
+  if (!proj)
+    return res.status(400).json({ code: 400, msg: "unknown projectId" });
+
+  const want = new Set(ids.map(String));
+  const entries = readJson(HISTORY_FILE);
+  let moved = 0;
+  const failed = [];
+  for (const entry of entries) {
+    if (!want.has(entry.id) || (entry.projectId || "default") === proj.id) continue;
+    try {
+      moveHistoryVideo(entry, proj.slug);
+      entry.projectId = proj.id;
+      moved++;
+    } catch (err) {
+      console.error(`Failed to move ${entry.id}:`, err);
+      failed.push(entry.id);
+    }
+  }
+  writeJson(HISTORY_FILE, entries);
+  res.json({ code: 200, msg: "moved", data: { moved, failed, project: proj } });
 });
 
 // --- global app settings ---------------------------------------------------

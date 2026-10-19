@@ -97,7 +97,6 @@ const historyEmpty = document.getElementById("historyEmpty");
 const historyFilter = document.getElementById("historyFilter");
 
 // Projects
-const projectSelect = document.getElementById("projectSelect");
 const newProjectBtn = document.getElementById("newProject");
 const renameProjectBtn = document.getElementById("renameProject");
 const deleteProjectBtn = document.getElementById("deleteProject");
@@ -339,10 +338,7 @@ function makeGalleryThumb(item, { onPick, refresh, title } = {}) {
     const ph = new Option("Move to…", "", true, true);
     ph.disabled = true;
     sel.appendChild(ph);
-    for (const p of projects) {
-      if (p.id !== (item.projectId || "default"))
-        sel.appendChild(new Option(p.name, p.id));
-    }
+    fillProjectOptions(sel, { exclude: item.projectId || "default" });
     sel.addEventListener("click", (ev) => ev.stopPropagation());
     sel.addEventListener("change", async () => {
       try {
@@ -851,9 +847,12 @@ function projectName(id) {
 
 async function loadProjects() {
   try {
-    const res = await fetch("/api/projects");
-    const data = await res.json();
-    projects = data.data || [];
+    const [res, fres] = await Promise.all([
+      fetch("/api/projects"),
+      fetch("/api/project-folders"),
+    ]);
+    projects = (await res.json()).data || [];
+    projectFolders = (await fres.json().catch(() => ({}))).data || [];
   } catch (err) {
     console.error("Failed to load projects:", err);
     projects = [{ id: "default", name: "Default" }];
@@ -875,29 +874,76 @@ async function loadProjects() {
   loadVariables();
 }
 
+// --- project folders: a tree (parentId) that the project list is filed into -----
+let projectFolders = [];
+const FOLDERS_OPEN_KEY = "genie_project_folders_open";
+const openFolders = new Set(
+  (() => {
+    try {
+      return JSON.parse(getPref(FOLDERS_OPEN_KEY, "[]"));
+    } catch {
+      return [];
+    }
+  })(),
+);
+const byName = (a, b) =>
+  (a.name || "").localeCompare(b.name || "", undefined, { sensitivity: "base" });
+const folderById = (id) => projectFolders.find((f) => f.id === id);
+// A project's folder, or null when it's at the top level (or its folder is gone).
+const projectFolderId = (p) => (folderById(p.folderId) ? p.folderId : null);
+const childFolders = (parentId) =>
+  projectFolders.filter((f) => (f.parentId || null) === parentId).sort(byName);
+const folderProjects = (folderId) =>
+  projects.filter((p) => projectFolderId(p) === folderId); // already sorted
+// Folder names from the top down to (and including) folderId.
+function folderPath(folderId) {
+  const names = [];
+  for (let f = folderById(folderId); f; f = folderById(f.parentId))
+    names.unshift(f.name);
+  return names;
+}
+function rememberOpenFolders() {
+  setPref(FOLDERS_OPEN_KEY, JSON.stringify([...openFolders]));
+}
+
+// Fill a <select> with projects, top-level ones first, then one <optgroup> per
+// folder (labelled with its full path) — a long list stays scannable.
+function fillProjectOptions(sel, { exclude, label = (p) => p.name } = {}) {
+  const add = (parent, list) => {
+    for (const p of list)
+      if (p.id !== exclude) parent.appendChild(new Option(label(p), p.id));
+  };
+  add(sel, folderProjects(null));
+  const walk = (parentId) => {
+    for (const f of childFolders(parentId)) {
+      const list = folderProjects(f.id).filter((p) => p.id !== exclude);
+      if (list.length) {
+        const g = document.createElement("optgroup");
+        g.label = folderPath(f.id).join(" / ");
+        add(g, list);
+        sel.appendChild(g);
+      }
+      walk(f.id);
+    }
+  };
+  walk(null);
+}
+
+const projectPickerBtn = document.getElementById("projectPickerBtn");
 function renderProjectControls() {
-  projectSelect.innerHTML = "";
-  for (const p of projects) {
-    const opt = document.createElement("option");
-    opt.value = p.id;
-    opt.textContent = p.name;
-    projectSelect.appendChild(opt);
-  }
-  projectSelect.value = activeProjectId;
+  const active = projects.find((p) => p.id === activeProjectId);
+  const path = folderPath(active && projectFolderId(active));
+  document.getElementById("projectPickerPath").textContent =
+    path.length ? `${path.join(" › ")} › ` : "";
+  document.getElementById("projectPickerName").textContent =
+    active?.name || "Default";
+  projectPickerBtn.title = `Active project: ${[...path, active?.name || "Default"].join(" › ")} — click to browse`;
 
   // history filter: All + each project; keep the current choice if still valid
   const prev = historyFilter.value || activeProjectId;
   historyFilter.innerHTML = "";
-  const all = document.createElement("option");
-  all.value = "all";
-  all.textContent = "All projects";
-  historyFilter.appendChild(all);
-  for (const p of projects) {
-    const opt = document.createElement("option");
-    opt.value = p.id;
-    opt.textContent = p.name;
-    historyFilter.appendChild(opt);
-  }
+  historyFilter.appendChild(new Option("All projects", "all"));
+  fillProjectOptions(historyFilter);
   historyFilter.value =
     [...historyFilter.options].some((o) => o.value === prev) ? prev : (
       activeProjectId
@@ -905,23 +951,420 @@ function renderProjectControls() {
 
   renderGallery(galleryItems);
   renderHistory(historyEntries);
+  if (!projectBrowser.classList.contains("hidden")) renderProjectBrowser();
 }
 
+// Switch projects. Other modules follow via the "projectchange" event on document.
 function setActiveProject(id) {
+  const changed = id !== activeProjectId;
   activeProjectId = id;
   setPref(PROJECT_KEY, id);
-  projectSelect.value = id;
   historyFilter.value = id;
+  historyPage = 1; // changing the filtered set starts back at the first page
+  renderProjectControls();
   loadSavedPrompts();
   loadVariables();
-  renderGallery(galleryItems);
-  historyPage = 1; // changing the filtered set starts back at the first page
-  renderHistory(historyEntries);
+  if (changed) document.dispatchEvent(new CustomEvent("projectchange"));
 }
 
-projectSelect.addEventListener("change", () =>
-  setActiveProject(projectSelect.value),
-);
+// --- project browser: folders and sub-folders of projects -----------------------
+const projectBrowser = document.getElementById("projectBrowser");
+const pbTree = document.getElementById("pbTree");
+const pbSearch = document.getElementById("pbSearch");
+let pbMenuFor = null; // "f:<id>" / "p:<id>" — the row whose actions are showing
+
+async function projectApi(url, method, body) {
+  const res = await fetch(url, {
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: body && JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.msg || "Request failed");
+  return data.data;
+}
+// Run an action; report a failure and refresh the list either way.
+async function pbDo(fn) {
+  pbMenuFor = null;
+  let out;
+  try {
+    out = await fn();
+  } catch (err) {
+    alert(err.message || String(err));
+  }
+  await loadProjects();
+  return out;
+}
+function openFolder(id) {
+  if (!id || openFolders.has(id)) return;
+  openFolders.add(id);
+  rememberOpenFolders();
+}
+
+// Opened with `pick`, the window chooses a destination instead of switching
+// projects: a project's click (or one made with ＋ Project) is handed to pick(id).
+let pbPick = null;
+const PB_TIP = document.getElementById("pbTip").textContent;
+function openProjectBrowser(pick, title) {
+  pbPick = typeof pick === "function" ? pick : null;
+  projectBrowser.classList.toggle("pb-picking", !!pbPick);
+  document.getElementById("pbHeading").textContent = pbPick ? title : "Projects";
+  document.getElementById("pbTip").textContent = pbPick ?
+      "Pick a project — or make one with ＋ Project (a / makes folders)"
+    : PB_TIP;
+  // Show the active project: open every folder above it.
+  const active = projects.find((p) => p.id === activeProjectId);
+  for (let f = folderById(active && projectFolderId(active)); f; f = folderById(f.parentId))
+    openFolder(f.id);
+  pbSearch.value = "";
+  pbMenuFor = null;
+  show(projectBrowser);
+  renderProjectBrowser();
+  pbTree.querySelector(".pb-row.active")?.scrollIntoView({ block: "nearest" });
+  if (matchMedia("(hover: hover)").matches) pbSearch.focus();
+}
+function closeProjectBrowser() {
+  hide(projectBrowser);
+  pbPick = null;
+  endPbCreate();
+}
+
+// New project form, at the top of the window: a name, and where it goes — picked by
+// tapping a folder in the tree below (or ⌂ Top level). ＋ Folder makes a sub-folder
+// of that choice and picks it. Made while picking a destination, the new project is
+// the destination (its cards move in); otherwise it becomes the active project.
+const pbCreate = document.getElementById("pbCreate");
+const pbCreateName = document.getElementById("pbCreateName");
+let pbCreating = false;
+let pbCreateFolder = null; // where the new project goes (null = top level)
+function startPbCreate(folderId = null) {
+  if (projectBrowser.classList.contains("hidden")) openProjectBrowser();
+  pbCreating = true;
+  pbCreateFolder = folderById(folderId) ? folderId : null;
+  for (let f = folderById(pbCreateFolder); f; f = folderById(f.parentId)) openFolder(f.id);
+  pbCreateName.value = "";
+  pbSearch.value = "";
+  pbMenuFor = null;
+  const n = histSelected.size;
+  document.getElementById("pbCreateGo").textContent =
+    pbPick ? `Create & move ${n} card${n === 1 ? "" : "s"}` : "Create";
+  projectBrowser.classList.add("pb-creating");
+  show(pbCreate);
+  renderProjectBrowser();
+  pbTree.querySelector(".pb-target")?.scrollIntoView({ block: "nearest" });
+  pbCreateName.focus();
+}
+function endPbCreate() {
+  pbCreating = false;
+  projectBrowser.classList.remove("pb-creating");
+  hide(pbCreate);
+}
+function pbSetCreateFolder(folderId) {
+  pbCreateFolder = folderId;
+  renderProjectBrowser();
+}
+// "Goes in …": the chosen folder, plus any folders a / in the name will add.
+function renderPbCreateWhere() {
+  const extra = pbCreateName.value.split("/").map((x) => x.trim()).filter(Boolean);
+  extra.pop();
+  const path = [...folderPath(pbCreateFolder), ...extra];
+  document.getElementById("pbCreateWhere").textContent =
+    path.length ? `📁 ${path.join(" › ")}` : "⌂ Top level";
+}
+pbCreateName.addEventListener("input", renderPbCreateWhere);
+document.getElementById("pbCreateCancel").addEventListener("click", () => {
+  endPbCreate();
+  renderProjectBrowser();
+});
+pbCreate.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const name = pbCreateName.value.trim();
+  if (!name || name.endsWith("/")) return pbCreateName.focus();
+  const folderId = pbCreateFolder;
+  const go = document.getElementById("pbCreateGo");
+  go.disabled = true;
+  try {
+    const created = await pbDo(() =>
+      projectApi("/api/projects", "POST", { name, folderId }),
+    );
+    if (created?.id) pbChoose(created.id);
+  } finally {
+    go.disabled = false;
+  }
+});
+// A project was chosen: switch to it, or hand it to the picker that opened us.
+function pbChoose(id) {
+  const pick = pbPick;
+  closeProjectBrowser();
+  if (pick) pick(id);
+  else setActiveProject(id);
+}
+
+projectPickerBtn.addEventListener("click", () => openProjectBrowser());
+document.getElementById("pbClose").addEventListener("click", closeProjectBrowser);
+projectBrowser.addEventListener("click", (e) => {
+  if (e.target === projectBrowser) closeProjectBrowser();
+});
+projectBrowser.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closeProjectBrowser();
+});
+pbSearch.addEventListener("input", renderProjectBrowser);
+pbSearch.addEventListener("keydown", (e) => {
+  if (e.key !== "Enter") return;
+  const first = pbTree.querySelector(".pb-row[data-project]");
+  if (first) pbChoose(first.dataset.project);
+});
+document
+  .getElementById("pbNewProject")
+  .addEventListener("click", () => createProject(null));
+document
+  .getElementById("pbNewFolder")
+  .addEventListener("click", () => createFolder(pbCreating ? pbCreateFolder : null));
+
+function renderProjectBrowser() {
+  pbTree.innerHTML = "";
+  if (pbCreating) {
+    if (!folderById(pbCreateFolder)) pbCreateFolder = null; // deleted meanwhile
+    renderPbCreateWhere();
+    // Top level is a place to put it too.
+    const top = document.createElement("div");
+    top.className = "pb-item";
+    const row = document.createElement("div");
+    row.className = "pb-row pb-folder";
+    row.classList.toggle("pb-target", pbCreateFolder === null);
+    const main = document.createElement("button");
+    main.type = "button";
+    main.className = "pb-main";
+    main.innerHTML = `<span class="pb-caret"></span><span class="pb-icon">⌂</span><span class="pb-name">Top level</span>`;
+    main.addEventListener("click", () => pbSetCreateFolder(null));
+    row.appendChild(main);
+    top.appendChild(row);
+    pbTree.appendChild(top);
+  }
+  const q = pbCreating ? "" : pbSearch.value.trim().toLowerCase();
+  if (q) {
+    // Searching: a flat list of matching projects, each with its folder path.
+    const hits = projects.filter((p) =>
+      [...folderPath(projectFolderId(p)), p.name].join(" ").toLowerCase().includes(q),
+    );
+    for (const p of hits) pbTree.appendChild(projectRow(p, 0, true));
+    if (!hits.length) {
+      const none = document.createElement("p");
+      none.className = "muted pb-empty";
+      none.textContent = "No projects match.";
+      pbTree.appendChild(none);
+    }
+    return;
+  }
+  const walk = (parentId, depth) => {
+    for (const f of childFolders(parentId)) {
+      pbTree.appendChild(folderRow(f, depth));
+      if (openFolders.has(f.id)) walk(f.id, depth + 1);
+    }
+    for (const p of folderProjects(parentId)) pbTree.appendChild(projectRow(p, depth));
+  };
+  walk(null, 0);
+}
+
+// How many projects are anywhere under a folder.
+function folderCount(folderId) {
+  return (
+    folderProjects(folderId).length +
+    childFolders(folderId).reduce((n, f) => n + folderCount(f.id), 0)
+  );
+}
+
+// One row of the tree: its main button, a ⋯ that shows its actions underneath.
+function pbRowBase(depth, key) {
+  const wrap = document.createElement("div");
+  wrap.className = "pb-item";
+  const row = document.createElement("div");
+  row.className = "pb-row";
+  row.style.setProperty("--depth", depth);
+  row.draggable = true;
+  row.addEventListener("dragstart", (e) => e.dataTransfer.setData(PB_DRAG, key));
+  const main = document.createElement("button");
+  main.type = "button";
+  main.className = "pb-main";
+  const more = document.createElement("button");
+  more.type = "button";
+  more.className = "pb-more link-btn";
+  more.textContent = "⋯";
+  more.title = "Rename, move, delete…";
+  more.addEventListener("click", () => {
+    pbMenuFor = pbMenuFor === key ? null : key;
+    renderProjectBrowser();
+  });
+  row.append(main, more);
+  wrap.appendChild(row);
+  let menu = null;
+  if (pbMenuFor === key) {
+    menu = document.createElement("div");
+    menu.className = "pb-menu";
+    menu.style.setProperty("--depth", depth);
+    wrap.appendChild(menu);
+  }
+  return { wrap, row, main, menu };
+}
+function pbAction(menu, text, fn) {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = "btn-secondary";
+  b.textContent = text;
+  b.addEventListener("click", fn);
+  menu.appendChild(b);
+}
+// A "⇄ Move to…" dropdown of folders (Top level first); `skip` leaves out a folder
+// and everything under it (a folder can't go inside itself).
+function pbMoveSelect(menu, current, skip, onPick) {
+  const sel = document.createElement("select");
+  const ph = new Option("⇄ Move to…", "", true, true);
+  ph.disabled = true;
+  sel.appendChild(ph);
+  if (current) sel.appendChild(new Option("⌂ Top level", "__top"));
+  const walk = (parentId, depth) => {
+    for (const f of childFolders(parentId)) {
+      if (f.id === skip) continue;
+      const opt = new Option(`${"\u00a0\u00a0\u00a0".repeat(depth)}📁 ${f.name}`, f.id);
+      opt.disabled = f.id === current;
+      sel.appendChild(opt);
+      walk(f.id, depth + 1);
+    }
+  };
+  walk(null, 0);
+  if (sel.options.length < 2) return;
+  sel.addEventListener("change", () => onPick(sel.value === "__top" ? null : sel.value));
+  menu.appendChild(sel);
+}
+
+// Drag a row onto a folder, or onto the list's empty space for the top level.
+const PB_DRAG = "application/x-genie-project";
+function pbDropTarget(el, folderId) {
+  el.addEventListener("dragover", (e) => {
+    if (!e.dataTransfer.types.includes(PB_DRAG)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    el.classList.add("pb-drop");
+  });
+  el.addEventListener("dragleave", () => el.classList.remove("pb-drop"));
+  el.addEventListener("drop", (e) => {
+    el.classList.remove("pb-drop");
+    const raw = e.dataTransfer.getData(PB_DRAG);
+    if (!raw) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const [kind, id] = raw.split(":");
+    if (kind === "p") moveProject(id, folderId);
+    else if (id !== folderId) moveFolder(id, folderId);
+  });
+}
+pbDropTarget(pbTree, null);
+
+function folderRow(f, depth) {
+  const { wrap, row, main, menu } = pbRowBase(depth, `f:${f.id}`);
+  const open = openFolders.has(f.id);
+  row.classList.add("pb-folder");
+  pbDropTarget(row, f.id);
+  main.innerHTML = `<span class="pb-caret">${open ? "▾" : "▸"}</span><span class="pb-icon">${open ? "📂" : "📁"}</span>`;
+  const name = document.createElement("span");
+  name.className = "pb-name";
+  name.textContent = f.name;
+  const count = document.createElement("span");
+  count.className = "pb-count";
+  count.textContent = folderCount(f.id);
+  main.append(name, count);
+  main.title = open ? "Close folder" : "Open folder";
+  if (pbCreating) {
+    row.classList.toggle("pb-target", pbCreateFolder === f.id);
+    main.title = "Put the new project here";
+  }
+  main.addEventListener("click", () => {
+    // Making a project: the first tap picks the folder (and opens it); a tap on
+    // the picked one opens / closes it as usual.
+    if (pbCreating && pbCreateFolder !== f.id) {
+      pbCreateFolder = f.id;
+      openFolder(f.id);
+      renderProjectBrowser();
+      return;
+    }
+    if (open) openFolders.delete(f.id);
+    else openFolders.add(f.id);
+    rememberOpenFolders();
+    renderProjectBrowser();
+  });
+  if (menu) {
+    pbAction(menu, "＋ Project here", () => createProject(f.id));
+    pbAction(menu, "＋ Sub-folder", () => createFolder(f.id));
+    pbAction(menu, "✎ Rename", () => renameFolder(f));
+    pbMoveSelect(menu, f.parentId || null, f.id, (to) => moveFolder(f.id, to));
+    pbAction(menu, "🗑 Delete", () => deleteFolder(f));
+  }
+  return wrap;
+}
+
+function projectRow(p, depth, withPath = false) {
+  const { wrap, row, main, menu } = pbRowBase(depth, `p:${p.id}`);
+  row.dataset.project = p.id;
+  row.classList.toggle("active", p.id === activeProjectId);
+  main.innerHTML = `<span class="pb-caret"></span><span class="pb-icon">🎬</span>`;
+  const name = document.createElement("span");
+  name.className = "pb-name";
+  name.textContent = p.name;
+  main.appendChild(name);
+  const path = folderPath(projectFolderId(p));
+  if (withPath && path.length) {
+    const where = document.createElement("span");
+    where.className = "pb-where";
+    where.textContent = path.join(" › ");
+    main.appendChild(where);
+  }
+  main.title = pbPick ? "Move them here" : "Switch to this project";
+  main.addEventListener("click", () => pbChoose(p.id));
+  if (menu) {
+    pbAction(menu, "✎ Rename", () => renameProject(p.id));
+    pbMoveSelect(menu, projectFolderId(p), null, (to) => moveProject(p.id, to));
+    if (p.id !== "default") pbAction(menu, "🗑 Delete", () => deleteProject(p.id));
+  }
+  return wrap;
+}
+
+// Every "new project" button opens the form above (the window too, if it's shut).
+const createProject = (folderId) => startPbCreate(folderId);
+async function createFolder(parentId) {
+  const where = folderPath(parentId).join(" › ");
+  const name = prompt(where ? `New folder in "${where}":` : "New folder name:");
+  if (!name?.trim()) return;
+  openFolder(parentId);
+  const made = await pbDo(() =>
+    projectApi("/api/project-folders", "POST", { name: name.trim(), parentId }),
+  );
+  // Making a project: the new folder is where it goes.
+  if (made?.id && pbCreating) pbSetCreateFolder(made.id);
+}
+async function renameFolder(f) {
+  const name = prompt(`Rename folder "${f.name}" to:`, f.name);
+  if (!name?.trim() || name.trim() === f.name) return;
+  await pbDo(() => projectApi(`/api/project-folders/${f.id}`, "PUT", { name: name.trim() }));
+}
+async function moveFolder(id, parentId) {
+  openFolder(parentId);
+  await pbDo(() => projectApi(`/api/project-folders/${id}`, "PUT", { parentId }));
+}
+async function deleteFolder(f) {
+  const up = folderPath(f.parentId).join(" › ") || "the top level";
+  if (
+    !confirm(
+      `Delete folder "${f.name}"?\n\nIts projects and sub-folders move up to ${up}. No project is deleted.`,
+    )
+  )
+    return;
+  await pbDo(() => projectApi(`/api/project-folders/${f.id}`, "DELETE"));
+}
+async function moveProject(id, folderId) {
+  openFolder(folderId);
+  await pbDo(() => projectApi(`/api/projects/${id}`, "PUT", { folderId }));
+}
+
 historyFilter.addEventListener("change", () => {
   historyPage = 1; // new filter → back to page 1
   renderHistory(historyEntries);
@@ -1003,6 +1446,7 @@ clearCancelledBtn.addEventListener("click", async () => {
     alert(err.message || String(err));
   } finally {
     clearCancelledBtn.disabled = false;
+    historySlideNext = true;
     loadHistory();
   }
 });
@@ -1122,49 +1566,27 @@ document.getElementById("exportConfirm").addEventListener("click", async () => {
   }
 });
 
-newProjectBtn.addEventListener("click", async () => {
-  const name = prompt("New project name:");
-  if (!name?.trim()) return;
-  try {
-    const res = await fetch("/api/projects", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: name.trim() }),
-    });
-    const data = await res.json();
-    if (!res.ok || !data.data?.id)
-      throw new Error(data.msg || "Failed to create project");
-    await loadProjects();
-    setActiveProject(data.data.id);
-  } catch (err) {
-    alert(err.message || String(err));
-  }
+// The pill's ＋ makes a project beside the active one (in the same folder).
+newProjectBtn.addEventListener("click", () => {
+  const active = projects.find((p) => p.id === activeProjectId);
+  createProject(active ? projectFolderId(active) : null);
 });
+renameProjectBtn.addEventListener("click", () => renameProject(activeProjectId));
+deleteProjectBtn.addEventListener("click", () => deleteProject(activeProjectId));
 
-renameProjectBtn.addEventListener("click", async () => {
-  const current = projectName(activeProjectId);
+async function renameProject(id) {
+  const current = projectName(id);
   const name = prompt(`Rename project "${current}" to:`, current);
   if (!name?.trim() || name.trim() === current) return;
-  try {
-    const res = await fetch(`/api/projects/${activeProjectId}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: name.trim() }),
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.msg || "Rename failed");
-    await loadProjects();
-  } catch (err) {
-    alert(err.message || String(err));
-  }
-});
+  await pbDo(() => projectApi(`/api/projects/${id}`, "PUT", { name: name.trim() }));
+}
 
-deleteProjectBtn.addEventListener("click", async () => {
-  if (activeProjectId === "default") {
+async function deleteProject(id) {
+  if (id === "default") {
     alert("The Default project cannot be deleted.");
     return;
   }
-  const name = projectName(activeProjectId);
+  const name = projectName(id);
   if (
     !confirm(
       `Delete project "${name}"?\n\nIts gallery media and history will move to Default.`,
@@ -1172,19 +1594,17 @@ deleteProjectBtn.addEventListener("click", async () => {
   )
     return;
   try {
-    const res = await fetch(`/api/projects/${activeProjectId}`, {
-      method: "DELETE",
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.msg || "Delete failed");
-    await loadProjects();
-    setActiveProject("default");
-    loadGallery();
-    loadHistory();
+    await projectApi(`/api/projects/${id}`, "DELETE");
   } catch (err) {
     alert(err.message || String(err));
+    return;
   }
-});
+  pbMenuFor = null;
+  await loadProjects();
+  if (id === activeProjectId) setActiveProject("default");
+  loadGallery();
+  loadHistory();
+}
 
 // --- gallery ---------------------------------------------------------------
 // Save files to a project's gallery (what a dropped reference does behind the scenes).
@@ -1455,10 +1875,7 @@ function makeGalleryCard(item) {
   const ph = new Option("Move to…", "", true, true);
   ph.disabled = true;
   mv.appendChild(ph);
-  for (const p of projects) {
-    if (p.id !== (item.projectId || "default"))
-      mv.appendChild(new Option(p.name, p.id));
-  }
+  fillProjectOptions(mv, { exclude: item.projectId || "default" });
   mv.addEventListener("change", async () => {
     try {
       const res = await fetch(`/api/images/${item.id}`, {
@@ -6735,6 +7152,16 @@ function installPromptTools({
     "Save this prompt, its reference media and duration to the project's Saved Prompts";
   save.addEventListener("click", openSavePrompt);
   tools.prepend(save);
+  const revise = document.createElement("button");
+  revise.type = "button";
+  revise.className = "link-btn revise-prompt-btn";
+  revise.textContent = "✨ Revise with AI";
+  revise.title = "Tell the LLM what to change in this prompt; review the result before applying it";
+  revise.addEventListener("click", () => {
+    if (promptTab !== "prompt") setPromptTab("prompt");
+    window.genieQuickRevise?.(textarea);
+  });
+  tools.prepend(revise);
 
   // Drop hosts whose field a workflow re-render threw away.
   for (let i = promptHosts.length - 1; i >= 0; i--) {
@@ -9074,7 +9501,7 @@ function renderEditorActions() {
     );
     ph.disabled = true;
     sel.appendChild(ph);
-    for (const x of others) sel.appendChild(new Option(x.name, x.id));
+    fillProjectOptions(sel, { exclude: projectId });
     sel.addEventListener("change", async () => {
       const to = sel.value;
       sel.selectedIndex = 0;
@@ -9955,6 +10382,181 @@ function historyOfProject(entries) {
     );
 }
 
+// --- History: select many cards and move them to another project --------------
+// ☑ Select puts a checkbox on each card; a tap anywhere on a card that isn't one of
+// its controls toggles it too (Shift-click for a range). The bar under the list
+// selects the page or everything the filter shows, and moves the lot. Runs still
+// generating can't be picked — their card is rewritten when they finish.
+let histSelecting = false;
+const histSelected = new Set();
+let histSelAnchor = null;
+let histVisibleIds = []; // pickable ids in display order (every page)
+let histPageIds = [];
+const histSelectToggle = document.getElementById("histSelectToggle");
+const histSelectBar = document.getElementById("histSelectBar");
+const histSelCount = document.getElementById("histSelCount");
+const histSelMove = document.getElementById("histSelMove");
+const histPickable = (e) => e.status !== "pending";
+
+// Called from renderHistory: drop picks the filter no longer shows, refresh the bar.
+function renderHistorySelection(visible) {
+  const pickable = visible.filter(histPickable);
+  histVisibleIds = pickable.map((e) => e.id);
+  const start = (historyPage - 1) * HISTORY_PAGE_SIZE;
+  histPageIds = visible
+    .slice(start, start + HISTORY_PAGE_SIZE)
+    .filter(histPickable)
+    .map((e) => e.id);
+  const shown = new Set(histVisibleIds);
+  for (const id of histSelected) if (!shown.has(id)) histSelected.delete(id);
+  histSelectToggle.textContent = histSelecting ? "✓ Done selecting" : "☑ Select";
+  histSelectBar.classList.toggle("hidden", !histSelecting);
+  document.getElementById("histSelAll").textContent = `All (${histVisibleIds.length})`;
+  updateHistSelBar();
+}
+
+function updateHistSelBar() {
+  const n = histSelected.size;
+  histSelCount.textContent = `${n} selected`;
+  histSelMove.innerHTML = "";
+  const ph = new Option(n ? `⇄ Move ${n} to…` : "⇄ Move to…", "", true, true);
+  ph.disabled = true;
+  histSelMove.appendChild(ph);
+  const filter = historyFilter.value || "all";
+  histSelMove.appendChild(new Option("📂 Browse projects…", "__browse"));
+  histSelMove.appendChild(new Option("＋ New project…", "__new"));
+  fillProjectOptions(histSelMove, {
+    exclude: filter === "all" ? undefined : filter,
+    label: (p) => `📁 ${p.name}`,
+  });
+  histSelMove.disabled = !n;
+}
+
+// Reflect the picks on the cards already drawn (no full re-render).
+function syncHistPicks() {
+  for (const card of historyEl.querySelectorAll(".hist-card.hist-selectable")) {
+    const on = histSelected.has(card.dataset.id);
+    card.classList.toggle("hist-selected", on);
+    const cb = card.querySelector(".hist-pick input");
+    if (cb) cb.checked = on;
+  }
+  updateHistSelBar();
+}
+
+function toggleHistPick(id, range) {
+  const on = !histSelected.has(id);
+  let ids = [id];
+  const a = histVisibleIds.indexOf(histSelAnchor);
+  const b = histVisibleIds.indexOf(id);
+  if (range && a >= 0 && b >= 0)
+    ids = histVisibleIds.slice(Math.min(a, b), Math.max(a, b) + 1);
+  for (const x of ids) {
+    if (on) histSelected.add(x);
+    else histSelected.delete(x);
+  }
+  histSelAnchor = id;
+  syncHistPicks();
+}
+
+function setHistSelecting(on) {
+  histSelecting = on;
+  if (!on) histSelected.clear();
+  histSelAnchor = null;
+  renderHistory(historyEntries);
+}
+histSelectToggle.addEventListener("click", () => setHistSelecting(!histSelecting));
+document
+  .getElementById("histSelDone")
+  .addEventListener("click", () => setHistSelecting(false));
+document.getElementById("histSelPage").addEventListener("click", () => {
+  for (const id of histPageIds) histSelected.add(id);
+  syncHistPicks();
+});
+document.getElementById("histSelAll").addEventListener("click", () => {
+  for (const id of histVisibleIds) histSelected.add(id);
+  syncHistPicks();
+});
+document.getElementById("histSelNone").addEventListener("click", () => {
+  histSelected.clear();
+  syncHistPicks();
+});
+
+// In select mode a click on a card (but not on one of its controls) picks it.
+historyEl.addEventListener(
+  "click",
+  (e) => {
+    if (!histSelecting) return;
+    const card = e.target.closest(".hist-card.hist-selectable");
+    if (!card) return;
+    const onPick = e.target.closest(".hist-pick");
+    if (
+      !onPick &&
+      e.target.closest("button, a, select, input, textarea, summary, label, [contenteditable]")
+    )
+      return;
+    // The checkbox itself must keep its default (cancelling it would undo the tick);
+    // anywhere else, cancel it so the label doesn't send a second click to the box.
+    if (e.target.type !== "checkbox") e.preventDefault();
+    e.stopPropagation();
+    toggleHistPick(card.dataset.id, e.shiftKey);
+  },
+  true,
+);
+
+// "📂 Browse projects…" picks the destination in the Projects window; "＋ New
+// project…" opens its New project form (a name, and a folder picked in the tree).
+histSelMove.addEventListener("change", () => {
+  const choice = histSelMove.value;
+  const n = histSelected.size;
+  if (!choice || !n) return;
+  if (choice === "__browse") {
+    updateHistSelBar();
+    openProjectBrowser(
+      (projectId) => moveHistSelection({ projectId }),
+      `Move ${n} card${n === 1 ? "" : "s"} to…`,
+    );
+  } else if (choice === "__new") {
+    // The Projects window's New project form, starting in the folder of the project
+    // the cards are filtered to (or the active one).
+    updateHistSelBar();
+    const filter = historyFilter.value || "all";
+    const here = projects.find((p) => p.id === (filter === "all" ? activeProjectId : filter));
+    openProjectBrowser(
+      (projectId) => moveHistSelection({ projectId }),
+      `Move ${n} card${n === 1 ? "" : "s"} to a new project`,
+    );
+    startPbCreate(here && projectFolderId(here));
+  } else moveHistSelection({ projectId: choice });
+});
+
+async function moveHistSelection({ projectId, newProject }) {
+  const ids = [...histSelected];
+  if (!ids.length) return;
+  histSelMove.disabled = true;
+  histSelCount.textContent = `Moving ${ids.length}…`;
+  try {
+    const res = await fetch("/api/history/move", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids, projectId, newProject }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.msg || "Move failed");
+    const { failed = [] } = data.data || {};
+    if (newProject || !projects.some((p) => p.id === projectId))
+      await loadProjects(); // it (and maybe its folders) is new
+    histSelected.clear();
+    for (const id of failed) histSelected.add(id); // left picked, to try again
+    if (failed.length)
+      alert(
+        `${failed.length} card(s) couldn't be moved — a file may be in use (playing?). They're still selected; try again.`,
+      );
+  } catch (err) {
+    alert(err.message || String(err));
+  }
+  await loadHistory();
+}
+
 // A cancelled or failed run: no output, so nothing but the card goes on delete.
 const isUnfinished = (e) =>
   e.status === "failed" && !e.localVideo && !e.resultUrl && !e.outputs?.length;
@@ -10423,13 +11025,150 @@ document.addEventListener("click", (e) => {
     if (!m.contains(e.target)) m.open = false;
 });
 
+// The element History scrolls in: the History column on a wide screen, else the page.
+function historyScroller() {
+  for (let el = historyEl.parentElement; el && el !== document.body; el = el.parentElement)
+    if (/auto|scroll/.test(getComputedStyle(el).overflowY)) return el;
+  return document.scrollingElement;
+}
+
+// A re-render rebuilds every card, so the browser loses its scroll anchor. Remember
+// the top visible card and the ones after it (in order) with its offset; afterwards
+// the first of them still listed goes back to that offset. A deleted top card is
+// thus replaced in place by the next one, and a deleted card further down leaves
+// everything above it where it was.
+function captureHistoryAnchor() {
+  const scroller = historyScroller();
+  const viewTop =
+    scroller === document.scrollingElement ? 0 : scroller.getBoundingClientRect().top;
+  const cards = [...historyEl.children];
+  const i = cards.findIndex((c) => c.getBoundingClientRect().bottom > viewTop);
+  if (i < 0) return null;
+  return {
+    scroller,
+    ids: cards.slice(i).map((c) => c.dataset.id),
+    top: cards[i].getBoundingClientRect().top,
+    // Every card's place before, for the slide after a delete (see slideHistoryGap).
+    tops: new Map(cards.map((c) => [c.dataset.id, c.getBoundingClientRect().top])),
+  };
+}
+function restoreHistoryAnchor(anchor) {
+  if (!anchor) return;
+  for (const id of anchor.ids) {
+    const card = historyEl.querySelector(`:scope > [data-id="${CSS.escape(id)}"]`);
+    if (!card) continue;
+    const shift = card.getBoundingClientRect().top - anchor.top;
+    if (shift) anchor.scroller.scrollTop += shift;
+    break;
+  }
+  if (historySlideNext) slideHistoryGap(anchor);
+  historySlideNext = false;
+}
+
+// After a delete, the cards that moved to fill the gap slide there from where they
+// were (0.2s) instead of jumping. Set by the delete handlers before loadHistory().
+let historySlideNext = false;
+function slideHistoryGap(anchor) {
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  const viewH = window.innerHeight || Infinity;
+  for (const card of historyEl.children) {
+    const was = anchor.tops.get(card.dataset.id);
+    if (was == null) continue;
+    const now = card.getBoundingClientRect().top;
+    const dy = was - now;
+    if (Math.abs(dy) < 1 || (now > viewH && was > viewH)) continue; // off screen
+    card.animate([{ transform: `translateY(${dy}px)` }, { transform: "none" }], {
+      duration: 200,
+      easing: "ease-out",
+    });
+  }
+}
+
+// The output's shape as a CSS aspect-ratio ("9 / 16"), from the run's settings, so a
+// thumbnail reserves its height before the media loads. null when the run didn't say.
+function entryAspect(input) {
+  const v = input.values || {};
+  const m = String(input.aspect_ratio || v.aspect_ratio || "").match(
+    /(\d+(?:\.\d+)?)\s*:\s*(\d+(?:\.\d+)?)/,
+  );
+  if (m) return `${m[1]} / ${m[2]}`;
+  if (+v.width > 0 && +v.height > 0) return `${+v.width} / ${+v.height}`;
+  return null;
+}
+
+function newHistoryVideo(src, key, inGrid) {
+  const vid = document.createElement("video");
+  vid.src = src;
+  vid.preload = "metadata";
+  vid.dataset.histKey = key;
+  vid.dataset.histSrc = src;
+  if (inGrid) {
+    // In a grid, each video is a click-to-open thumb (controls live in the lightbox).
+    vid.muted = true;
+    vid.classList.add("zoomable");
+  } else {
+    vid.controls = true; // a lone video plays inline as before
+  }
+  return vid;
+}
+
+// A kept thumbnail whose file moved (draft/favorite): load the new address off
+// screen and swap it in once its first frame is ready, so the old one stays on
+// screen meanwhile instead of going blank. A playing video carries on from where
+// it was. Called again for the same move by a later render, it does nothing.
+function swapHistoryMedia(el, src) {
+  if (el.histSwapTo === src) return;
+  el.histSwapTo = src;
+  const stale = () => el.histSwapTo !== src; // a newer move, or done
+  if (el.tagName === "IMG") {
+    const pre = new Image();
+    pre.src = src;
+    pre.decode().catch(() => {}).finally(() => {
+      if (stale()) return;
+      el.src = src; // from the cache now: no blank frame
+      el.dataset.histSrc = src;
+      el.histSwapTo = null;
+    });
+    return;
+  }
+  const nv = newHistoryVideo(src, el.dataset.histKey, el.classList.contains("zoomable"));
+  nv.onclick = el.onclick;
+  let done = false;
+  const swap = () => {
+    if (done || stale()) return;
+    done = true;
+    el.histSwapTo = null;
+    if (!el.isConnected) return; // its card is gone
+    const playing = !el.paused;
+    nv.muted = el.muted;
+    nv.volume = el.volume;
+    if (el.currentTime) nv.currentTime = el.currentTime;
+    el.pause();
+    el.replaceWith(nv);
+    el.removeAttribute("src");
+    el.load(); // let go of the old file
+    if (playing) nv.play().catch(() => {});
+  };
+  nv.addEventListener("loadeddata", swap, { once: true });
+  nv.addEventListener("error", swap, { once: true });
+  setTimeout(swap, 4000); // never leave it on the old address for long
+}
+
 function renderHistory(entries) {
   renderProjectCredits();
   renderHistoryBulk();
+  const anchor = captureHistoryAnchor();
+  // Keep the thumbnails' media elements: a new <video> would load its file again
+  // (a visible hitch on every delete or update). Moved into the new cards in this
+  // same task, a playing video doesn't even pause.
+  const oldMedia = new Map();
+  for (const m of historyEl.querySelectorAll(".hist-thumb > [data-hist-key]"))
+    oldMedia.set(m.dataset.histKey, m);
   historyEl.innerHTML = "";
   const filter = historyFilter.value || "all"; // used below for the per-entry project label
   const visible = filterHistory(entries);
   historyEmpty.classList.toggle("hidden", visible.length > 0);
+  renderHistorySelection(visible);
 
   // Paginate: clamp the page to the current count (entries may have been deleted or
   // filtered), then render just this page's slice. The lightbox still walks the full
@@ -10440,10 +11179,28 @@ function renderHistory(entries) {
   const pageEntries = visible.slice(start, start + HISTORY_PAGE_SIZE);
   renderHistoryPager(pageCount);
 
-  for (const entry of pageEntries) {
+  pageEntries.forEach((entry, pageIndex) => {
     const input = entry.input || {};
     const card = document.createElement("div");
     card.className = "hist-card";
+    card.dataset.id = entry.id;
+    // Its place in the list as filtered (hidden tags and project included).
+    const count = document.createElement("span");
+    count.className = "hist-count";
+    count.textContent = `${start + pageIndex + 1} / ${visible.length}`;
+    card.appendChild(count);
+    if (histSelecting && histPickable(entry)) {
+      card.classList.add("hist-selectable");
+      card.classList.toggle("hist-selected", histSelected.has(entry.id));
+      const pick = document.createElement("label");
+      pick.className = "hist-pick";
+      pick.title = "Select (Shift-click selects a range)";
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = histSelected.has(entry.id);
+      pick.appendChild(cb);
+      card.appendChild(pick);
+    }
 
     // ComfyUI output medium isn't encoded in the model id — read it off the file.
     const comfyEntry = (input.model || "").startsWith("comfy:");
@@ -10486,30 +11243,35 @@ function renderHistory(entries) {
       thumb.className =
         "hist-thumb" +
         (outs.length > 1 ? ` hist-thumb-grid${anyVideo ? " hist-thumb-stack" : ""}` : "");
+      // Fixed-size box (see .hist-thumb): its height is known before the media loads,
+      // so a re-render can't collapse and regrow the cards around the scroll position.
+      const aspect = entryAspect(input);
+      if (aspect) thumb.style.setProperty("--hist-ar", aspect);
       outs.forEach((o, i) => {
         const src = o.localVideo || o.resultUrl;
         if (!src) return;
         const oIsImg =
           comfyEntry ? isImageFile(src) : isImageOutput(input.model);
+        // Keyed by the card's slot, not the file: draft/favorite move the file, and
+        // the moved one is swapped in behind the old one (swapHistoryMedia).
+        const key = `${entry.id}|${i}|${outs.length}|${oIsImg ? "img" : "video"}`;
+        const kept = oldMedia.get(key);
+        oldMedia.delete(key);
         if (oIsImg) {
-          const im = document.createElement("img");
-          im.src = src;
-          im.className = "hist-img zoomable";
-          im.loading = "lazy";
-          im.addEventListener("click", () => openHistoryLightbox(entry, i)); // full-size, with ‹ › nav
+          const im = kept || document.createElement("img");
+          if (!kept) {
+            im.src = src;
+            im.className = "hist-img zoomable";
+            im.loading = "lazy";
+            im.dataset.histKey = key;
+            im.dataset.histSrc = src;
+          } else if (im.dataset.histSrc !== src) swapHistoryMedia(im, src);
+          im.onclick = () => openHistoryLightbox(entry, i); // full-size, with ‹ › nav
           thumb.appendChild(im);
         } else {
-          const vid = document.createElement("video");
-          vid.src = src;
-          vid.preload = "metadata";
-          if (outs.length > 1) {
-            // In a grid, each video is a click-to-open thumb (controls live in the lightbox).
-            vid.muted = true;
-            vid.classList.add("zoomable");
-            vid.addEventListener("click", () => openHistoryLightbox(entry, i));
-          } else {
-            vid.controls = true; // a lone video plays inline as before
-          }
+          const vid = kept || newHistoryVideo(src, key, outs.length > 1);
+          if (kept && vid.dataset.histSrc !== src) swapHistoryMedia(vid, src);
+          if (outs.length > 1) vid.onclick = () => openHistoryLightbox(entry, i);
           thumb.appendChild(vid);
         }
       });
@@ -10591,7 +11353,7 @@ function renderHistory(entries) {
     const main = document.createElement("div");
     main.className = "hist-actions hist-row";
     const org = document.createElement("div");
-    org.className = "hist-actions hist-row";
+    org.className = "hist-actions hist-row hist-org";
     const more = document.createElement("details");
     more.className = "hist-more";
     more.innerHTML =
@@ -10819,6 +11581,7 @@ function renderHistory(entries) {
             throw new Error(
               (await res.json().catch(() => ({}))).msg || "Delete failed",
             );
+          historySlideNext = true;
           loadHistory();
         } catch (err) {
           alert(err.message || String(err));
@@ -10840,7 +11603,7 @@ function renderHistory(entries) {
     const projSel = document.createElement("select");
     projSel.className = "hist-project";
     projSel.title = "Project — move this entry (and its saved files) to another project";
-    for (const p of projects) projSel.appendChild(new Option(`📁 ${p.name}`, p.id));
+    fillProjectOptions(projSel, { label: (p) => `📁 ${p.name}` });
     const entryProjectId = entry.projectId || "default";
     projSel.value =
       projSel.querySelector(`option[value="${entryProjectId}"]`) ?
@@ -10916,7 +11679,8 @@ function renderHistory(entries) {
       liveCol.appendChild(body);
     } else card.appendChild(body);
     historyEl.appendChild(card);
-  }
+  });
+  restoreHistoryAnchor(anchor);
 }
 
 // Populate the form from a saved history entry (local files re-host at generate).
