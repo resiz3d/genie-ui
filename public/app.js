@@ -299,6 +299,21 @@ function makeZoomButton(kind, src, name) {
 // offers the same actions. `onPick(item)` runs on a body click (add-to-list or
 // add-to-field, per caller); `refresh()` re-renders the caller's own view after a
 // move/delete; `title` overrides the hover hint.
+// Deleting a Gallery file is for good, and History cards that used it as a reference
+// lose it — so say how many before asking.
+function confirmGalleryDelete(item) {
+  const uses = historyEntries.filter((e) => {
+    const m = e.mediaLocalIds || { image: e.imageLocalIds || [] };
+    return Object.values(m).some((ids) => Array.isArray(ids) && ids.includes(item.id));
+  }).length;
+  return confirm(
+    `Delete "${item.name}" from the gallery?` +
+      (uses ?
+        `\n\n${uses} History card${uses === 1 ? " uses" : "s use"} it as a reference and will lose it.`
+      : ""),
+  );
+}
+
 function makeGalleryThumb(item, { onPick, refresh, title } = {}) {
   const kind = item.kind || "image"; // older entries predate the kind field
   const div = document.createElement("div");
@@ -368,6 +383,7 @@ function makeGalleryThumb(item, { onPick, refresh, title } = {}) {
   del.title = "Delete from gallery";
   del.addEventListener("click", async (e) => {
     e.stopPropagation();
+    if (!confirmGalleryDelete(item)) return;
     try {
       await fetch(`/api/images/${item.id}`, { method: "DELETE" });
       afterChange();
@@ -1897,7 +1913,7 @@ function makeGalleryCard(item) {
     "🗑",
     "Delete this file from the gallery",
     async () => {
-      if (!confirm(`Delete "${item.name}" from the gallery?`)) return;
+      if (!confirmGalleryDelete(item)) return;
       try {
         await fetch(`/api/images/${item.id}`, { method: "DELETE" });
         loadGallery();
@@ -10888,9 +10904,10 @@ function buildHistDetails(entry, input, comfyEntry, isImg) {
 }
 
 // The reference media (image/video/audio) used by a history entry, as
-// {kind, thumb, name}. Finished kie.ai runs store hosted URLs in `input`; ComfyUI
-// and pending runs store local ids in `mediaLocalIds`, resolved to saved-file URLs
-// via the cached gallery list. Unresolvable local ids (file deleted) are skipped.
+// {kind, thumb, name}. Runs store local ids in `mediaLocalIds`, resolved to saved
+// files via the cached gallery list; finished kie.ai runs also have hosted URLs in
+// `input`. The saved files come first — kie.ai's hosted copies expire after a few
+// days — and the URLs stand in only for a kind none of whose files are left.
 function historyRefMedia(entry) {
   const input = entry.input || {};
   const mli = entry.mediaLocalIds || {};
@@ -10906,15 +10923,18 @@ function historyRefMedia(entry) {
       if (m) out.push({ kind, id: m.id, thumb: m.localUrl, name: m.name });
     }
   };
-  const imgUrls = input.reference_image_urls || input.image_urls;
-  if (imgUrls?.length) addUrls(imgUrls, "image");
-  else addLocal(mli.image || entry.imageLocalIds, "image");
-  if (input.reference_video_urls?.length)
-    addUrls(input.reference_video_urls, "video");
-  else addLocal(mli.video, "video");
-  if (input.reference_audio_urls?.length)
-    addUrls(input.reference_audio_urls, "audio");
-  else addLocal(mli.audio, "audio");
+  const each = (ids, urls, kind) => {
+    const n = out.length;
+    addLocal(ids, kind);
+    if (out.length === n) addUrls(urls, kind);
+  };
+  each(
+    mli.image || entry.imageLocalIds,
+    input.reference_image_urls || input.image_urls,
+    "image",
+  );
+  each(mli.video, input.reference_video_urls, "video");
+  each(mli.audio, input.reference_audio_urls, "audio");
   return out;
 }
 

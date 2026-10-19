@@ -15,6 +15,7 @@ import {
 import { createLlm } from "./llm.js";
 import { registerVideoEditor } from "./video-editor.js";
 import { registerImageEditor } from "./image-editor.js";
+import { rehomeEntryRefs } from "./gallery-refs.js";
 import "dotenv/config";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -5098,6 +5099,9 @@ app.put("/api/history/:id", (req, res) => {
         });
     }
     entry.projectId = proj.id;
+    // Its reference media comes along (copied into this project's Gallery).
+    const images = readJson(IMAGES_FILE);
+    if (rehomeEntryRefs(entry, proj, images, INPUT_DIR)) writeJson(IMAGES_FILE, images);
     writeJson(HISTORY_FILE, entries);
   }
   res.json({ code: 200, msg: "updated", data: entry });
@@ -5105,8 +5109,8 @@ app.put("/api/history/:id", (req, res) => {
 
 // Move many entries to one project at once: { ids: [...], projectId } — or
 // { ids, newProject: "Folder/Sub/Name" } to make that project first. Each card's
-// saved files move like a single reassign; one that can't move (a file in use) is
-// reported in `failed` and left where it was.
+// saved files move like a single reassign, and its reference media is copied over;
+// one that can't move (a file in use) is reported in `failed` and left where it was.
 app.post("/api/history/move", (req, res) => {
   const { ids, projectId, newProject } = req.body || {};
   if (!Array.isArray(ids) || !ids.length)
@@ -5121,7 +5125,9 @@ app.post("/api/history/move", (req, res) => {
 
   const want = new Set(ids.map(String));
   const entries = readJson(HISTORY_FILE);
+  const images = readJson(IMAGES_FILE);
   let moved = 0;
+  let refsCopied = false;
   const failed = [];
   for (const entry of entries) {
     if (!want.has(entry.id) || (entry.projectId || "default") === proj.id) continue;
@@ -5132,8 +5138,16 @@ app.post("/api/history/move", (req, res) => {
     } catch (err) {
       console.error(`Failed to move ${entry.id}:`, err);
       failed.push(entry.id);
+      continue;
+    }
+    // Its reference media comes along (copied into this project's Gallery).
+    try {
+      if (rehomeEntryRefs(entry, proj, images, INPUT_DIR)) refsCopied = true;
+    } catch (err) {
+      console.error(`Failed to copy references of ${entry.id}:`, err);
     }
   }
+  if (refsCopied) writeJson(IMAGES_FILE, images);
   writeJson(HISTORY_FILE, entries);
   res.json({ code: 200, msg: "moved", data: { moved, failed, project: proj } });
 });
