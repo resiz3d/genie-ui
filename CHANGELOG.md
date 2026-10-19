@@ -10,8 +10,45 @@ heading for that version with the date, commit, then tag the commit `vX.Y.Z`.
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-10-19
+
 ### Added
 
+- **Project folders.** The header's project picker now opens a **Projects** browser
+  where projects can be filed into folders and sub-folders, as deep as you like.
+  **＋ Project** / **＋ Folder** add at the top level; a row's **⋯** renames, moves
+  (⇄ Move to…) or deletes it, and a folder's adds a project or sub-folder inside it.
+  On desktop, drag a project or folder onto a folder, or onto empty space for the top
+  level. The search box finds a project by its name or any folder above it. The
+  header shows the active project's folder path, and every project dropdown (History
+  filter, Move to…) groups projects under their folder. Deleting a folder moves its
+  contents up a level — no project is deleted, and folders never move files on disk.
+  Folders live in `project-folders.json`; which ones are open is remembered on the
+  server. A new project's name can be a path — `Clients/Acme/Spot 1` — to make the
+  folders it needs at the same time.
+- **Move many History cards at once.** **☑ Select** (beside the History filter) puts
+  a checkbox on each card; tap a card or its box to pick it, Shift-click for a range.
+  The bar that stays at the bottom picks the **Page**, **All** the filter shows (every
+  page) or **None**, and **⇄ Move N to…** sends them — with their saved files — to
+  any project. **📂 Browse projects…** opens the Projects window to pick the
+  destination by folder (search works, and **＋ Project** there makes the project
+  and moves the cards into it). **＋ New project…** in that list opens the Projects
+  window's **New project** form: type a name, tap the folder it goes in (or ⌂ Top
+  level, or **＋ Folder** to make one there), and **Create & move** makes it and moves
+  the cards in one go. A / in the name makes folders too (`Acme/Spot 1`). Every other
+  ＋ for a new project (the header, the Projects window, a folder's ⋯) uses the same
+  form. Runs
+  still generating can't be picked; a card whose file is in use stays selected to
+  try again.
+- **✨ Revise with AI on the prompt box.** Tell the LLM what to change in the prompt
+  and it rewrites the text in place; pick a **Guide** for it to follow (the video
+  prompt guide from ⚙ LLM settings, or a MiniMax H3 Ref2Video / Text2Video guide).
+  The guide picked is remembered on the server.
+- **📋 Paste media.** Ctrl+V with an image (or files copied in the file manager) on
+  the clipboard drops them into a drop zone: the one under the mouse, the one whose
+  field was last clicked, or the Gallery — inside an open dialog, that dialog's.
+  Where the page may read the clipboard (localhost or HTTPS), image zones also get
+  a **paste** link, for phones.
 - **🖼 Image editor**, beside the video editor in the header, and as **✂ Crop** on
   History image cards and Gallery images. Open an image from the device or from
   GENie (History, Gallery, earlier crops), and crop it: drag inside the box to move
@@ -70,6 +107,12 @@ heading for that version with the date, commit, then tag the commit `vX.Y.Z`.
   the form's column, so History stays where you were. The video editor and its
   Import from GENie picker grow on big screens too. Phones and narrower windows are
   unchanged.
+
+### Fixed
+
+- Deleting a project no longer leaves empty `favorites/`, `drafts/` (and other)
+  sub-folders behind in its `output` and `input` folders. A folder that still has a
+  file in it is kept.
 
 ## [1.4.0] - 2026-10-14
 
@@ -671,7 +714,8 @@ second path.
 - A failed run's long error message (e.g. kie.ai's "Timeout while downloading url=…")
   took over its History card and crushed the buttons beside it.
 
-[Unreleased]: https://github.com/resiz3d/genie-ui/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/resiz3d/genie-ui/compare/v1.5.0...HEAD
+[1.5.0]: https://github.com/resiz3d/genie-ui/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/resiz3d/genie-ui/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/resiz3d/genie-ui/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/resiz3d/genie-ui/compare/v1.1.0...v1.2.0
