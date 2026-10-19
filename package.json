@@ -1,12 +1,14 @@
 {
   "name": "genie-ui",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "description": "Local front-end and project manager for ComfyUI, with optional kie.ai cloud models (Seedance / Seedream)",
   "type": "module",
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
-    "relocate-outputs": "node scripts/relocate-outputs.js"
+    "relocate-outputs": "node scripts/relocate-outputs.js",
+    "rehome-refs": "node scripts/rehome-refs.js",
+    "recover-refs": "node scripts/recover-refs.js"
   },
   "dependencies": {
     "dotenv": "^16.4.5",

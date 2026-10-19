@@ -10,6 +10,32 @@ heading for that version with the date, commit, then tag the commit `vX.Y.Z`.
 
 ## [Unreleased]
 
+## [1.5.1] - 2026-10-19
+
+### Fixed
+
+- **A moved History card keeps its reference media.** References are Gallery items,
+  and a moved card used to keep pointing at the old project's Gallery — so tidying
+  that Gallery took them off the card. Now moving a card (one at a time or with
+  ☑ Select) copies each reference it uses into the new project's Gallery and points
+  the card at the copy; the original stays for anything else that uses it. Cards
+  that share a reference share one copy, and moving a card back uses the original
+  again. For cards moved before this, `npm run rehome-refs` (try `-- --dry-run`
+  first) gives each card its own copies the same way.
+- **Deleting a Gallery file asks first, and says what it breaks.** The × on the
+  thumbnails in the reference pickers deleted the file at once — easy to take for
+  "remove from this field" — and History cards that used it lost their reference.
+  Both deletes now ask, with how many History cards use it as a reference.
+- **kie.ai cards show their saved references.** They showed kie.ai's hosted copies,
+  which expire after a few days; they now show the Gallery files GENie kept, and
+  the hosted links only when no file is left.
+- **Recover deleted references from ComfyUI.** `npm run recover-refs` (try
+  `-- --dry-run` first) finds the file behind each reference a card lost: ComfyUI
+  keeps a copy of every reference it was given, and the card's own output records
+  which one. Each is put back in the Gallery under its old id, so the cards and
+  saved prompts using it get it back. References only used in kie.ai runs can't be
+  recovered this way.
+
 ## [1.5.0] - 2026-10-19
 
 ### Added
@@ -714,7 +740,8 @@ second path.
 - A failed run's long error message (e.g. kie.ai's "Timeout while downloading url=…")
   took over its History card and crushed the buttons beside it.
 
-[Unreleased]: https://github.com/resiz3d/genie-ui/compare/v1.5.0...HEAD
+[Unreleased]: https://github.com/resiz3d/genie-ui/compare/v1.5.1...HEAD
+[1.5.1]: https://github.com/resiz3d/genie-ui/compare/v1.5.0...v1.5.1
 [1.5.0]: https://github.com/resiz3d/genie-ui/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/resiz3d/genie-ui/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/resiz3d/genie-ui/compare/v1.2.0...v1.3.0
