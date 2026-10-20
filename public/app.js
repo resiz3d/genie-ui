@@ -1053,7 +1053,8 @@ const pbCreate = document.getElementById("pbCreate");
 const pbCreateName = document.getElementById("pbCreateName");
 let pbCreating = false;
 let pbCreateFolder = null; // where the new project goes (null = top level)
-function startPbCreate(folderId = null) {
+// n: how many cards a picker will move into it (default: the History selection).
+function startPbCreate(folderId = null, n = histSelected.size) {
   if (projectBrowser.classList.contains("hidden")) openProjectBrowser();
   pbCreating = true;
   pbCreateFolder = folderById(folderId) ? folderId : null;
@@ -1061,7 +1062,6 @@ function startPbCreate(folderId = null) {
   pbCreateName.value = "";
   pbSearch.value = "";
   pbMenuFor = null;
-  const n = histSelected.size;
   document.getElementById("pbCreateGo").textContent =
     pbPick ? `Create & move ${n} card${n === 1 ? "" : "s"}` : "Create";
   projectBrowser.classList.add("pb-creating");
@@ -11619,30 +11619,47 @@ function renderHistory(entries) {
     // Where it belongs: the linked saved prompt (✎ edits it), then the project.
     if (output) org.append(makeHistoryPromptLink(entry, onLinked), editPromptBtn);
 
-    // reassign the entry to another project (files stay where they are)
+    // Reassign the entry to another project (its saved files move with it).
+    // "📂 Browse projects…" / "＋ New project…" pick it in the Projects window, as
+    // the History selection's Move does.
     const projSel = document.createElement("select");
     projSel.className = "hist-project";
     projSel.title = "Project — move this entry (and its saved files) to another project";
+    projSel.appendChild(new Option("📂 Browse projects…", "__browse"));
+    projSel.appendChild(new Option("＋ New project…", "__new"));
     fillProjectOptions(projSel, { label: (p) => `📁 ${p.name}` });
     const entryProjectId = entry.projectId || "default";
     projSel.value =
       projSel.querySelector(`option[value="${entryProjectId}"]`) ?
         entryProjectId
       : "default";
-    projSel.addEventListener("change", async () => {
+    const moveEntry = async (projectId) => {
+      if (projectId === entryProjectId) return;
       try {
         const res = await fetch(`/api/history/${entry.id}`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ projectId: projSel.value }),
+          body: JSON.stringify({ projectId }),
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.msg || "Reassign failed");
+        if (!projects.some((p) => p.id === projectId)) await loadProjects(); // it's new
         loadHistory();
       } catch (err) {
         alert(err.message || String(err));
         projSel.value = entryProjectId;
       }
+    };
+    projSel.addEventListener("change", () => {
+      const choice = projSel.value;
+      if (choice !== "__browse" && choice !== "__new") return moveEntry(choice);
+      projSel.value = entryProjectId;
+      openProjectBrowser(
+        moveEntry,
+        choice === "__new" ? "Move this card to a new project" : "Move this card to…",
+      );
+      const here = projects.find((p) => p.id === entryProjectId);
+      if (choice === "__new") startPbCreate(here && projectFolderId(here), 1);
     });
     org.appendChild(projSel);
 
