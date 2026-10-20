@@ -17,6 +17,9 @@ heading for that version with the date, commit, then tag the commit `vX.Y.Z`.
   <Picture 1>, <Picture 2> … and works what it sees into the revised prompt ("describe
   her outfit from the picture"). Dropped and pasted files are saved to the gallery
   like any reference. Needs a vision-capable model.
+- **＋ MiniMax template** on the prompt box: inserts a blank MiniMax Ref2Video prompt
+  (subjects, summary, retention, shots, soundscape, music) at the cursor, with
+  [bracketed] notes to write over. Ctrl+Z takes it back out.
 
 ## [1.5.1] - 2026-10-19
 

@@ -5208,6 +5208,28 @@ const MM_SECTIONS = [
 ];
 const MM_REF_LABEL = { image: "Picture", video: "Video", audio: "Audio" };
 
+// "＋ MiniMax template" on the prompt box: a blank Ref2Video prompt in the layout
+// compileMinimax writes (and parseMinimax reads), [bracketed] notes to write over.
+const MM_R2V_TEMPLATE = `subject_definitions:
+<subject_1> is [who or what it is], seen in <Picture 1>.
+
+summary:
+[reference generation] The target video shows <subject_1> [what happens].
+
+retention_analysis:
+<subject_1> (appears in [Shot 1]): fully_preserved - [what must stay the same: face, hair, outfit].
+
+detailed_description:
+[Style: look, lighting, camera and lens.]
+[Shot 1] [Opening shot: framing, action, dialogue.]
+[Shot 2] At 00:03.000, [The next cut.]
+
+overall_soundscape:
+[Ambient sound and effects.]
+
+non_diegetic_music:
+N/A`;
+
 function blankMinimax() {
   return {
     summary: "",
@@ -7178,6 +7200,27 @@ function installPromptTools({
     window.genieQuickRevise?.(textarea);
   });
   tools.prepend(revise);
+  const tpl = document.createElement("button");
+  tpl.type = "button";
+  tpl.className = "link-btn mm-template-btn";
+  tpl.textContent = "＋ MiniMax template";
+  tpl.title = "Insert a blank MiniMax Ref2Video prompt at the cursor (Ctrl+Z takes it out)";
+  tpl.addEventListener("click", () => {
+    if (promptTab !== "prompt") setPromptTab("prompt");
+    textarea.focus();
+    const before = textarea.value.slice(0, textarea.selectionStart);
+    const after = textarea.value.slice(textarea.selectionEnd);
+    const text =
+      (before.trim() && !before.endsWith("\n\n") ? (before.endsWith("\n") ? "\n" : "\n\n") : "") +
+      MM_R2V_TEMPLATE +
+      (after.trim() && !after.startsWith("\n") ? "\n\n" : "");
+    // insertText keeps the browser's undo; setRangeText where it isn't supported.
+    if (!document.execCommand("insertText", false, text)) {
+      textarea.setRangeText(text, textarea.selectionStart, textarea.selectionEnd, "end");
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+  });
+  tools.prepend(tpl);
 
   // Drop hosts whose field a workflow re-render threw away.
   for (let i = promptHosts.length - 1; i >= 0; i--) {
