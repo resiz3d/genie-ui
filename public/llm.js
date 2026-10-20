@@ -1592,8 +1592,8 @@
 
   // ------------------------------------- ✨ Revise with AI (main prompt box)
   // The quick version for the prompt box itself: its text as it is, what to change,
-  // and plain text back (no JSON, no references). One panel, moved under whichever
-  // prompt box opened it; the result is shown as a diff until Apply puts it in the box.
+  // optional reference images for the LLM to look at, and plain text back (no JSON).
+  // One panel, moved under whichever prompt box opened it; the result is shown as a diff until Apply puts it in the box.
   const qrev = document.createElement("div");
   qrev.className = "llm-rev llm-qrev hidden";
   qrev.innerHTML = `
@@ -1601,6 +1601,14 @@
       <button type="button" class="link-btn llm-qrev-close" title="Close">✕</button></div>
     <div class="llm-rev-body">
       <textarea class="llm-rev-ask" rows="2" placeholder="e.g. Make her lines angrier · translate the dialogue to French · tighten it up"></textarea>
+      <div class="dropzone llm-qrev-drop" title="Pictures for the LLM to look at while it revises — e.g. “describe her outfit from the picture”">
+        <div class="thumbs"></div>
+        <p class="dz-hint">🖼 Reference images for the LLM — drop here or <span class="browse">browse</span></p>
+        <input type="file" accept="image/*" multiple hidden />
+      </div>
+      <details class="gallery-wrap llm-qrev-gallery"><summary>Pick from gallery</summary>
+        <p class="dz-hint gallery-empty">No saved images in this project yet.</p>
+        <div class="thumbs gallery"></div></details>
       <div class="llm-rev-bar">
         <span class="llm-qrev-opts">
           <label class="inline" title="A prompting guide for the LLM to follow while it makes the changes">Guide
@@ -1652,6 +1660,103 @@
   let qundo = null; // { ta, value }
   let qTimer = null;
 
+  // Reference images for the LLM to look at: gallery entries ({ id, localUrl, name }).
+  // A dropped, browsed or pasted file is saved to the gallery first, like any reference.
+  const qdrop = $(".llm-qrev-drop", qrev);
+  const qthumbs = $(".thumbs", qdrop);
+  const qfile = $("input[type=file]", qdrop);
+  const qgal = $(".llm-qrev-gallery", qrev);
+  const QMAX_IMAGES = 10; // the server's MAX_IMAGES
+  let qimgs = [];
+
+  function renderQImgs() {
+    qthumbs.innerHTML = "";
+    qimgs.forEach((g, i) => {
+      const div = document.createElement("div");
+      div.className = "thumb ready";
+      div.title = g.name || "";
+      div.appendChild(makeThumbContent("image", { thumb: g.localUrl, name: g.name }));
+      const label = document.createElement("span");
+      label.className = "img-label";
+      label.textContent = `Picture ${i + 1}`;
+      div.appendChild(label);
+      const x = document.createElement("button");
+      x.type = "button";
+      x.className = "x";
+      x.textContent = "×";
+      x.title = "Remove";
+      x.addEventListener("click", (e) => {
+        e.stopPropagation();
+        qimgs = qimgs.filter((y) => y.id !== g.id);
+        renderQImgs();
+      });
+      div.appendChild(x);
+      div.appendChild(makeZoomButton("image", g.localUrl, g.name));
+      div.addEventListener("click", (e) => e.stopPropagation()); // not the file picker
+      qthumbs.appendChild(div);
+    });
+  }
+
+  function addQImgs(items) {
+    for (const g of items) {
+      if (qimgs.length >= QMAX_IMAGES) {
+        q.status.textContent = `⚠ Up to ${QMAX_IMAGES} reference images.`;
+        break;
+      }
+      if (!qimgs.some((y) => y.id === g.id))
+        qimgs.push({ id: g.id, localUrl: g.localUrl || g.url, name: g.name });
+    }
+    renderQImgs();
+  }
+
+  async function uploadQImgs(files) {
+    const list = [...files].filter((f) => f.type.startsWith("image/"));
+    if (!list.length) return;
+    q.status.textContent = `Saving ${list.length} image${list.length === 1 ? "" : "s"} to the gallery…`;
+    const saved = await uploadToGallery(list);
+    q.status.textContent = "";
+    addQImgs(saved);
+    if (qgal.open) renderQGallery();
+  }
+
+  function renderQGallery() {
+    const box = $(".gallery", qgal);
+    box.innerHTML = "";
+    const items = galleryItems.filter(
+      (i) => (i.kind || "image") === "image" && (i.projectId || "default") === activeProjectId,
+    );
+    $(".gallery-empty", qgal).classList.toggle("hidden", items.length > 0);
+    for (const item of items)
+      box.appendChild(makeGalleryThumb(item, { onPick: (it) => addQImgs([it]), refresh: renderQGallery }));
+  }
+
+  qdrop.addEventListener("click", () => qfile.click());
+  qfile.addEventListener("change", () => {
+    uploadQImgs(qfile.files);
+    qfile.value = "";
+  });
+  ["dragenter", "dragover"].forEach((evt) =>
+    qdrop.addEventListener(evt, (e) => {
+      if (!e.dataTransfer?.types?.includes("Files")) return;
+      e.preventDefault();
+      qdrop.classList.add("dragover");
+    }),
+  );
+  ["dragleave", "drop"].forEach((evt) =>
+    qdrop.addEventListener(evt, (e) => {
+      if (evt === "dragleave" && qdrop.contains(e.relatedTarget)) return;
+      qdrop.classList.remove("dragover");
+    }),
+  );
+  qdrop.addEventListener("drop", (e) => {
+    if (!e.dataTransfer?.files?.length) return;
+    e.preventDefault();
+    uploadQImgs(e.dataTransfer.files);
+  });
+  qgal.addEventListener("toggle", () => {
+    if (qgal.open) renderQGallery();
+  });
+
   function renderQ() {
     const job = qst?.job;
     const running = job && ACTIVE.includes(job.status);
@@ -1698,6 +1803,7 @@
         title: "prompt box",
         prompt: before,
         instruction,
+        images: qimgs.map((g) => g.id),
         guide: q.guide.value,
         useRules: q.rules.checked,
       });

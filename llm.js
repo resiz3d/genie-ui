@@ -1377,7 +1377,8 @@ export function createLlm(deps) {
     const instruction = String(body.instruction || "").trim().slice(0, 8000);
     if (!instruction) throw new Error("Say what to change.");
     // `plain`: the main prompt box's quick revise — the text goes in as it is and
-    // comes back as text, no JSON, no video-prompt guidance, no references.
+    // comes back as text, no JSON, no references; `body.images` (gallery ids) are
+    // pictures for the model to look at while it makes the changes.
     const plain = !!body.plain;
     const guide = plain && PLAIN_REVISE_GUIDES.has(body.guide) ? body.guide : "";
     const format = !plain && BUILD_FORMATS.has(body.format) ? body.format : "default";
@@ -1407,6 +1408,12 @@ export function createLlm(deps) {
       }
       refs.push(ref);
     }
+    if (plain)
+      for (const id of (Array.isArray(body.images) ? body.images : []).slice(0, MAX_IMAGES)) {
+        const g = gallery.find((x) => x.id === String(id));
+        const isImage = (g?.kind || (String(g?.mime || "").startsWith("image/") ? "image" : "")) === "image";
+        if (g && isImage && !images.includes(g)) images.push(g);
+      }
     let rules = "";
     if (body.useRules) {
       const b = readBuilder(proj);
@@ -1958,10 +1965,12 @@ export function createLlm(deps) {
     return (cut >= 0 ? whole.slice(0, cut) : whole).trim();
   }
 
-  function buildPlainReviseMessages(job) {
+  function buildPlainReviseMessages(job, imageParts) {
     const guide = guideFor(job.guide);
     const system = [
       PLAIN_REVISE_INSTRUCTIONS,
+      imageParts.length &&
+        "REFERENCE IMAGES — the user attached pictures (<Picture 1>, <Picture 2> …). Look at them closely and use what you see where the changes call for it: describe people, outfits, places, objects, colours, lighting and style as they appear in the pictures, in concrete words. Don't mention the pictures themselves in the text unless the user asks you to.",
       guide &&
         "PROMPTING GUIDE — the text is a prompt for an AI video model; follow this guide where it bears on the changes. " +
           "Where it describes the prompt as JSON fields, those are the text's labelled sections: keep the text's own layout and write plain text, not JSON.\n\n" +
@@ -1969,20 +1978,26 @@ export function createLlm(deps) {
       job.rules && "RULES — the user's own rules. Follow every one of them:\n" + job.rules,
       PLAIN_REVISE_REPLY,
     ].filter(Boolean);
+    const text =
+      `The text:\n<<<\n${job.current}\n>>>\n\n` +
+      (imageParts.length ?
+        `Reference images: ${imageParts.map((_, i) => `<Picture ${i + 1}>`).join(", ")}, below.\n\n`
+      : "") +
+      `Changes to make: ${job.instruction}\n\n` +
+      "Reply with only the complete revised text.";
+    const content = [{ type: "text", text }];
+    imageParts.forEach(({ url }, i) => {
+      content.push({ type: "text", text: `<Picture ${i + 1}>:` });
+      content.push({ type: "image_url", image_url: { url } });
+    });
     return [
       { role: "system", content: system.join("\n\n") },
-      {
-        role: "user",
-        content:
-          `The text:\n<<<\n${job.current}\n>>>\n\n` +
-          `Changes to make: ${job.instruction}\n\n` +
-          "Reply with only the complete revised text.",
-      },
+      { role: "user", content: imageParts.length ? content : text },
     ];
   }
 
   function buildReviseMessages(job, imageParts) {
-    if (job.plain) return buildPlainReviseMessages(job);
+    if (job.plain) return buildPlainReviseMessages(job, imageParts);
     const opts = readSettings().options;
     const base =
       job.format === "minimax" ? MINIMAX_INSTRUCTIONS

@@ -10,6 +10,14 @@ heading for that version with the date, commit, then tag the commit `vX.Y.Z`.
 
 ## [Unreleased]
 
+### Added
+
+- **Reference images for ✨ Revise with AI on the prompt box.** Drop, browse, paste or
+  pick from the gallery up to 10 images under the instruction; the LLM sees them as
+  <Picture 1>, <Picture 2> … and works what it sees into the revised prompt ("describe
+  her outfit from the picture"). Dropped and pasted files are saved to the gallery
+  like any reference. Needs a vision-capable model.
+
 ## [1.5.1] - 2026-10-19
 
 ### Fixed

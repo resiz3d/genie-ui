@@ -4858,6 +4858,21 @@ textarea.hidden + .llm-qrev {
   max-width: 100%;
   margin-left: 0.3rem;
 }
+/* Its reference images: a slim drop zone with small thumbs. */
+.llm-qrev-drop {
+  margin-top: 0.5rem;
+  padding: 0.45rem 0.6rem;
+}
+.llm-qrev-drop .thumbs:not(:empty) {
+  margin-bottom: 0.45rem;
+}
+.llm-qrev .thumb {
+  width: 84px;
+  height: 84px;
+}
+.llm-qrev-gallery {
+  margin-top: 0.4rem;
+}
 
 /* 📋 Paste into a drop zone (paste.js): the zone Ctrl+V goes to when the mouse is
    elsewhere, the flash when something lands, and the "paste" link. */
