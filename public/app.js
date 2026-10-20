@@ -2840,6 +2840,7 @@ modelSelect.addEventListener("change", async () => {
     if (seq === carrySeq) applyCarry(snap);
   }
   scheduleComfyStats(0); // show/hide the host-stats strip promptly on model switch
+  syncPromptTabs(); // e.g. the MiniMax template button
   setPref(MODEL_KEY, modelSelect.value);
 });
 qualitySelect.addEventListener("change", updateEstimate);
@@ -5230,6 +5231,32 @@ overall_soundscape:
 non_diegetic_music:
 N/A`;
 
+// Text-to-video and image-to-video take MiniMax's base format instead
+// (VIDEO_PROMPT_WRITING_GUIDE_base_en): three one-paragraph "name: text" fields, the
+// shots inline; image-to-video opens with the line pinning its first frame.
+const MM_T2V_TEMPLATE = `integrated_multimodal_description: [Shot 1] [Style, e.g. Live-action, cinematic], [opening framing: a medium-wide shot frames who, where]. [The action; camera motion in words, e.g. The camera pushes in with small amplitude at slow speed.] (S1) [who] says [how], <d>[English] [the line, word for word]</d> [Shot 2] At 00:03.000, the camera cuts to [something new].
+
+overall_soundscape: [1–4 sentences: ambience, action sounds, breaths — no dialogue or music.]
+
+non_diegetic_music: N/A`;
+
+const MM_I2V_TEMPLATE = `For the target video, at 0.00 seconds into the target video, <Picture 1> (from [Shot 1]) is fully referenced.
+
+integrated_multimodal_description: [Shot 1] [Style as in the image, e.g. Live-action, cinematic], [what the first frame shows: subjects, composition, setting]. [The action starting, how it develops, how it ends.] (S1) [who] says [how], <d>[English] [the line, word for word]</d>
+
+overall_soundscape: [1–4 sentences: ambience, action sounds, breaths — no dialogue or music.]
+
+non_diegetic_music: N/A`;
+
+// The template for the model picked now, or null where none fits.
+function mmTemplateFor() {
+  if (isComfy()) return comfyRefLabelScheme === "minimax_h3" ? MM_R2V_TEMPLATE : null;
+  if (isH3Ref()) return MM_R2V_TEMPLATE;
+  if (isH3T2V()) return MM_T2V_TEMPLATE;
+  if (isH3I2V()) return MM_I2V_TEMPLATE;
+  return null;
+}
+
 function blankMinimax() {
   return {
     summary: "",
@@ -7204,15 +7231,16 @@ function installPromptTools({
   tpl.type = "button";
   tpl.className = "link-btn mm-template-btn";
   tpl.textContent = "＋ MiniMax template";
-  tpl.title = "Insert a blank MiniMax Ref2Video prompt at the cursor (Ctrl+Z takes it out)";
   tpl.addEventListener("click", () => {
+    const template = mmTemplateFor();
+    if (!template) return;
     if (promptTab !== "prompt") setPromptTab("prompt");
     textarea.focus();
     const before = textarea.value.slice(0, textarea.selectionStart);
     const after = textarea.value.slice(textarea.selectionEnd);
     const text =
       (before.trim() && !before.endsWith("\n\n") ? (before.endsWith("\n") ? "\n" : "\n\n") : "") +
-      MM_R2V_TEMPLATE +
+      template +
       (after.trim() && !after.startsWith("\n") ? "\n\n" : "");
     // insertText keeps the browser's undo; setRangeText where it isn't supported.
     if (!document.execCommand("insertText", false, text)) {
@@ -7220,13 +7248,13 @@ function installPromptTools({
       textarea.dispatchEvent(new Event("input", { bubbles: true }));
     }
   });
-  tools.prepend(tpl);
+  tools.prepend(tpl); // shown only for MiniMax H3 (syncPromptTabs)
 
   // Drop hosts whose field a workflow re-render threw away.
   for (let i = promptHosts.length - 1; i >= 0; i--) {
     if (!promptHosts[i].field.isConnected) promptHosts.splice(i, 1);
   }
-  promptHosts.push({ field, textarea, tabs });
+  promptHosts.push({ field, textarea, tabs, mmTemplate: tpl });
   syncPromptTabs();
 }
 
@@ -7254,7 +7282,16 @@ function setPromptTab(tab) {
 function syncPromptTabs() {
   const label = `Saved Prompts${savedPrompts.length ? ` (${savedPrompts.length})` : ""}`;
   const nVars = variables.filter((v) => v.id).length;
+  // The MiniMax template: kie.ai's MiniMax H3 models, or a local workflow with the
+  // MiniMaxH3ReferenceToVideo node (the shipped Basic / Advanced).
+  const mmTpl = mmTemplateFor();
+  const mmKind =
+    mmTpl === MM_T2V_TEMPLATE ? "Text2Video"
+    : mmTpl === MM_I2V_TEMPLATE ? "Image2Video"
+    : "Ref2Video";
   for (const h of promptHosts) {
+    h.mmTemplate.classList.toggle("hidden", !mmTpl);
+    h.mmTemplate.title = `Insert a blank MiniMax ${mmKind} prompt at the cursor (Ctrl+Z takes it out)`;
     for (const [tab, btn] of Object.entries(h.tabs)) {
       btn.classList.toggle("active", tab === promptTab);
       btn.setAttribute("aria-selected", String(tab === promptTab));

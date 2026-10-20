@@ -19,7 +19,11 @@ heading for that version with the date, commit, then tag the commit `vX.Y.Z`.
   like any reference. Needs a vision-capable model.
 - **＋ MiniMax template** on the prompt box: inserts a blank MiniMax Ref2Video prompt
   (subjects, summary, retention, shots, soundscape, music) at the cursor, with
-  [bracketed] notes to write over. Ctrl+Z takes it back out.
+  [bracketed] notes to write over. Ctrl+Z takes it back out. Shown only for MiniMax H3:
+  kie.ai's three models and local workflows with its node (the shipped Basic and
+  Advanced). Text-to-video and image-to-video get MiniMax's base format instead
+  (integrated_multimodal_description, soundscape, music; image-to-video opens with the
+  line that pins <Picture 1> as the first frame).
 
 ## [1.5.1] - 2026-10-19
 
