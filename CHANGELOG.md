@@ -16,7 +16,9 @@ heading for that version with the date, commit, then tag the commit `vX.Y.Z`.
   pick from the gallery up to 10 images under the instruction; the LLM sees them as
   <Picture 1>, <Picture 2> … and works what it sees into the revised prompt ("describe
   her outfit from the picture"). Dropped and pasted files are saved to the gallery
-  like any reference. Needs a vision-capable model.
+  like any reference. Needs a vision-capable model. **✓ Apply** also adds the images
+  to the form's references (H3 image-to-video: the first, as its first frame) and
+  renumbers each <Picture N> in the revised text to the image's place there.
 - **＋ MiniMax template** on the prompt box: inserts a blank MiniMax Ref2Video prompt
   (subjects, summary, retention, shots, soundscape, music) at the cursor, with
   [bracketed] notes to write over. Ctrl+Z takes it back out. Shown only for MiniMax H3:
@@ -24,6 +26,26 @@ heading for that version with the date, commit, then tag the commit `vX.Y.Z`.
   Advanced). Text-to-video and image-to-video get MiniMax's base format instead
   (integrated_multimodal_description, soundscape, music; image-to-video opens with the
   line that pins <Picture 1> as the first frame).
+
+- **🎨 Effects in the ✂ Video editor.** Under the clips: PNG **overlay layers** — on
+  the whole video or on one clip, stretched over the frame or placed in a corner, on
+  an edge or in the centre, with size, margin and opacity, stacked in order; images
+  are kept in `edited_videos/overlays` and offered again under **Reuse an overlay…**.
+  **Desaturate** by 0–100%, and **resize** to a width, a height (the other follows) or
+  both (**Fit** with bars, **Fill** with a crop, or **Stretch**). The player previews
+  the overlays and desaturation; overlays keep their colour. Saved edit projects keep
+  the effects, and an effect alone is enough to Save.
+- **🧩 Local plugins.** Folders in `plugins/` (git-ignored; `PLUGINS_DIR` in `.env`)
+  are loaded at startup: a `server.js` gets the app and the video editor's export
+  engine, `public/client.js` and `public/style.css` are added to the page, and
+  `window.GENie.videoEditor` lets a plugin add buttons to the editor and read its
+  effects. A plugin that fails to load is skipped with a message.
+
+### Changed
+
+- **Runs in flight show in History whatever project is picked.** A card that's
+  generating or queued stays in the list after you switch projects, labelled with its
+  own project, and drops out of the other project's view once it finishes.
 
 ## [1.5.1] - 2026-10-19
 

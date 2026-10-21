@@ -14,6 +14,7 @@ import {
 } from "./comfy-recognize.js";
 import { createLlm } from "./llm.js";
 import { registerVideoEditor } from "./video-editor.js";
+import { loadPlugins } from "./plugins.js";
 import { registerImageEditor } from "./image-editor.js";
 import { rehomeEntryRefs } from "./gallery-refs.js";
 import "dotenv/config";
@@ -5602,7 +5603,7 @@ function saveEditedMedia({ kind, id, index = 0, overwrite = false }, file, name,
   throw httpError(400, "Unknown place to save to");
 }
 
-registerVideoEditor(app, {
+const videoEditor = registerVideoEditor(app, {
   outputDir: OUTPUT_DIR,
   inputDir: INPUT_DIR,
   resolveProject,
@@ -5622,6 +5623,21 @@ registerImageEditor(app, {
   gallery: () => readJson(IMAGES_FILE),
   saveToCard: saveEditedMedia,
 });
+
+// Personal additions from plugins/ (git-ignored) — see plugins.js.
+await loadPlugins(
+  app,
+  {
+    outputDir: OUTPUT_DIR,
+    inputDir: INPUT_DIR,
+    resolveProject,
+    projects: ensureDefaultProject,
+    history: () => readJson(HISTORY_FILE),
+    gallery: () => readJson(IMAGES_FILE),
+    videoEditor,
+  },
+  path.resolve(__dirname, (process.env.PLUGINS_DIR || "").trim() || "plugins"),
+);
 
 app.listen(PORT, HOST, () => {
   const loopback =

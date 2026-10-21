@@ -1635,9 +1635,10 @@
           <button type="button" class="llm-rev-apply">✓ Apply</button>
         </div>
       </div>
-      <p class="llm-rev-applied hidden">Applied. <button type="button" class="link-btn llm-rev-undo">↶ Undo</button></p>
+      <p class="llm-rev-applied hidden">Applied.<span class="llm-qrev-note"></span> <button type="button" class="link-btn llm-rev-undo">↶ Undo</button></p>
     </div>`;
   const q = {
+    appliedNote: $(".llm-qrev-note", qrev),
     ask: $(".llm-rev-ask", qrev),
     go: $(".llm-rev-go", qrev),
     stop: $(".llm-rev-cancel", qrev),
@@ -1770,9 +1771,17 @@
       : `${STATUS_ICON[job.status] || ""} ${job.message}`;
     const res = job?.status === "done" && !qst.applied ? job.result : null;
     q.result.classList.toggle("hidden", !res);
-    if (res) q.diff.innerHTML = diffHtml(qst.before, res.prompt || "");
+    if (res) q.diff.innerHTML = diffHtml(qst.before, revisedText(res, false).text);
     q.applied.classList.toggle("hidden", !qundo);
   }
+
+  // The reply as it would go in the box: with reference images, each <Picture k>
+  // renumbered to where that image is (or will be) in the form's references; `apply`
+  // also adds the ones the form doesn't have yet.
+  const revisedText = (res, apply) =>
+    qst.images?.length ?
+      placeRevisePictures(qst.images, res.prompt || "", apply)
+    : { text: res.prompt || "", added: 0, left: [] };
 
   async function pollQ() {
     clearTimeout(qTimer);
@@ -1807,7 +1816,7 @@
         guide: q.guide.value,
         useRules: q.rules.checked,
       });
-      qst = { jobId: job.id, job, before };
+      qst = { jobId: job.id, job, before, images: qimgs.slice() };
       renderQ();
       pollQ();
     } catch (err) {
@@ -1838,8 +1847,19 @@
     const res = qst?.job?.result;
     if (!res || !qta) return;
     qundo = { ta: qta, value: qta.value };
-    setBox(qta, res.prompt || "");
+    const placed = revisedText(res, true);
+    setBox(qta, placed.text);
     qst.applied = true;
+    const plural = (n) => `${n} image${n === 1 ? "" : "s"}`;
+    q.appliedNote.textContent =
+      (placed.added ? ` ${plural(placed.added)} added to the references.` : "") +
+      (placed.left.length ?
+        ` ${plural(placed.left.length)} not added — ${
+            isH3T2V() ? "text-to-video takes no references"
+            : isH3I2V() ? "image-to-video takes one, as its first frame"
+            : "the reference field is full"
+          }.`
+      : "");
     renderQ();
   });
   $(".llm-rev-discard", qrev).addEventListener("click", () => {

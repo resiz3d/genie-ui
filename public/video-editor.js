@@ -6,7 +6,9 @@
 // that card as another video (or, ticked, in place of its video). Picked frames go to
 // the gallery as images or download as PNGs. The browser previews the clips itself;
 // the server (video-editor.js, ffmpeg) does the re-encode. Without ffmpeg, frames can
-// still be picked, at an assumed frame rate.
+// still be picked, at an assumed frame rate. Effects (overlay layers, desaturation,
+// a new size) come from the form in video-fx.js. window.GENie.videoEditor is the hook
+// for plugins (see plugins.js).
 (() => {
   const $ = (sel, root = document) => root.querySelector(sel);
   const API = "/api/video-editor";
@@ -96,6 +98,7 @@
         </label>
       </div>
     </div>
+    <div class="ve-fx hidden"></div>
     <div class="ve-target hidden">
       <label class="inline"><input type="checkbox" class="ve-overwrite" /> <span class="ve-overwrite-label"></span></label>
       <span class="muted ve-thint"></span>
@@ -109,7 +112,8 @@
     <div class="modal-actions">
       <span class="ve-proj-actions">
         <button type="button" class="btn-secondary ve-popen" title="Open an edit project you saved, to carry on with it">📂 Open project…</button>
-        <button type="button" class="btn-secondary ve-psave" disabled title="Save the clips, their order and cuts as a project to come back to and add to — no video is rendered (Ctrl+S)">💾 Save project</button>
+        <button type="button" class="btn-secondary ve-psave" disabled title="Save the clips, their order, cuts and effects as a project to come back to and add to — no video is rendered (Ctrl+S)">💾 Save project</button>
+        <span class="ve-plugin-actions"></span>
       </span>
       <button type="button" class="btn-secondary ve-reset hidden" title="Remove every clip">Start over</button>
       <button type="button" class="btn-secondary ve-close">Close</button>
@@ -177,6 +181,7 @@
     "restore", "cuts", "mix", "size", "fit", "msg", "err", "reset", "cancel", "save",
     "saveas", "import", "pick", "lastframe", "fcount", "fclear", "fdownload", "fsave",
     "fstrip", "target", "overwrite", "thint", "proj", "popen", "psave", "exports", "split",
+    "fx", "plugin-actions",
   ])
     el[k] = $(`.ve-${k}`, modal);
   el.badge = $(".ve-cut-badge", modal);
@@ -218,6 +223,24 @@
   // a saved edit has kept. null for an upload that's still only in the temp folder.
   const serverUrl = (c) => c.keptUrl || (c.remote ? c.url : null);
   const FALLBACK_FPS = 24; // without ffmpeg there's no way to read the real rate
+
+  // The effects form. Its layers name clips by the clip objects themselves.
+  let settingFx = false; // showing saved effects isn't a change
+  const fxForm = VideoFx.create(el.fx, {
+    clips: () => clips.map((c, i) => ({ ref: c, label: `Clip ${i + 1} only — ${c.name}` })),
+    projectId: () => projectFor(),
+    disabled: () => !!job,
+    onChange: () => {
+      if (!settingFx) touch();
+      renderSave();
+      VideoFx.preview(v, fxForm.get(), st);
+    },
+  });
+  const setFx = (fx, open) => {
+    settingFx = true;
+    fxForm.set(fx, open);
+    settingFx = false;
+  };
 
   const live = () => !!st && st.ready && loaded;
   const show = (node, msg) => {
@@ -475,6 +498,16 @@
     el.size.disabled = el.fit.disabled = !!job;
   }
 
+  // Save needs something to have changed: cuts, more than one clip, or an effect.
+  function renderSave() {
+    const done = clips.filter((c) => c.ready);
+    const seconds = done.reduce((t, c) => t + keptFrames(c) / c.fps, 0);
+    const edited =
+      clips.length > 1 || clips.some((c) => c.cuts.length) || !VideoFx.isEmpty(fxForm.get());
+    el.save.disabled = el.saveas.disabled =
+      !!job || !!ffmpegHint || !edited || !clips.length || done.length < clips.length || !(seconds > 0);
+  }
+
   // Everything that depends on the cuts and the clip list.
   function renderAll() {
     renderClips();
@@ -488,8 +521,10 @@
     renderMix();
     renderFrames();
     renderTarget();
-    el.save.disabled = el.saveas.disabled =
-      !!job || !!ffmpegHint || !edited || !clips.length || done.length < clips.length || !(seconds > 0);
+    renderSave();
+    el.fx.classList.toggle("hidden", !clips.length);
+    fxForm.refresh();
+    VideoFx.preview(v, fxForm.get(), st);
     renderProject();
     el.name.textContent = st ? `— ${st.name}` : "";
     el.work.classList.toggle("ve-busy", !live());
@@ -866,6 +901,9 @@
     el.cancel.classList.add("hidden");
     el.save.disabled = el.saveas.disabled = true;
     sizeFrom = null;
+    if (!keepFrames) setFx(VideoFx.blank(), false);
+    el.fx.classList.add("hidden");
+    VideoFx.preview(v, null, null);
     renderProject();
     el.mix.classList.add("hidden");
     if (keepFrames) for (const p of picks) p.clip = null;
@@ -896,6 +934,7 @@
           clips: list.map((c) => ({ id: c.id, keep: kept(c) })),
           base: baseClip()?.id,
           fit,
+          fx: VideoFx.forExport(fxForm.get(), list),
         }),
       });
     // The server sweeps uploads after some hours and forgets its links to GENie's own
@@ -1344,6 +1383,7 @@
           })),
           sizeFrom: sizeFrom ? list.indexOf(sizeFrom) : null,
           fit,
+          fx: VideoFx.forExport(fxForm.get(), list),
         }),
       });
     try {
@@ -1414,6 +1454,19 @@
       const base = edit.clips[edit.sizeFrom];
       sizeFrom = base && !base.missing ? added[edit.clips.filter((c) => !c.missing).indexOf(base)] : null;
     }
+    // A layer's clip is saved as its place in the project; one on a missing clip goes.
+    let k = 0;
+    const byIndex = edit.clips.map((c) => (c.missing ? null : added[k++]));
+    const fx = edit.fx || VideoFx.blank();
+    setFx(
+      {
+        ...fx,
+        layers: (fx.layers || [])
+          .filter((l) => l.clip == null || byIndex[l.clip])
+          .map((l) => ({ ...l, clip: l.clip == null ? null : byIndex[l.clip] })),
+      },
+      !VideoFx.isEmpty(fx),
+    );
     dirty = false;
     projDirty = missing.length > 0; // saving drops the missing clips from it
     renderAll();
@@ -2001,5 +2054,24 @@
 
   // ------------------------------------------------------------- entry point
   window.openVideoEditor = open;
+  // For plugins: open the editor, add a button beside 📂 Open project / 💾 Save
+  // project, and read (or set) the effects the form shows.
+  window.GENie = window.GENie || {};
+  window.GENie.videoEditor = {
+    open,
+    addButton(label, onClick, title = "") {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "btn-secondary";
+      b.textContent = label;
+      b.title = title;
+      b.addEventListener("click", onClick);
+      el["plugin-actions"].appendChild(b);
+      return b;
+    },
+    getEffects: () => structuredClone({ ...fxForm.get(), layers: fxForm.get().layers.filter((l) => l.clip == null) }),
+    setEffects: (fx) => setFx(fx, true),
+    projectId: () => projectFor(),
+  };
   document.getElementById("openVideoEditor")?.addEventListener("click", () => open());
 })();

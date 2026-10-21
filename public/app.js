@@ -10662,8 +10662,16 @@ const isUnfinished = (e) =>
 // Entries carrying any tag checked in the "Hide:" controls are dropped. The
 // "cancelled" checkbox isn't a card tag — it drops failed/cancelled runs (both
 // land on status "failed"), so it's handled here rather than via entryTags.
+// Runs still generating or queued stay in view whatever project is picked, so a
+// switch of project doesn't hide what's in flight.
+const inOtherProject = (e) => {
+  const filter = historyFilter.value || "all";
+  return filter !== "all" && (e.projectId || "default") !== filter;
+};
 function filterHistory(entries) {
-  const byProject = historyOfProject(entries);
+  const byProject = entries.filter(
+    (e) => e.status === "pending" || !inOtherProject(e),
+  );
   if (!hiddenTags.size) return byProject;
   return byProject.filter((e) => {
     if (hiddenTags.has("cancelled") && e.status === "failed") return false;
@@ -11044,6 +11052,62 @@ function addRefToPictureField(r) {
   return true;
 }
 
+// ✨ Revise with AI's reference images (gallery entries; the LLM saw them as <Picture 1>,
+// <Picture 2> … in that order) → the form's picture field: each one not already there
+// is added, and the revised text's <Picture k> is renumbered to where image k sits in
+// the field. H3 image-to-video takes the first only, as its first frame; text-to-video
+// takes none. `apply` false works out the same text without touching the form (for the
+// diff). Returns { text, added, left } — left: images that didn't fit.
+function placeRevisePictures(items, text, apply) {
+  const ready = (l) => l.items.filter((i) => i.status === "ready");
+  let target = null;
+  if (isComfy()) {
+    const f = comfyFields.find((x) => x.mediaKind === "image" && typeof x.addMedia === "function");
+    if (f)
+      target = {
+        ids: f.peekMedia().map((m) => m.id),
+        room: f.capacity,
+        add: (g) => f.addMedia({ id: g.id, url: g.localUrl, name: g.name }),
+      };
+  } else if (isH3I2V()) {
+    target = {
+      ids: [], // the first frame is replaced
+      room: 1,
+      add: (g) => (lists.firstFrame.addFromGallery(g), true),
+    };
+  } else if (!isH3T2V()) {
+    const n = () => ready(lists.image).length;
+    target = {
+      ids: ready(lists.image).map((i) => i.localId || null),
+      room: Infinity,
+      add: (g) => {
+        const before = n();
+        lists.image.addFromGallery(g);
+        return n() > before;
+      },
+    };
+  }
+  const map = new Map();
+  const left = [];
+  let added = 0;
+  items.forEach((g, k) => {
+    const at = target ? target.ids.indexOf(g.id) : -1;
+    if (at >= 0) return map.set(k + 1, at + 1);
+    if (!target || target.ids.length >= target.room || (apply && !target.add(g)))
+      return left.push(g);
+    target.ids.push(g.id);
+    map.set(k + 1, target.ids.length);
+    added++;
+  });
+  return {
+    text: String(text || "").replace(/<Picture (\d+)>/g, (m, k) =>
+      map.has(+k) ? `<Picture ${map.get(+k)}>` : m,
+    ),
+    added,
+    left,
+  };
+}
+
 // Best-effort human filename from a media URL (handles ComfyUI ?filename= URLs).
 function urlBasename(u) {
   try {
@@ -11394,7 +11458,9 @@ function renderHistory(entries) {
     const rt = entry.runtimeMs ? ` · ⏱ ${fmtDuration(entry.runtimeMs)}` : "";
     // show which project the entry belongs to when viewing all projects
     const proj =
-      filter === "all" ? ` · ${projectName(entry.projectId || "default")}` : "";
+      filter === "all" || inOtherProject(entry) ?
+        ` · ${projectName(entry.projectId || "default")}`
+      : "";
     if (comfyEntry) {
       const wfName =
         input.workflow ||

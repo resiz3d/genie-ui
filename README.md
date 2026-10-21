@@ -118,7 +118,17 @@ submit a prompt + reference media, then polls until the result is ready.
   re-encoded as H.264 MP4 at near-lossless quality. When clips differ in size or frame
   rate a warning spells out what will happen to each one, and you choose which clip's
   size the result takes and whether the others get black bars (**Fit**) or are cropped
-  (**Fill**). Needs [ffmpeg](docs/FFMPEG.md).
+  (**Fill**). **🎨 Effects** under the clips add PNG **overlay layers** (on the whole
+  video or on one clip; full-frame or placed in a corner, edge or centre, with size,
+  margin and opacity), **desaturate** by a set amount, and **resize** to a width,
+  height or both; the player previews the overlays and desaturation, and saved edit
+  projects keep the effects. Needs [ffmpeg](docs/FFMPEG.md).
+- **🧩 Local plugins** — personal additions that stay out of the repo: a folder in
+  `plugins/` (git-ignored) with a `server.js` (`export default (app, ctx) => …`, where
+  `ctx.videoEditor` is the editor's export engine) and/or a `public/` folder whose
+  `client.js` and `style.css` are loaded into the page (`window.GENie.videoEditor`
+  adds buttons to the editor and reads its effects). See the notes at the top of
+  `plugins.js`. Set `PLUGINS_DIR` in `.env` to keep them somewhere else.
 - **Reload-safe** — the in-flight task id is saved to `localStorage`, so closing or
   reloading the tab mid-generation resumes polling automatically on the next load
   (generations can take 5+ minutes; nothing is held on an open connection).
@@ -337,10 +347,14 @@ public/app.js      form handling, image upload, polling, history
 public/llm.js      ✨ Build with AI dialog and LLM settings
 llm.js             LLM sources, GPU turn-taking with ComfyUI, prompt-build jobs
 public/video-editor.js  ✂ Video editor dialog
-video-editor.js    the video editor's uploads, ffmpeg export jobs and download
+video-editor.js    the video editor's uploads, ffmpeg export jobs (with effects) and download
+public/video-fx.js the video editor's 🎨 Effects form and live preview
+plugins.js         loads local plugins from plugins/
+plugins/<name>/    your own plugins (git-ignored)
 .env.example       template — copy to .env and add your key
 output/<project>/   downloaded result videos (git-ignored, created at runtime)
 output/<project>/edited_videos/  what the ✂ Video editor's Save button writes
+output/<project>/edited_videos/overlays/  images added as 🎨 overlay layers
 input/<project>/  saved reference media — images/video/audio (git-ignored, created at runtime)
 exports/<name>/    shareable history bundles from the Export button (git-ignored, created at runtime)
 history.json       generation history (git-ignored, created at runtime)

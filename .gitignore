@@ -19,6 +19,9 @@ settings/
 video/
 images/
 
+# local plugins (personal additions — see plugins.js)
+plugins/
+
 # migration backups
 *.bak
 

@@ -4487,6 +4487,153 @@ textarea.wc-hl-on {
   }
 }
 
+/* Video effects (video-fx.js): a folding box under the clips. */
+.vfx-box {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  font-size: 0.85rem;
+}
+.vfx-box.on {
+  border-color: var(--accent);
+}
+.vfx-box > summary {
+  cursor: pointer;
+  padding: 0.5rem 0.7rem;
+  font-weight: 600;
+}
+.vfx-sum {
+  font-weight: 400;
+  margin-left: 0.3rem;
+}
+.vfx-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 0 0.7rem 0.7rem;
+}
+.vfx-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.6rem;
+}
+.vfx-label {
+  flex: 0 0 100%;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+.vfx-desat {
+  flex: 1 1 8rem;
+  min-width: 0;
+}
+.vfx-num {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  white-space: nowrap;
+}
+.vfx-row input[type="number"],
+.vfx-layer input[type="number"] {
+  width: 4.6rem;
+  padding: 0.35rem 0.45rem;
+}
+.vfx-size {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+.vfx-size input[type="number"] {
+  width: 5.6rem;
+}
+.vfx-row select,
+.vfx-layer select {
+  padding: 0.35rem 0.45rem;
+  max-width: 100%;
+}
+.vfx-hint,
+.vfx-empty {
+  margin: 0;
+  font-size: 0.8rem;
+}
+.vfx-layers {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+.vfx-layer {
+  display: flex;
+  gap: 0.55rem;
+  align-items: flex-start;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.4rem;
+  /* a checkerboard, so a transparent PNG shows what's see-through */
+  --c: rgba(255, 255, 255, 0.08);
+}
+.vfx-layer img {
+  flex: 0 0 3.5rem;
+  width: 3.5rem;
+  height: 3.5rem;
+  object-fit: contain;
+  border-radius: 4px;
+  background: conic-gradient(var(--c) 25%, transparent 0 50%, var(--c) 0 75%, transparent 0) 0 0 / 10px 10px;
+}
+.vfx-layer-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.vfx-layer-top {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+.vfx-layer-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+.vfx-layer-opts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.6rem;
+  align-items: center;
+}
+.vfx-layer-opts label {
+  font-size: 0.8rem;
+}
+.vfx-off {
+  opacity: 0.45;
+}
+/* the live preview's layers, over the player */
+.vfx-preview {
+  position: absolute;
+  pointer-events: none;
+  overflow: hidden;
+}
+.vfx-preview img {
+  position: absolute;
+  height: auto;
+}
+.vfx-preview img[style*="height: 100%"] {
+  object-fit: fill;
+}
+@media (min-width: 720px) {
+  .vfx-label {
+    flex: 0 0 5.5rem;
+  }
+  .vfx-layers,
+  .vfx-empty {
+    margin-left: 6.1rem;
+  }
+}
+
 /* Prompt groups: a header and the members' cards, numbered, in one framed block. */
 .sp-group {
   border: 1px solid var(--border);

@@ -5,12 +5,15 @@
 // page polls; the result is downloaded, saved as a new file in the project's
 // edited_videos folder, or — when the editor was opened from a History card or a
 // Gallery video — handed to server.js to add to (or replace) that card's video.
+// Effects (PNG overlay layers, desaturation, a new size) are applied in the same
+// re-encode. registerVideoEditor returns the export engine for plugins to drive.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { pipeline } from "node:stream";
+import express from "express";
 
 const MAX_UPLOAD = 8 * 1024 ** 3;
 const MAX_CLIPS = 50;
@@ -19,6 +22,91 @@ const STALE_MS = 12 * 60 * 60 * 1000; // temp files older than this are swept
 const UUID = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
 const VIDEO_FILE = /\.(mp4|mov|mkv|webm|m4v)$/i;
 const SAVE_FOLDER = "edited_videos"; // inside the project's output folder
+const OVERLAYS = "overlays"; // inside SAVE_FOLDER: PNGs uploaded as overlay layers
+const OVERLAY_FILE = /\.(png|webp|jpe?g)$/i;
+const MAX_OVERLAY = 50 * 1024 ** 2;
+const MAX_LAYERS = 8;
+
+// ------------------------------------------------------------- effects
+// fx: { desat: 0–100 (% of the colour taken out), width, height (0 = keep; one of
+// them alone keeps the shape), sizeMode: "fit" | "fill" | "stretch" (when both are
+// set and the shape changes), layers: [{ url, name, clip (index into the export's
+// clips, null = the whole video), pos, scale (% of the frame's width), opacity,
+// margin (% of the width) }] }. Anything out of range falls back to "no change".
+const POSITIONS = {
+  full: null, // stretched over the whole frame
+  "top-left": ["l", "t"], top: ["c", "t"], "top-right": ["r", "t"],
+  left: ["l", "c"], center: ["c", "c"], right: ["r", "c"],
+  "bottom-left": ["l", "b"], bottom: ["c", "b"], "bottom-right": ["r", "b"],
+};
+export function cleanFx(fx, clipCount = 1) {
+  fx = fx && typeof fx === "object" ? fx : {};
+  const num = (x, lo, hi, d) => {
+    const n = Number(x);
+    return x !== "" && x != null && Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : d;
+  };
+  const dim = (x) => {
+    const n = Math.round(Number(x));
+    return n >= 16 && n <= 8192 ? n : 0;
+  };
+  const layers = [];
+  for (const l of Array.isArray(fx.layers) ? fx.layers.slice(0, MAX_LAYERS) : []) {
+    const url = String(l?.url || "");
+    if (!url.startsWith("/output/") || !OVERLAY_FILE.test(url.split("?")[0])) continue;
+    layers.push({
+      url,
+      name: String(l.name || "").slice(0, 200),
+      clip: Number.isInteger(l.clip) && l.clip >= 0 && l.clip < clipCount ? l.clip : null,
+      pos: l.pos in POSITIONS ? l.pos : "full",
+      scale: num(l.scale, 1, 100, 25),
+      opacity: num(l.opacity, 0, 100, 100),
+      margin: num(l.margin, 0, 25, 3),
+    });
+  }
+  return {
+    desat: num(fx.desat, 0, 100, 0),
+    width: dim(fx.width),
+    height: dim(fx.height),
+    sizeMode: ["fill", "stretch"].includes(fx.sizeMode) ? fx.sizeMode : "fit",
+    layers,
+  };
+}
+
+const even = (n) => Math.max(2, n - (n % 2));
+
+// The size a w×h video comes out at after the resize effect, both even.
+function resized(w, h, fx) {
+  let W = fx.width;
+  let H = fx.height;
+  if (W && !H) H = Math.round((h * W) / w);
+  else if (H && !W) W = Math.round((w * H) / h);
+  else if (!W) [W, H] = [w, h];
+  return [even(W), even(H)];
+}
+
+// The filter that brings the joined video to that size ("" when there's no resize).
+function resizeFilter(w, h, fx) {
+  if (!fx.width && !fx.height) return "";
+  const [W, H] = resized(w, h, fx);
+  if (!(fx.width && fx.height) || fx.sizeMode === "stretch") return `scale=${W}:${H},setsar=1`;
+  return (
+    `scale=${W}:${H}:force_original_aspect_ratio=` +
+    (fx.sizeMode === "fill" ? `increase,crop=${W}:${H}` : `decrease,pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2`) +
+    ",setsar=1"
+  );
+}
+
+// One overlay layer on an fw×fh frame: how to prepare the image, and where it goes.
+function layerFilter(l, fw, fh) {
+  const fade = l.opacity < 100 ? `,colorchannelmixer=aa=${(l.opacity / 100).toFixed(3)}` : "";
+  if (!POSITIONS[l.pos]) return { prep: `scale=${fw}:${fh},format=rgba${fade}`, at: "0:0" };
+  const w = Math.max(2, Math.round((fw * l.scale) / 100));
+  const m = Math.round((fw * l.margin) / 100);
+  const [px, py] = POSITIONS[l.pos];
+  const x = { l: m, c: "(W-w)/2", r: `W-w-${m}` }[px];
+  const y = { t: m, c: "(H-h)/2", b: `H-h-${m}` }[py];
+  return { prep: `scale=${w}:-1,format=rgba${fade}`, at: `${x}:${y}` };
+}
 
 // ffmpeg prints a rounded rate ("23.98 fps"); the NTSC ones are really n·1000/1001.
 // Returns the exact rate for the fps filter and its numeric value.
@@ -290,20 +378,86 @@ export function registerVideoEditor(
     res.json({ code: 200, msg: "success", data: { id, ...p } });
   });
 
-  app.delete("/api/video-editor/source/:id", (req, res) => {
+  function dropSource(id) {
     // Only an upload is deleted — a linked video is the user's own file.
-    const file = linked.delete(req.params.id) ? null : findSource(req.params.id);
+    const file = linked.delete(id) ? null : findSource(id);
     if (file) unlink(file);
-    probes.delete(req.params.id);
-    for (const [jobId, job] of jobs)
-      if (job.sourceIds.includes(req.params.id)) dropJob(jobId);
+    probes.delete(id);
+    for (const [jobId, job] of jobs) if (job.sourceIds.includes(id)) dropJob(jobId);
+  }
+
+  app.delete("/api/video-editor/source/:id", (req, res) => {
+    dropSource(req.params.id);
     res.json({ code: 200, msg: "success" });
+  });
+
+  // ------------------------------------------------------------- overlay images
+  // An overlay layer's image is kept for good in the project's edited_videos/overlays,
+  // named after its content so the same PNG uploaded twice is one file.
+  const MAGIC = [
+    [".png", (b) => b.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))],
+    [".jpg", (b) => b[0] === 0xff && b[1] === 0xd8],
+    [".webp", (b) => b.subarray(0, 4).toString() === "RIFF" && b.subarray(8, 12).toString() === "WEBP"],
+  ];
+  app.post(
+    "/api/video-editor/overlays",
+    express.raw({ type: () => true, limit: MAX_OVERLAY }),
+    async (req, res) => {
+      const buf = req.body;
+      if (!Buffer.isBuffer(buf) || !buf.length) return fail(res, 400, "No image was sent");
+      const ext = MAGIC.find(([, is]) => is(buf))?.[0];
+      if (!ext) return fail(res, 415, "An overlay must be a PNG, WebP or JPEG image");
+      const slug = resolveProject(req.query.projectId).slug;
+      const folder = path.join(outputDir, slug, SAVE_FOLDER, OVERLAYS);
+      const base =
+        String(req.query.name || "overlay")
+          .replace(/[\\/:*?"<>|\x00-\x1f]/g, "_")
+          .replace(/\.[^.]*$/, "")
+          .trim()
+          .slice(0, 100) || "overlay";
+      const name = `${base}-${createHash("sha1").update(buf).digest("hex").slice(0, 8)}${ext}`;
+      try {
+        await fs.promises.mkdir(folder, { recursive: true });
+        const file = path.join(folder, name);
+        if (!fs.existsSync(file)) await fs.promises.writeFile(file, buf);
+      } catch (err) {
+        console.error("Video editor: saving an overlay failed:", err);
+        return fail(res, 500, `Couldn't save the image: ${err.message}`);
+      }
+      res.json({
+        code: 200,
+        msg: "success",
+        data: { url: `/output/${slug}/${SAVE_FOLDER}/${OVERLAYS}/${encodeURIComponent(name)}`, name: base },
+      });
+    },
+  );
+
+  // Every overlay image kept so far, in every project, newest first.
+  app.get("/api/video-editor/overlays", (req, res) => {
+    const out = [];
+    for (const p of projects()) {
+      const folder = path.join(outputDir, p.slug, SAVE_FOLDER, OVERLAYS);
+      let names = [];
+      try {
+        names = fs.readdirSync(folder).filter((n) => OVERLAY_FILE.test(n));
+      } catch {}
+      for (const name of names)
+        out.push({
+          url: `/output/${p.slug}/${SAVE_FOLDER}/${OVERLAYS}/${encodeURIComponent(name)}`,
+          name: name.replace(/-[0-9a-f]{8}\.[^.]+$/, ""),
+          project: p.name,
+          date: fs.statSync(path.join(folder, name)).mtime.toISOString(),
+        });
+    }
+    out.sort((a, b) => (a.date < b.date ? 1 : -1));
+    res.json({ code: 200, msg: "success", data: out });
   });
 
   // ------------------------------------------------------------- saved edits
   // An edit to come back to and add to: { id, name, projectId, createdAt, updatedAt,
   // clips: [{ url, name, cuts, markIn, markOut, cur }], sizeFrom (clip index | null),
-  // fit, exports: [{ url, name, at }] — the videos saved from it, newest last }. A clip uploaded from the device is moved out of the temp folder (which is
+  // fit, fx (the effects, layers' clip an index into clips), exports: [{ url, name,
+// at }] — the videos saved from it, newest last }. A clip uploaded from the device is moved out of the temp folder (which is
   // swept) into the project's edited_videos/sources the first time its edit is saved.
   const SOURCES = "sources"; // inside SAVE_FOLDER
   const readEdits = () => {
@@ -396,7 +550,7 @@ export function registerVideoEditor(
   });
 
   // body: { id? (to update), name, projectId, clips: [{ url | sourceId, name, cuts,
-  // markIn, markOut, cur }], sizeFrom, fit } → the saved edit, every clip with a url.
+  // markIn, markOut, cur }], sizeFrom, fit, fx } → the saved edit, every clip with a url.
   app.post("/api/video-editor/edits", async (req, res) => {
     const body = req.body || {};
     if (!Array.isArray(body.clips) || !body.clips.length || body.clips.length > MAX_CLIPS)
@@ -436,6 +590,7 @@ export function registerVideoEditor(
       clips,
       sizeFrom,
       fit: body.fit === "fill" ? "fill" : "fit",
+      fx: cleanFx(body.fx, clips.length),
       exports: old?.exports || [],
     };
     // Re-read: an upload being kept can take a while, and other saves may have landed.
@@ -486,26 +641,25 @@ export function registerVideoEditor(
     res.json({ code: 200, msg: "success" });
   });
 
-  // body: { clips: [{ id, keep: [[startFrame, endFrame), …] }, …], base, fit } — the
-  // clips in playing order, each with the frame ranges of it to keep; `base` is the id
-  // of the clip whose size and frame rate the result takes (default: the first), and
-  // `fit` says how the others meet that size: "fit" (bars) or "fill" (crop).
-  app.post("/api/video-editor/export", async (req, res) => {
-    const clips = req.body?.clips;
+  // body: { clips: [{ id, keep: [[startFrame, endFrame), …] }, …], base, fit, fx } —
+  // the clips in playing order, each with the frame ranges of it to keep; `base` is
+  // the id of the clip whose size and frame rate the result takes (default: the
+  // first), `fit` says how the others meet that size: "fit" (bars) or "fill" (crop),
+  // and `fx` the effects (see cleanFx). → { args (ffmpeg's, writing to `out`), total
+  // (frames), sourceIds } or { error: [status, msg, id?] }.
+  async function planExport(body, out) {
+    const clips = body?.clips;
     if (!Array.isArray(clips) || !clips.length || clips.length > MAX_CLIPS)
-      return fail(res, 400, "Nothing to save");
+      return { error: [400, "Nothing to save"] };
     const srcs = [];
     const infos = [];
     let segments = 0;
     for (const clip of clips) {
       const src = findSource(clip?.id);
-      // 404 names the missing upload so the page can send just that file again.
-      if (!src)
-        return res
-          .status(404)
-          .json({ code: 404, msg: "An upload is no longer on the server", id: clip?.id });
+      // The id names the missing upload so the page can send just that file again.
+      if (!src) return { error: [404, "An upload is no longer on the server", clip?.id] };
       const p = probes.get(clip.id) || (await probe(src));
-      if (p.error) return fail(res, 422, p.error);
+      if (p.error) return { error: [422, p.error] };
       probes.set(clip.id, p);
       let last = 0;
       const ok =
@@ -520,31 +674,69 @@ export function registerVideoEditor(
         });
       segments += ok ? clip.keep.length : 0;
       if (!ok || segments > MAX_SEGMENTS)
-        return fail(res, 400, ok ? "Too many cuts to save in one go" : "A clip has nothing left to keep");
+        return { error: [400, ok ? "Too many cuts to save in one go" : "A clip has nothing left to keep"] };
       srcs.push(src);
       infos.push(p);
+    }
+    const fx = cleanFx(body.fx, clips.length);
+    const images = [];
+    for (const l of fx.layers) {
+      const file = mediaFile(l.url);
+      if (!file) return { error: [404, `The overlay image${l.name ? ` ${l.name}` : ""} is no longer there`] };
+      images.push(file);
     }
 
     // Video is cut by frame number (exact), audio by the matching times. With several
     // clips, every piece is first brought to the base clip's size and frame rate —
     // never stretched: either shrunk inside it with black bars, or grown to cover it
     // and cropped — and to one audio format (silence for a clip that has no sound),
-    // because the join needs them all alike.
-    const first = infos[clips.findIndex((c) => c.id === req.body.base)] || infos[0];
+    // because the join needs them all alike. Desaturation and a clip's own overlay
+    // layers go on each piece; the resize and whole-video layers on the joined result,
+    // so a layer is drawn at the size it ends up and never loses its colour.
+    const first = infos[clips.findIndex((c) => c.id === body.base)] || infos[0];
     const multi = clips.length > 1;
     const audio = infos.some((p) => p.hasAudio);
     const W = first.width - (first.width % 2);
     const H = first.height - (first.height % 2);
-    if (multi && !(W && H)) return fail(res, 422, "Couldn't read that clip's size");
+    if ((multi || fx.layers.length || fx.width || fx.height) && !(W && H))
+      return { error: [422, "Couldn't read that clip's size"] };
     const fit =
       !multi ? ""
       : `,fps=${first.rate},scale=${W}:${H}:force_original_aspect_ratio=` +
-        (req.body.fit === "fill" ?
+        (body.fit === "fill" ?
           `increase,crop=${W}:${H}`
         : `decrease,pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2`) +
         ",setsar=1,format=yuv420p";
+    const tone = fx.desat ? `,hue=s=${(1 - fx.desat / 100).toFixed(3)}` : "";
     const mix = multi ? ",aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo" : "";
+    const [pw, ph] = multi ? [W, H] : [first.width, first.height]; // a piece's size
+    const [ow, oh] = resized(W, H, fx); // the result's
+
+    // Each layer's image goes in once, split into as many copies as it's drawn.
     const graph = [];
+    const uses = fx.layers.map((l) =>
+      l.clip == null ? 1 : clips[l.clip].keep.length,
+    );
+    const placed = fx.layers.map((l, i) => {
+      const at = layerFilter(l, ...(l.clip == null ? [ow, oh] : [pw, ph]));
+      graph.push(
+        `[${srcs.length + i}:v]${at.prep},split=${uses[i]}${Array.from({ length: uses[i] }, (_, u) => `[o${i}_${u}]`).join("")}`,
+      );
+      return at.at;
+    });
+    const next = fx.layers.map(() => 0);
+    // Draws the layers `which` picks onto stream `from`, ending in `to`.
+    const drawLayers = (from, to, which) => {
+      let cur = from;
+      fx.layers.forEach((l, i) => {
+        if (!which(l)) return;
+        const out = `${to}_${i}`;
+        graph.push(`[${cur}][o${i}_${next[i]++}]overlay=${placed[i]}[${out}]`);
+        cur = out;
+      });
+      return cur;
+    };
+
     const pieces = [];
     let total = 0;
     clips.forEach((clip, k) => {
@@ -552,64 +744,89 @@ export function registerVideoEditor(
       const t = (f) => (f / p.fps).toFixed(6);
       for (const [s, e] of clip.keep) {
         const n = pieces.length;
-        graph.push(`[${k}:v:0]trim=start_frame=${s}:end_frame=${e},setpts=PTS-STARTPTS${fit}[v${n}]`);
+        graph.push(`[${k}:v:0]trim=start_frame=${s}:end_frame=${e},setpts=PTS-STARTPTS${fit}${tone}[p${n}]`);
+        const vout = drawLayers(`p${n}`, `p${n}`, (l) => l.clip === k);
         if (audio)
           graph.push(
             p.hasAudio ?
               `[${k}:a:0]atrim=start=${t(s)}:end=${t(e)},asetpts=PTS-STARTPTS${mix}[a${n}]`
             : `anullsrc=r=48000:cl=stereo,atrim=duration=${t(e - s)}${mix}[a${n}]`,
           );
-        pieces.push(`[v${n}]${audio ? `[a${n}]` : ""}`);
+        pieces.push(`[${vout}]${audio ? `[a${n}]` : ""}`);
         total += ((e - s) / p.fps) * first.fps;
       }
     });
     graph.push(
       `${pieces.join("")}concat=n=${pieces.length}:v=1:a=${audio ? 1 : 0}[vc]${audio ? "[a]" : ""}`,
       // back on a constant frame rate; yuv420p needs even dimensions
-      `[vc]fps=${first.rate},scale=trunc(iw/2)*2:trunc(ih/2)*2[v]`,
+      `[vc]fps=${first.rate},${resizeFilter(W, H, fx) || "scale=trunc(iw/2)*2:trunc(ih/2)*2"}[vr]`,
     );
+    const vout = drawLayers("vr", "vg", (l) => l.clip == null);
 
+    return {
+      total: Math.max(1, Math.round(total)),
+      sourceIds: clips.map((c) => c.id),
+      args: [
+        "-hide_banner", "-y", "-v", "error", "-nostats", "-progress", "pipe:1",
+        ...srcs.flatMap((src) => ["-i", src]),
+        ...images.flatMap((img) => ["-i", img]),
+        "-filter_complex", graph.join(";"), "-map", `[${vout}]`, ...(audio ? ["-map", "[a]"] : []),
+        "-c:v", "libx264", "-preset", "medium", "-crf", "14", "-pix_fmt", "yuv420p",
+        ...(audio ? ["-c:a", "aac", "-b:a", "192k"] : []),
+        "-movflags", "+faststart", out,
+      ],
+    };
+  }
+
+  // Plans and starts an export as a job → { jobId, job } (job.finished settles when
+  // it's done, failed or cancelled) or { error: [status, msg, id?] }.
+  async function startExport(body) {
     const jobId = randomUUID();
+    const file = path.join(dir, `${jobId}.out.mp4`);
+    const plan = await planExport(body, file);
+    if (plan.error) return plan;
     const job = {
       state: "running",
       done: 0,
-      total: Math.max(1, Math.round(total)),
-      file: path.join(dir, `${jobId}.out.mp4`),
+      total: plan.total,
+      file,
       error: "",
       proc: null,
-      sourceIds: clips.map((c) => c.id),
+      sourceIds: plan.sourceIds,
     };
     jobs.set(jobId, job);
-    res.json({ code: 200, msg: "success", data: { jobId, frames: job.total } });
-
-    const r = await ffmpeg(
-      ["-hide_banner", "-y", "-v", "error", "-nostats", "-progress", "pipe:1",
-       ...srcs.flatMap((src) => ["-i", src]),
-       "-filter_complex", graph.join(";"), "-map", "[v]", ...(audio ? ["-map", "[a]"] : []),
-       "-c:v", "libx264", "-preset", "medium", "-crf", "14", "-pix_fmt", "yuv420p",
-       ...(audio ? ["-c:a", "aac", "-b:a", "192k"] : []),
-       "-movflags", "+faststart", job.file],
-      {
+    job.finished = (async () => {
+      const r = await ffmpeg(plan.args, {
         onSpawn: (proc) => (job.proc = proc),
         onLine: (l) => {
           const m = /^frame=\s*(\d+)/.exec(l);
           if (m) job.done = Number(m[1]);
         },
-      },
-    );
-    job.proc = null;
-    if (job.state === "cancelled") return void unlink(job.file);
-    if (r.code === 0) {
-      job.state = "done";
-      return;
+      });
+      job.proc = null;
+      if (job.state === "cancelled") return void unlink(job.file);
+      if (r.code === 0) {
+        job.state = "done";
+        return;
+      }
+      job.state = "error";
+      job.error =
+        r.missing ? MISSING : (
+          r.tail.trim().split(/\r?\n/).slice(-3).join("\n") || "ffmpeg failed"
+        );
+      console.error("Video editor export failed:", job.error);
+      unlink(job.file);
+    })();
+    return { jobId, job };
+  }
+
+  app.post("/api/video-editor/export", async (req, res) => {
+    const r = await startExport(req.body);
+    if (r.error) {
+      const [code, msg, id] = r.error;
+      return res.status(code).json({ code, msg, ...(id ? { id } : {}) });
     }
-    job.state = "error";
-    job.error =
-      r.missing ? MISSING : (
-        r.tail.trim().split(/\r?\n/).slice(-3).join("\n") || "ffmpeg failed"
-      );
-    console.error("Video editor export failed:", job.error);
-    unlink(job.file);
+    res.json({ code: 200, msg: "success", data: { jobId: r.jobId, frames: r.job.total } });
   });
 
   app.get("/api/video-editor/jobs/:id", (req, res) => {
@@ -638,6 +855,35 @@ export function registerVideoEditor(
     res.download(job.file, `${name}.mp4`);
   });
 
+  // Copy a finished video into the project's edited_videos folder (or a `folder`
+  // inside it) under a name that isn't taken → { name, url, folder }.
+  async function saveToProject(file, { projectId, name, folder: sub } = {}) {
+    const slug = resolveProject(projectId).slug;
+    const clean = (x) => String(x || "").replace(/[\\/:*?"<>|\x00-\x1f]/g, "_").trim();
+    const parts = [
+      SAVE_FOLDER,
+      ...String(sub || "").split(/[\\/]+/).map(clean).filter((x) => x && !/^\.+$/.test(x)).slice(0, 3),
+    ];
+    const folder = path.join(outputDir, slug, ...parts);
+    const base = clean(name).replace(/\.[^.]*$/, "").slice(0, 150) || "edited";
+    await fs.promises.mkdir(folder, { recursive: true });
+    for (let n = 1; ; n++) {
+      const name = `${base}${n > 1 ? `-${n}` : ""}.mp4`;
+      try {
+        // COPYFILE_EXCL fails rather than replace a file that's already there
+        await fs.promises.copyFile(file, path.join(folder, name), fs.constants.COPYFILE_EXCL);
+      } catch (err) {
+        if (err.code === "EEXIST" && n < 10000) continue;
+        throw err;
+      }
+      return {
+        name,
+        url: `/output/${slug}/${parts.map(encodeURIComponent).join("/")}/${encodeURIComponent(name)}`,
+        folder: path.join(path.basename(outputDir), slug, ...parts),
+      };
+    }
+  }
+
   // Keep a finished export: by default in the project's edited_videos folder, under a
   // name that isn't taken, so an existing file is never overwritten. With `target`
   // ({ kind: "history" | "gallery", id, index, overwrite }) it goes to that History
@@ -656,36 +902,10 @@ export function registerVideoEditor(
         return fail(res, err.status || 500, err.status ? err.message : `Couldn't save: ${err.message}`);
       }
     }
-    const slug = resolveProject(req.body?.projectId).slug;
-    const folder = path.join(outputDir, slug, SAVE_FOLDER);
-    const base =
-      String(req.body?.name || "")
-        .replace(/[\\/:*?"<>|\x00-\x1f]/g, "_")
-        .replace(/\.[^.]*$/, "")
-        .trim()
-        .slice(0, 150) || "edited";
     try {
-      await fs.promises.mkdir(folder, { recursive: true });
-      for (let n = 1; ; n++) {
-        const name = `${base}${n > 1 ? `-${n}` : ""}.mp4`;
-        try {
-          // COPYFILE_EXCL fails rather than replace a file that's already there
-          await fs.promises.copyFile(job.file, path.join(folder, name), fs.constants.COPYFILE_EXCL);
-        } catch (err) {
-          if (err.code === "EEXIST" && n < 10000) continue;
-          throw err;
-        }
-        dropJob(req.params.id);
-        return res.json({
-          code: 200,
-          msg: "success",
-          data: {
-            name,
-            url: `/output/${slug}/${SAVE_FOLDER}/${encodeURIComponent(name)}`,
-            folder: path.join(path.basename(outputDir), slug, SAVE_FOLDER),
-          },
-        });
-      }
+      const data = await saveToProject(job.file, req.body || {});
+      dropJob(req.params.id);
+      res.json({ code: 200, msg: "success", data });
     } catch (err) {
       console.error("Video editor save failed:", err);
       fail(res, 500, `Couldn't save the file: ${err.message}`);
@@ -696,4 +916,34 @@ export function registerVideoEditor(
     dropJob(req.params.id);
     res.json({ code: 200, msg: "success" });
   });
+
+  // The export engine, for plugins (see plugins.js).
+  return {
+    ffmpeg,
+    probe,
+    haveFfmpeg,
+    // A video the editor can use: an upload's id, or one of GENie's own (by url).
+    async importUrl(url) {
+      const file = mediaFile(url);
+      if (!file || !VIDEO_FILE.test(file)) return { error: "That video is no longer there" };
+      const p = await probe(file);
+      if (p.error) return p;
+      const id = randomUUID();
+      linked.set(id, file);
+      probes.set(id, p);
+      return { id, ...p };
+    },
+    async sourceInfo(id) {
+      const src = findSource(id);
+      if (!src) return null;
+      const p = probes.get(id) || (await probe(src));
+      if (!p.error) probes.set(id, p);
+      return p;
+    },
+    dropSource,
+    startExport, // (body) → { jobId, job } | { error }
+    dropJob,
+    saveToProject, // (file, { projectId, name, folder }) → { name, url, folder }
+    cleanFx,
+  };
 }
