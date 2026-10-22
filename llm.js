@@ -107,7 +107,7 @@ export const PLAIN_REVISE_INSTRUCTIONS =
 const PLAIN_REVISE_REPLY =
   "Reply with ONLY the complete revised text: no preamble, no explanation, no quotes, no code fences, no markers around it.";
 // The guides a quick revise can follow (see guideFor in createLlm).
-export const PLAIN_REVISE_GUIDES = new Set(["", "default", "minimax", "minimax_t2v"]);
+export const PLAIN_REVISE_GUIDES = new Set(["", "default", "minimax", "minimax_t2v", "kling"]);
 
 export const BUILD_FORMATS = new Set(["default", "minimax", "minimax_t2v"]);
 
@@ -152,6 +152,22 @@ export const MINIMAX_T2V_INSTRUCTIONS = [
   fieldList("style", "shots", "soundscape", "music"),
   PLAIN_TEXT,
   `${JSON_ONLY}\n{"title": "a short title, at most 8 words", "style": "…", "shots": [{"seconds": 5, "text": "…"}], "soundscape": "…", "music": "…"}`,
+].join("\n\n");
+
+// Kling 4.0 (through kie.ai) — a guide for ✨ Revise with AI only; the prompt is plain
+// text. Distilled from Kuaishou's Kling 4 user guide; see docs/KLING-PROMPTING.md.
+export const KLING_INSTRUCTIONS = [
+  "You write prompts for Kling 4.0, an AI video model with reference-to-video and keyframe-to-video modes. It generates its own dialogue, sound effects and music.",
+  "References are named the way kie.ai's API names them, and every mention must match a file that is sent: reference images @image_1, @image_2 …, reference videos @video_1 …, voices @voice_1 … @voice_3; in keyframe-to-video @first_frame, @keyframe_1 … @keyframe_8 and @last_frame. Never write @Image1, <Picture 1> or any other form in the prompt, and don't invent mentions for files that aren't there. When the user attaches pictures to look at, describe what they show in words instead.",
+  "Give every reference a role and say what to keep from it, e.g. \"@image_1 is the hero; keep her face, hair and red jacket exactly\" or \"@video_1 sets the camera movement and the timing of the fight\".",
+  "Reference-to-video prompts follow this order, each part only when it changes the result: [Asset roles] one line per reference; [Overall settings] scene and texture, visual style, camera tone; [Sequence of events] timed beats like \"0–3s: …\", \"3–7s: …\", \"7s–end: …\" covering the visuals, action, emotion and camera; [Audio] dialogue, ambience, effects and music. A single clear sentence (who, where, doing what, feeling what) is a valid prompt too.",
+  "Keyframe-to-video prompts say what each frame shows, then what happens between them and how the camera gets from one to the next, as timed lines like \"0–3s | @first_frame to @keyframe_1: …\". Keep the same people, clothing, props and positions throughout. First, middle and last frames together are at most the duration in seconds plus one, and at most 10.",
+  "To change an existing video rather than borrow from it, the prompt must say \"Edit @video_1\" (\"Reference @video_1\" makes a new video instead) and usually ends with \"Keep everything else unchanged.\"",
+  "Be concrete: replace vague words like premium, vintage feel or cinematic with what makes them so (materials, light, colours, lens, framing). Don't pile on adjectives; longer is not better.",
+  "Camera and cuts: use plain film language (handheld, tracking, push in by an amount, pull out, tilt, pan, whip pan, orbit, low angle, overhead, wide, medium close-up, close-up, rack focus). For several shots give each its time range and say where the hard cuts fall; for a single take say \"one continuous shot, no cuts\". Keep continuity across cuts.",
+  "Dialogue: put each line in double quotes after who says it, in which language and how, e.g. She says in slow, clear Spanish: \"…\". With several speakers, one speaks at a time with no overlap. Describe ambience, effects and music in words.",
+  "Prefer positive wording (\"she is shown in profile\") over negatives, which can cause mistakes. The exclusions worth stating are \"No subtitles\" and \"No background music\" when they are not wanted.",
+  "Stay within 8,000 characters.",
 ].join("\n\n");
 
 // Step 1 of a build — the shot list alone.
@@ -1959,6 +1975,7 @@ export function createLlm(deps) {
     const whole =
       name === "minimax" ? MINIMAX_INSTRUCTIONS
       : name === "minimax_t2v" ? MINIMAX_T2V_INSTRUCTIONS
+      : name === "kling" ? KLING_INSTRUCTIONS
       : name === "default" ? readSettings().options.instructions || DEFAULT_INSTRUCTIONS
       : "";
     const cut = whole.indexOf("Reply with only");

@@ -40,8 +40,33 @@ heading for that version with the date, commit, then tag the commit `vX.Y.Z`.
   engine, `public/client.js` and `public/style.css` are added to the page, and
   `window.GENie.videoEditor` lets a plugin add buttons to the editor and read its
   effects. A plugin that fails to load is skipped with a message.
+- **⇆ Flip in the 🖼 Image editor.** Mirrors the image left to right, alone or with a
+  crop (the crop box follows the picture); a flip alone is enough to Save. Reset
+  unflips. Saved files are named `-flip` / `-crop-flip`.
+- **Kling 4.0 (kie.ai)** — two new entries in the model dropdown, one per kie.ai model:
+  - **Reference-to-video:** up to 10 reference images, 5 videos (≤ 30s total) and 3
+    voices (the Reference audio list, sent as `@voice_1` …), 15 references at most in
+    all; **Keep original sound** keeps a reference video's soundtrack.
+  - **Keyframe-to-video:** first frame, up to 8 middle keyframes (the image list, in
+    order) and a last frame; the total is capped by the duration (4 frames at 3s … 10
+    at 9s+).
+  - Both: 3–30s, 720p or 1080p, aspect ratio auto / 16:9 / 9:16 / 1:1 / 21:9, prompts
+    up to 8,000 characters. Audio is native, so there is no audio / web search / NSFW
+    switch.
+  - **Prompting:** a guide in [docs/KLING-PROMPTING.md](docs/KLING-PROMPTING.md)
+    (from Kuaishou's Kling 4 user guide, using kie.ai's `@image_1` / `@first_frame`
+    names). **＋ Kling template** on the prompt box inserts a blank prompt for the
+    selected mode, and **✨ Revise with AI** has a **Kling 4.0 guide**.
+- **Seedance 2.5 drafts.** A **Draft (480p preview)** checkbox sends `draft: true` — a
+  cheap 480p preview (the resolution is pinned, Return last frame is off). A finished
+  draft's History card gets **⇪ Finalize 1080p** for 7 days, which renders it at
+  1080p through `bytedance/seedance-2-5-draft`; the new card keeps the draft's prompt
+  and settings. Unrelated to the 📝 draft tag.
 
 ### Changed
+
+- **Seedance 2.5 prompt cap is 20,480 characters** (was 30,000), per kie.ai's current
+  docs.
 
 - **Runs in flight show in History whatever project is picked.** A card that's
   generating or queued stays in the list after you switch projects, labelled with its

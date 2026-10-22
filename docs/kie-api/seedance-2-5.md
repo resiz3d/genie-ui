@@ -17,7 +17,7 @@ images — stricter than 2.0/Fast/Mini. `last_frame_url` cannot be sent alone;
 
 | Parameter | Type | Required | Default | Notes |
 | --- | --- | --- | --- | --- |
-| `prompt` | string | No | (long example) | Text description. Max 30,000 chars. Reference images with `@Image1`, `@Image2`, … |
+| `prompt` | string | No | (long example) | Text description. Max 20,480 chars (was 30,000 before 2026-10). Reference images with `@Image1`, `@Image2`, … |
 | `first_frame_url` | string | No | — | Start keyframe (URL or `asset://{assetId}`). Cannot be used with `reference_image_urls`, `reference_video_urls` or `reference_audio_urls`. |
 | `last_frame_url` | string | No | — | End keyframe. **Requires `first_frame_url`.** |
 | `reference_image_urls` | string[] | No | — | **Up to 30.** <30MB each. jpeg/png/webp/bmp/tiff/gif; aspect 0.4–2.5; sides 300–6000px. Mutually exclusive with first/last frame. |
@@ -32,13 +32,33 @@ images — stricter than 2.0/Fast/Mini. `last_frame_url` cannot be sent alone;
 | `web_search` | boolean | No | — | Enable online search. |
 | `nsfw_checker` | boolean | No | `false` | `false` disables **kie.ai's** content filter; results then come "directly by the model itself", so the model provider's own moderation still applies. |
 
-### `draft` (undocumented in the param table)
+| `draft` | boolean | No | `false` | Draft mode: **480p only**. The task id stays valid as a draft for 7 days. `return_last_frame` can't be `true` with it. |
 
-The docs mention `draft` only in passing, under `return_last_frame`: *"When
-draft=true, this parameter cannot be set to true."* No `draft` field is otherwise
-listed — no type, default, or description. Understood intent (per project notes):
-generate a cheap low-quality preview, then re-run at full quality if approved.
-Not yet exposed by the tool; treat as unconfirmed until kie.ai documents it.
+## Drafts → `bytedance/seedance-2-5-draft`
+
+Documented 2026-10 (<https://docs.kie.ai/market/bytedance/seedance-2-5-draft>). Run
+`bytedance/seedance-2-5` with `draft: true` for a cheap 480p preview, then create a
+task on the separate draft model to render the final from it:
+
+| Parameter | Type | Required | Default | Notes |
+| --- | --- | --- | --- | --- |
+| `draft_task_id` | string | **Yes** | — | Task id of the 2.5 draft run. Valid 7 days from the draft's creation. |
+| `resolution` | string | **Yes** | — | `1080p` (only value). |
+| `output_format` | string | No | — | `mp4` \| `mov`. |
+| `return_last_frame` | boolean | No | `false` | |
+| `nsfw_checker` | boolean | No | `false` | |
+
+No prompt, duration or aspect ratio — they come from the draft.
+
+```json
+{
+  "model": "bytedance/seedance-2-5-draft",
+  "input": { "draft_task_id": "<draft taskId>", "resolution": "1080p", "output_format": "mp4" }
+}
+```
+
+GENie: the **Draft (480p preview)** checkbox sends `draft: true`; a finished draft's
+History card offers **⇪ Finalize 1080p** while it's under 7 days old.
 
 ## Example request
 

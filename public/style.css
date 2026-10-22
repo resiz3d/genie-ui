@@ -4878,6 +4878,14 @@ textarea.wc-hl-on {
   display: flex;
   gap: 0.75rem;
 }
+.ie-flip.on {
+  font-weight: 600;
+}
+/* Flipped is shown by mirroring: the box keeps its place, so the crop box and
+   pointer maths work on what you see. */
+.ie-img.ie-flipped {
+  transform: scaleX(-1);
+}
 .ie-tip {
   margin: 0;
 }

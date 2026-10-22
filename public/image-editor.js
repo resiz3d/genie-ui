@@ -52,7 +52,8 @@
       <div class="fp-readout">
         <span class="ie-size"></span>
         <span class="ie-links">
-          <button type="button" class="link-btn ie-reset" title="Back to the whole image">Reset</button>
+          <button type="button" class="link-btn ie-flip" title="Mirror the image left to right" aria-pressed="false">⇆ Flip</button>
+          <button type="button" class="link-btn ie-reset" title="Back to the whole image, unflipped">Reset</button>
           <button type="button" class="link-btn ie-other" title="Crop a different image">Open another…</button>
         </span>
       </div>
@@ -102,7 +103,7 @@
   const el = {};
   for (const k of [
     "name", "drop", "import", "file", "editor", "ratios", "stage", "frame", "img", "crop",
-    "size", "reset", "other", "target", "overwrite", "thint", "msg", "err", "saveas",
+    "size", "flip", "reset", "other", "target", "overwrite", "thint", "msg", "err", "saveas",
     "gallery", "save",
   ])
     el[k] = $(`.ie-${k}`, modal);
@@ -113,7 +114,8 @@
   let src = null;
   let W = 0;
   let H = 0;
-  let crop = null; // { x, y, w, h } in the image's own pixels
+  let crop = null; // { x, y, w, h } in the image's own pixels, as shown (flipped or not)
+  let flipped = false; // mirrored left to right
   let ratioKey = "orig";
   // Where Save puts the crop when the editor was opened from a card:
   // { kind: "history" | "gallery", id, index, projectId } — null for the plain tool.
@@ -132,6 +134,7 @@
   const ratio = () =>
     ratioKey === "orig" ? W / H : (RATIOS.find(([k]) => k === ratioKey)?.[2] ?? null);
   const whole = () => !crop || (crop.x === 0 && crop.y === 0 && crop.w === W && crop.h === H);
+  const edited = () => !!crop && (flipped || !whole());
   const baseName = () => String(src?.name || "image").replace(/\.[^.]+$/, "");
   const extOf = (name) => (/\.([a-z0-9]+)$/i.exec(String(name).split("?")[0])?.[1] || "").toLowerCase();
 
@@ -180,9 +183,13 @@
         height: `${crop.h * s}px`,
       });
       el.size.textContent =
-        whole() ? `${W} × ${H} px — the whole image` : `${crop.w} × ${crop.h} px (from ${W} × ${H})`;
+        (whole() ? `${W} × ${H} px — the whole image` : `${crop.w} × ${crop.h} px (from ${W} × ${H})`) +
+        (flipped ? ", flipped" : "");
     }
-    const nothing = !crop || whole() || busy;
+    el.img.classList.toggle("ie-flipped", flipped);
+    el.flip.classList.toggle("on", flipped);
+    el.flip.setAttribute("aria-pressed", String(flipped));
+    const nothing = !edited() || busy;
     el.save.disabled = el.saveas.disabled = el.gallery.disabled = nothing;
     renderTarget();
   }
@@ -284,7 +291,7 @@
       // Free keeps the box as it is; a shape takes the largest box of it.
       if (key !== "free") {
         fitRatio();
-        saved = whole();
+        saved = !edited();
       }
       render();
     });
@@ -297,6 +304,7 @@
     if (src?.objectUrl) URL.revokeObjectURL(src.objectUrl);
     src = { ...opts, ext: extOf(opts.name) || extOf(opts.url) };
     crop = null;
+    flipped = false;
     W = H = 0;
     showErr("");
     el.name.textContent = `— ${opts.name}`;
@@ -328,6 +336,7 @@
     if (src?.objectUrl) URL.revokeObjectURL(src.objectUrl);
     src = null;
     crop = null;
+    flipped = false;
     W = H = 0;
     target = null;
     saved = true;
@@ -342,22 +351,33 @@
   }
 
   // ------------------------------------------------------------- saving
+  // What the edit adds to the file name: -crop, -flip or -crop-flip.
+  const suffix = () => [!whole() && "crop", flipped && "flip"].filter(Boolean).join("-");
+
   // The crop as a file of the source's type (PNG when that type can't be written).
+  // Flipped, the box is over the mirrored image: take the matching part of the
+  // original and mirror it.
   async function cropped() {
     const type = OUT_TYPES[src.ext] || "image/png";
     const canvas = document.createElement("canvas");
     canvas.width = crop.w;
     canvas.height = crop.h;
-    canvas.getContext("2d").drawImage(el.img, crop.x, crop.y, crop.w, crop.h, 0, 0, crop.w, crop.h);
+    const ctx = canvas.getContext("2d");
+    const sx = flipped ? W - crop.x - crop.w : crop.x;
+    if (flipped) {
+      ctx.translate(crop.w, 0);
+      ctx.scale(-1, 1);
+    }
+    ctx.drawImage(el.img, sx, crop.y, crop.w, crop.h, 0, 0, crop.w, crop.h);
     const blob = await new Promise((resolve) => canvas.toBlob(resolve, type, 0.95));
-    if (!blob) throw new Error("This browser couldn't make the cropped image");
+    if (!blob) throw new Error("This browser couldn't make the edited image");
     const ext = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp" }[blob.type] || "png";
-    return { blob, ext, name: `${baseName()}-crop.${ext}` };
+    return { blob, ext, name: `${baseName()}-${suffix()}.${ext}` };
   }
 
   // Run one save at a time, with the buttons off and errors shown.
   async function run(what, fn) {
-    if (busy || !crop || whole()) return;
+    if (busy || !edited()) return;
     busy = true;
     showErr("");
     showStatus(`${what}…`);
@@ -452,14 +472,14 @@
   // Chromium offers this, and only to localhost / https pages); elsewhere the crop goes
   // through the browser's normal download.
   async function saveAs() {
-    if (busy || !crop || whole()) return;
+    if (busy || !edited()) return;
     const type = OUT_TYPES[src.ext] || "image/png";
     const ext = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp" }[type];
     let handle = null;
     if (window.showSaveFilePicker) {
       try {
         handle = await window.showSaveFilePicker({
-          suggestedName: `${baseName()}-crop.${ext}`,
+          suggestedName: `${baseName()}-${suffix()}.${ext}`,
           types: [{ description: "Image", accept: { [type]: [`.${ext}`] } }],
         });
       } catch (err) {
@@ -588,7 +608,7 @@
 
   // ------------------------------------------------------------- open / close
   const confirmDiscard = () =>
-    saved || !crop || whole() || confirm("Discard the crop you haven't saved?");
+    saved || !edited() || confirm("Discard the edit you haven't saved?");
 
   // opts (from a card's ✂ Crop): { url, name, projectId, card: { kind: "history" |
   // "gallery", id, index } } — opens the editor on that image, with Save going back to
@@ -638,8 +658,17 @@
     showStatus("");
     loadFile(file);
   });
+  el.flip.addEventListener("click", () => {
+    if (!crop || busy) return;
+    flipped = !flipped;
+    // The box follows the picture: it stays on the same part, now on the other side.
+    crop = { ...crop, x: W - crop.x - crop.w };
+    saved = !edited();
+    render();
+  });
   el.reset.addEventListener("click", () => {
     if (!src || busy) return;
+    flipped = false;
     ratioKey = "orig";
     fitRatio();
     saved = true;

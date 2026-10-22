@@ -2085,6 +2085,8 @@ function ratePerSec(model, resolution, audioOn) {
       e.input?.resolution === resolution &&
       // H3 has no generate_audio param, so every run of it is an audio run.
       (audioOn === null || (e.input?.generate_audio !== false) === audioOn) &&
+      // a 2.5 draft is priced apart from a plain 480p run
+      !!e.input?.draft === seedanceDraft() &&
       e.input?.duration > 0,
   )
     .slice(0, RECENT_RATE_SAMPLES)
@@ -2146,7 +2148,9 @@ function updateEstimate() {
       )
     : [Number(document.getElementById("duration").value) || 0];
   const audioOn =
-    isH3() ? null : document.getElementById("generate_audio").checked;
+    isH3() || isKling() ? null : (
+      document.getElementById("generate_audio").checked
+    );
   const r = ratePerSec(model, resolution, audioOn);
   if (!r || !durations.every((d) => d > 0)) {
     const label = `${videoModelLabel(model)} at ${resolution}`;
@@ -2243,6 +2247,10 @@ const H3_RESOLUTIONS = [
   ["768P", "768p"],
   ["2K", "2K"],
 ];
+const KLING_RESOLUTIONS = [
+  ["720p", "720p"],
+  ["1080p", "1080p"],
+];
 
 const isSeedream = () => modelSelect.value.startsWith("seedream/");
 const is25 = () => modelSelect.value === "bytedance/seedance-2-5";
@@ -2252,6 +2260,12 @@ const isH3 = () => modelSelect.value.startsWith("minimax-h3/");
 const isH3T2V = () => modelSelect.value === "minimax-h3/text-to-video";
 const isH3I2V = () => modelSelect.value === "minimax-h3/image-to-video";
 const isH3Ref = () => modelSelect.value === "minimax-h3/reference-to-video";
+// Kling 4.0 — also one model id per mode. Reference-to-video takes images, videos and
+// voices (sent from the reference audio list); keyframe-to-video takes a first frame,
+// middle keyframes (sent from the reference image list, in order) and a last frame.
+const isKling = () => modelSelect.value.startsWith("kling-4.0/");
+const isKlingRef = () => modelSelect.value === "kling-4.0/reference-to-video";
+const isKlingKey = () => modelSelect.value === "kling-4.0/keyframe-to-video";
 // Local ComfyUI workflows are selected as `comfy:<file.json>`.
 const isComfy = () => modelSelect.value.startsWith("comfy:");
 const comfyFile = () => modelSelect.value.slice("comfy:".length);
@@ -2271,15 +2285,20 @@ function frameMode() {
 }
 // H3 image-to-video has no reference-image alternative — it is always the frame form.
 const usesFrames = () =>
-  isH3I2V() || (isSeedanceVideo() && frameMode() === "frames");
+  isH3I2V() || isKlingKey() || (isSeedanceVideo() && frameMode() === "frames");
 // Which reference fields the active model+mode actually sends. Image models take
 // neither; H3 takes video/audio only in reference-to-video, and takes reference
 // images in that mode alone too.
 // Seedance 2.5 goes further than the other Seedance models: its first/last-frame
 // mode excludes reference video and audio too, not just reference images.
 const usesRefMedia = () =>
-  !isSeedream() && (!isH3() || isH3Ref()) && !(is25() && usesFrames());
-const usesRefImages = () => !isT2I() && !isH3T2V() && !usesFrames();
+  !isSeedream() &&
+  (!isH3() || isH3Ref()) &&
+  !isKlingKey() &&
+  !(is25() && usesFrames());
+// Kling keyframe-to-video uses the image list for its middle keyframes.
+const usesRefImages = () =>
+  !isT2I() && !isH3T2V() && (isKlingKey() || !usesFrames());
 const isI2I = () =>
   isSeedream() && modelSelect.value.endsWith("-image-to-image");
 const isT2I = () =>
@@ -2303,13 +2322,30 @@ const MAX_RESOLUTION = {
 // the kie.ai docs, and H3 reference-to-video (which defaults to it); H3
 // text-to-video does not offer it.
 const hasAdaptiveAspect = () => isSeedanceVideo() || isH3Ref();
+// Kling 4.0 has its own short list, with "auto" (follow the references/frames).
+const KLING_ASPECTS = ["auto", "16:9", "9:16", "1:1", "21:9"];
 
 // Reference-media limits per model: how many of each kind, the total seconds of
 // reference video (and of audio), and the per-video size. Seedance 2.5 is far
 // roomier than the rest, which all share the 2.0 numbers (H3 reference-to-video too).
 const REF_LIMITS_25 = { image: 30, video: 10, audio: 10, secs: 30, videoMB: 200 };
 const REF_LIMITS = { image: 9, video: 3, audio: 3, secs: 15, videoMB: 50 };
-const refLimits = () => (is25() ? REF_LIMITS_25 : REF_LIMITS);
+// Kling 4.0: 10 images, 5 videos (10MB each, 30s total), 3 voices; keyframe-to-video
+// takes up to 8 middle keyframes.
+const REF_LIMITS_KLING = { image: 10, video: 5, audio: 3, secs: 30, videoMB: 10 };
+const REF_LIMITS_KLING_KEY = { ...REF_LIMITS_KLING, image: 8 };
+const refLimits = () =>
+  is25() ? REF_LIMITS_25
+  : isKlingRef() ? REF_LIMITS_KLING
+  : isKlingKey() ? REF_LIMITS_KLING_KEY
+  : REF_LIMITS;
+
+// Seedance 2.5 draft mode: a 480p preview whose task id can be finalized at 1080p
+// (bytedance/seedance-2-5-draft) within 7 days. Not the History "draft" tag.
+const seedanceDraftEl = document.getElementById("seedance_draft");
+const seedanceDraft = () => is25() && seedanceDraftEl.checked;
+const DRAFT_FINAL_MODEL = "bytedance/seedance-2-5-draft";
+const DRAFT_VALID_MS = 7 * 24 * 60 * 60 * 1000;
 
 // "Auto" duration (the API's duration: -1) lets a Seedance model pick the length.
 const durationAutoEl = document.getElementById("duration_auto");
@@ -2340,6 +2376,9 @@ const VIDEO_VARIANT_LABEL = {
   "minimax-h3/text-to-video": "H3 t2v",
   "minimax-h3/image-to-video": "H3 i2v",
   "minimax-h3/reference-to-video": "H3 ref2v",
+  "kling-4.0/reference-to-video": "Kling 4 ref2v",
+  "kling-4.0/keyframe-to-video": "Kling 4 keyframes",
+  "bytedance/seedance-2-5-draft": "2.5 from draft",
 };
 
 // Full display name for a video model id.
@@ -2347,7 +2386,11 @@ function videoModelLabel(model) {
   if ((model || "").startsWith("minimax-h3/")) {
     return `MiniMax H3 (${model.slice("minimax-h3/".length)})`;
   }
+  if ((model || "").startsWith("kling-4.0/")) {
+    return `Kling 4.0 (${model.slice("kling-4.0/".length)})`;
+  }
   if (model === "bytedance/seedance-2-5") return "Seedance 2.5";
+  if (model === DRAFT_FINAL_MODEL) return "Seedance 2.5 (from draft)";
   if (model === "bytedance/seedance-2-fast") return "Seedance 2 Fast";
   if (model === "bytedance/seedance-2-mini") return "Seedance 2 Mini";
   return "Seedance 2";
@@ -2523,6 +2566,7 @@ function applyModelUI() {
   const maxResIdx = maxResolutionIndex();
   const frames = is25();
   const h3 = isH3();
+  const kling = isKling();
   // Reference video/audio belong to Seedance and to H3's reference-to-video only.
   for (const id of ["videoField", "audioField"]) {
     document.getElementById(id).classList.toggle("hidden", !usesRefMedia());
@@ -2530,11 +2574,20 @@ function applyModelUI() {
   for (const id of ["resolutionField", "durationField"]) {
     document.getElementById(id).classList.toggle("hidden", seedream);
   }
-  // H3 generates audio natively and documents neither web_search nor nsfw_checker.
+  // H3 and Kling generate audio natively and document neither web_search nor
+  // nsfw_checker.
   for (const id of ["genAudioField", "webSearchField"]) {
-    document.getElementById(id).classList.toggle("hidden", seedream || h3);
+    document
+      .getElementById(id)
+      .classList.toggle("hidden", seedream || h3 || kling);
   }
-  document.getElementById("nsfwField").classList.toggle("hidden", h3);
+  document.getElementById("nsfwField").classList.toggle("hidden", h3 || kling);
+  document
+    .getElementById("keepSoundField")
+    .classList.toggle("hidden", !isKlingRef());
+  document
+    .getElementById("seedanceDraftField")
+    .classList.toggle("hidden", !frames);
   document.getElementById("webSearchField").title =
     webSearchT2VOnly() ?
       "Text-to-video only on this model — left off when references or frames are attached"
@@ -2548,7 +2601,23 @@ function applyModelUI() {
   document.getElementById("videoHint").textContent =
     `(up to ${lim.video}, total ≤ ${lim.secs}s, ≤ ${lim.videoMB}MB each)`;
   document.getElementById("audioHint").textContent =
-    `(up to ${lim.audio}, total ≤ ${lim.secs}s, ≤ 15MB each)`;
+    isKlingRef() ?
+      `(up to ${lim.audio}, sent as voices — mention as @voice_1, @voice_2 …)`
+    : `(up to ${lim.audio}, total ≤ ${lim.secs}s, ≤ 15MB each)`;
+  document.getElementById("audioLabel").textContent =
+    isKlingRef() ? "Voices" : "Reference audio";
+  document.getElementById("imageLabel").textContent =
+    isKlingKey() ? "Middle keyframes" : "Reference images";
+  // ...and sits between the first and last frame there.
+  document
+    .getElementById(isKlingKey() ? "lastFrameField" : "firstFrameField")
+    .before(document.getElementById("imageField"));
+  document.getElementById("imageHint").textContent =
+    isKlingKey() ?
+      `(in order, up to ${lim.image} — mention as @keyframe_1 …; the frames are @first_frame / @last_frame)`
+    : isKlingRef() ?
+      `(up to ${lim.image} — mention as @image_1, @image_2 …; videos as @video_1 …)`
+    : "(drag files or URLs in, or click to browse)";
   // H3 image-to-video takes no aspect_ratio — the frames decide it.
   document.getElementById("aspectField").classList.toggle("hidden", isH3I2V());
   // Seedance video models make reference images and first/last frames mutually
@@ -2580,13 +2649,18 @@ function applyModelUI() {
   if (seedream) setQualityLabels();
   setAspectOptions(
     seedream ? IMAGE_ASPECTS
+    : kling ? KLING_ASPECTS
     : hasAdaptiveAspect() ? VIDEO_ASPECTS_ADAPTIVE
     : VIDEO_ASPECTS,
     // 2.5 and H3 reference-to-video are the ones that document adaptive as default
-    frames || isH3Ref() ? "adaptive" : "16:9",
+    frames || isH3Ref() ? "adaptive"
+    : kling ? "auto"
+    : "16:9",
   );
   if (h3) {
     setResolutionOptions(H3_RESOLUTIONS, "2K");
+  } else if (kling) {
+    setResolutionOptions(KLING_RESOLUTIONS, "720p");
   } else {
     setResolutionOptions(SEEDANCE_RESOLUTIONS, "720p");
     // Disable any resolution above this model's ceiling; if the current selection
@@ -2599,9 +2673,16 @@ function applyModelUI() {
     }
   }
   restoreKieForm();
-  // Seedance 2.5 allows up to 30s; the other video models cap at 15s.
+  // A 2.5 draft is 480p only, and can't return its last frame.
+  const draft = seedanceDraft();
+  if (draft) resolutionSelect.value = "480p";
+  resolutionSelect.disabled = draft;
+  document.getElementById("return_last_frame").disabled = draft;
+  // Seedance 2.5 and Kling 4.0 allow up to 30s (Kling from 3s); the other video
+  // models cap at 15s.
   const durInput = document.getElementById("duration");
-  durInput.max = frames ? 30 : 15;
+  durInput.min = kling ? 3 : 4;
+  durInput.max = frames || kling ? 30 : 15;
   if (Number(durInput.value) > Number(durInput.max))
     durInput.value = durInput.max;
   document
@@ -2853,6 +2934,8 @@ durationAutoEl.addEventListener("change", () => {
   document.getElementById("duration").disabled = durationAuto();
   updateEstimate();
 });
+// The 2.5 draft switch pins the resolution to 480p (and back).
+seedanceDraftEl.addEventListener("change", applyModelUI);
 
 // =========================================================================
 // ComfyUI: local workflows chosen from the model dropdown. Each workflow's
@@ -5018,15 +5101,16 @@ async function pollComfyJob(job) {
 }
 
 // --- prompt length counter -----------------------------------------------
-// Caps per the model docs: Seedance 20,000; Seedream Lite 3,000; Pro 5,000;
-// MiniMax H3 7,000.
+// Caps per the model docs: Seedance 20,000 (2.5: 20,480); Seedream Lite 3,000; Pro
+// 5,000; MiniMax H3 7,000; Kling 4.0 8,000.
 const promptEl = document.getElementById("prompt");
 const promptCount = document.getElementById("promptCount");
 const promptCapHint = document.getElementById("promptCapHint");
 
 function promptCap() {
   if (isH3()) return 7000;
-  if (is25()) return 30000;
+  if (isKling()) return 8000;
+  if (is25()) return 20480;
   if (!isSeedream()) return 20000;
   return isSeedreamPro() ? 5000 : 3000;
 }
@@ -5248,12 +5332,42 @@ overall_soundscape: [1–4 sentences: ambience, action sounds, breaths — no di
 
 non_diegetic_music: N/A`;
 
+// Kling 4.0 templates, in the layout docs/KLING-PROMPTING.md describes: kie.ai's
+// @image_1 / @first_frame names (not kling.ai's @Image1), a role for every reference,
+// timed beats, and the audio last.
+const KLING_REF_TEMPLATE = `[Asset roles]
+@image_1 is [who or what]; keep its [face, hair, outfit].
+@video_1 sets the [camera movement / action timing / composition].
+@voice_1 is the voice of [who].
+
+[Overall settings]
+Scene and texture: [place, materials, time of day]. Visual style: [e.g. live-action, 35mm film]. Camera tone: [e.g. handheld, close and intimate].
+
+[Sequence of events]
+0–3s: [What we see, the action, the emotion.]
+3–7s: [The camera move and what develops.]
+7s–end: [The closing shot.]
+
+[Audio]
+[Who] says in [English], [how]: "[the line, word for word]". [Ambience and effects.] [Music, or: No background music.] No subtitles.`;
+
+const KLING_KEY_TEMPLATE = `@first_frame: [what it shows].
+@last_frame: [what it shows].
+Overall: [style, lighting, camera tone]. Keep the same people, clothing, props and positions throughout.
+
+0–3s | @first_frame to @keyframe_1: [What happens, and how the camera reaches @keyframe_1.]
+3–7s | @keyframe_1 to @last_frame: [What happens, and how the shot settles on @last_frame.]
+
+Audio: [ambience, effects, music or none, any dialogue in quotes]. No subtitles.`;
+
 // The template for the model picked now, or null where none fits.
 function mmTemplateFor() {
   if (isComfy()) return comfyRefLabelScheme === "minimax_h3" ? MM_R2V_TEMPLATE : null;
   if (isH3Ref()) return MM_R2V_TEMPLATE;
   if (isH3T2V()) return MM_T2V_TEMPLATE;
   if (isH3I2V()) return MM_I2V_TEMPLATE;
+  if (isKlingRef()) return KLING_REF_TEMPLATE;
+  if (isKlingKey()) return KLING_KEY_TEMPLATE;
   return null;
 }
 
@@ -7248,7 +7362,7 @@ function installPromptTools({
       textarea.dispatchEvent(new Event("input", { bubbles: true }));
     }
   });
-  tools.prepend(tpl); // shown only for MiniMax H3 (syncPromptTabs)
+  tools.prepend(tpl); // shown only for MiniMax H3 and Kling 4.0 (syncPromptTabs)
 
   // Drop hosts whose field a workflow re-render threw away.
   for (let i = promptHosts.length - 1; i >= 0; i--) {
@@ -7282,16 +7396,20 @@ function setPromptTab(tab) {
 function syncPromptTabs() {
   const label = `Saved Prompts${savedPrompts.length ? ` (${savedPrompts.length})` : ""}`;
   const nVars = variables.filter((v) => v.id).length;
-  // The MiniMax template: kie.ai's MiniMax H3 models, or a local workflow with the
-  // MiniMaxH3ReferenceToVideo node (the shipped Basic / Advanced).
+  // The model template: kie.ai's MiniMax H3 and Kling 4.0 models, or a local workflow
+  // with the MiniMaxH3ReferenceToVideo node (the shipped Basic / Advanced).
   const mmTpl = mmTemplateFor();
+  const kling = mmTpl === KLING_REF_TEMPLATE || mmTpl === KLING_KEY_TEMPLATE;
   const mmKind =
-    mmTpl === MM_T2V_TEMPLATE ? "Text2Video"
-    : mmTpl === MM_I2V_TEMPLATE ? "Image2Video"
-    : "Ref2Video";
+    mmTpl === MM_T2V_TEMPLATE ? "MiniMax Text2Video"
+    : mmTpl === MM_I2V_TEMPLATE ? "MiniMax Image2Video"
+    : mmTpl === KLING_REF_TEMPLATE ? "Kling 4.0 reference-to-video"
+    : mmTpl === KLING_KEY_TEMPLATE ? "Kling 4.0 keyframe-to-video"
+    : "MiniMax Ref2Video";
   for (const h of promptHosts) {
     h.mmTemplate.classList.toggle("hidden", !mmTpl);
-    h.mmTemplate.title = `Insert a blank MiniMax ${mmKind} prompt at the cursor (Ctrl+Z takes it out)`;
+    h.mmTemplate.textContent = kling ? "＋ Kling template" : "＋ MiniMax template";
+    h.mmTemplate.title = `Insert a blank ${mmKind} prompt at the cursor (Ctrl+Z takes it out)`;
     for (const [tab, btn] of Object.entries(h.tabs)) {
       btn.classList.toggle("active", tab === promptTab);
       btn.setAttribute("aria-selected", String(tab === promptTab));
@@ -10036,6 +10154,34 @@ function collectInput(resolved, prompt = promptEl.value, seconds = null) {
     }
     return input;
   }
+  // Kling 4.0: its own field names, and no audio/web_search/nsfw switches.
+  if (isKling()) {
+    const input = {
+      model: modelSelect.value,
+      prompt,
+      duration: runSeconds ?? Number(durEl.value),
+      resolution: resolutionSelect.value,
+      aspect_ratio: aspectSelect.value,
+    };
+    if (isKlingKey()) {
+      if (resolved.firstFrame?.[0])
+        input.first_frame_url = resolved.firstFrame[0];
+      input.keyframe_urls = resolved.image;
+      if (resolved.lastFrame?.[0]) input.last_frame_url = resolved.lastFrame[0];
+    } else {
+      input.image_urls = resolved.image;
+      input.video_urls = resolved.video;
+      // reference audio goes in as named voices (`audio_N` is a reserved name)
+      input.voices = (resolved.audio || []).map((audio_url, i) => ({
+        name: `voice_${i + 1}`,
+        audio_url,
+      }));
+      if (resolved.video?.length || lists.video.localIds().length)
+        input.keep_original_sound =
+          document.getElementById("keep_original_sound").checked;
+    }
+    return input;
+  }
   const input = {
     model: modelSelect.value,
     prompt,
@@ -10061,6 +10207,11 @@ function collectInput(resolved, prompt = promptEl.value, seconds = null) {
     input.output_format = document.getElementById("output_format").value;
     input.return_last_frame =
       document.getElementById("return_last_frame").checked;
+    if (seedanceDraft()) {
+      input.draft = true;
+      input.resolution = "480p";
+      input.return_last_frame = false;
+    }
   }
   return input;
 }
@@ -10119,10 +10270,33 @@ async function submitKieRuns(fromSaved, plan, inGroup = false, notes = []) {
   // The API rejects a reference-to-video run carrying only audio.
   if (isH3Ref() && !ready("image") && !ready("video"))
     return fail("MiniMax H3 reference-to-video needs at least one reference image or video.");
+  if (isKlingKey()) {
+    // Total frames (first + middle + last) are capped by the duration.
+    const secs = Number(document.getElementById("duration").value) || 5;
+    const cap = secs >= 9 ? 10 : secs + 1;
+    const frames = ["firstFrame", "lastFrame", "image"].reduce(
+      (n, k) => n + lists[k].items.filter((i) => i.status === "ready").length,
+      0,
+    );
+    if (frames > cap)
+      return fail(
+        `Kling 4.0 takes at most ${cap} frames in total (first + middle + last) for a ${secs}s video.`,
+      );
+  }
+  if (isKlingRef()) {
+    const n = ["image", "video", "audio"].reduce(
+      (a, k) => a + lists[k].items.filter((i) => i.status === "ready").length,
+      0,
+    );
+    if (n > 15)
+      return fail(
+        "Kling 4.0 takes at most 15 references in total (images, videos and voices).",
+      );
+  }
   if (is25() && usesFrames() && ready("lastFrame") && !ready("firstFrame"))
     return fail("Seedance 2.5 can't take a last frame on its own — add a first frame too.");
   // Too many references, or too much reference video, is rejected by the API.
-  if (isSeedanceVideo() || isH3Ref()) {
+  if (isSeedanceVideo() || isH3Ref() || isKling()) {
     const lim = refLimits();
     const count = (kind) =>
       lists[kind].items.filter((i) => i.status === "ready").length;
@@ -10150,6 +10324,9 @@ async function submitKieRuns(fromSaved, plan, inGroup = false, notes = []) {
   } catch (err) {
     return fail(err.message || String(err));
   }
+  // kie.ai's own message for this is just "This field is required".
+  if (isKling() && runs.some((r) => !r.prompt.trim()))
+    return fail("Kling 4.0 needs a prompt.");
   const longest = runs.reduce((a, r) => (r.prompt.length > a.prompt.length ? r : a));
   if (longest.prompt.length > promptCap()) {
     setError(
@@ -10279,6 +10456,51 @@ async function submitKieRuns(fromSaved, plan, inGroup = false, notes = []) {
     submitBtn.disabled = false;
   }
   return true;
+}
+
+// Turn a finished Seedance 2.5 draft into the final 1080p video. kie.ai takes only the
+// draft's task id (plus format/checker); History keeps the draft's prompt and settings
+// beside it so the new card reads like the run it came from.
+async function finalizeSeedanceDraft(entry) {
+  const src = entry.input || {};
+  const send = {
+    model: DRAFT_FINAL_MODEL,
+    draft_task_id: entry.taskId,
+    resolution: "1080p",
+    output_format: src.output_format || "mp4",
+    nsfw_checker: !!src.nsfw_checker,
+  };
+  const { draft, return_last_frame, ...rest } = src;
+  const job = {
+    jobId: nextJobId++,
+    taskId: null,
+    input: { ...rest, ...send, draftOf: entry.id },
+    mediaLocalIds: entry.mediaLocalIds || { image: entry.imageLocalIds || [] },
+    balanceBefore: null,
+    projectId: entry.projectId || activeProjectId,
+    refSecs: 0,
+    startedAt: Date.now(),
+  };
+  job.historyId = await createHistoryEntry(
+    job.input,
+    null,
+    job.mediaLocalIds,
+    job.projectId,
+    0,
+  );
+  job.live = createLiveStatus(job);
+  if (job.historyId) liveStatus.set(job.historyId, job.live);
+  loadHistory();
+  try {
+    job.balanceBefore = await loadCredits();
+    job.live.setStatus("Submitting…");
+    job.taskId = await createTask(send, job.live);
+    job.live.setStatus("Finalizing the draft at 1080p… this can take a few minutes.");
+    await persistEntryTask(job);
+    pollJob(job);
+  } catch (err) {
+    await failJob(job, err.message || String(err));
+  }
 }
 
 const BATCH_CREATE_SPACING_MS = 400; // ~2.5 creates/s — well inside 20 per 10s
@@ -10778,7 +11000,9 @@ function creditCategory(model) {
   if (m.startsWith("seedream/"))
     return m.includes("5-pro") ? "Seedream Pro" : "Seedream Lite";
   if (m.startsWith("minimax-h3/")) return "MiniMax H3";
-  if (m === "bytedance/seedance-2-5") return "Seedance 2.5";
+  if (m.startsWith("kling-4.0/")) return "Kling 4.0";
+  if (m === "bytedance/seedance-2-5" || m === DRAFT_FINAL_MODEL)
+    return "Seedance 2.5";
   if (m === "bytedance/seedance-2-fast") return "Seedance 2 Fast";
   if (m === "bytedance/seedance-2-mini") return "Seedance 2 Mini";
   if (m === "bytedance/seedance-2") return "Seedance 2";
@@ -11490,7 +11714,7 @@ function renderHistory(entries) {
     } else {
       const variant =
         VIDEO_VARIANT_LABEL[input.model] ?
-          ` · ${VIDEO_VARIANT_LABEL[input.model]}`
+          ` · ${VIDEO_VARIANT_LABEL[input.model]}${input.draft ? " draft" : ""}`
         : "";
       // H3 image-to-video has no aspect_ratio at all — leave the segment out rather
       // than printing a "?" for a setting the model never had.
@@ -11629,6 +11853,25 @@ function renderHistory(entries) {
       showForm();
       form.requestSubmit();
     });
+
+    // A finished Seedance 2.5 draft can be rendered at 1080p while its task id is
+    // still valid (7 days).
+    const draftAge = Date.now() - new Date(entry.createdAt || 0).getTime();
+    if (
+      output &&
+      input.model === "bytedance/seedance-2-5" &&
+      input.draft === true &&
+      entry.taskId &&
+      draftAge < DRAFT_VALID_MS
+    ) {
+      main.appendChild(
+        button(
+          '<span class="btn-ico">⇪</span> Finalize 1080p',
+          "Render this draft at 1080p (Seedance 2.5 draft → final)",
+          () => finalizeSeedanceDraft(entry),
+        ),
+      );
+    }
 
     if (output) {
       main.appendChild(
@@ -11900,7 +12143,12 @@ async function applyEntry(entry) {
     return;
   }
 
-  modelSelect.value = input.model || "bytedance/seedance-2";
+  // A run finalized from a 2.5 draft re-imports as a plain Seedance 2.5 run.
+  modelSelect.value =
+    input.model === DRAFT_FINAL_MODEL ? "bytedance/seedance-2-5" : (
+      input.model || "bytedance/seedance-2"
+    );
+  seedanceDraftEl.checked = input.draft === true;
   // Restore the 2.5 image-source mode (frames if the entry saved either keyframe).
   const savedMode =
     input.first_frame_url || input.last_frame_url ? "frames" : "refs";
@@ -11930,6 +12178,8 @@ async function applyEntry(entry) {
   document.getElementById("nsfw_checker").checked = !!input.nsfw_checker;
   document.getElementById("return_last_frame").checked =
     !!input.return_last_frame;
+  document.getElementById("keep_original_sound").checked =
+    !!input.keep_original_sound;
   // "Generate preview" is a persisted global preference — re-import leaves it as-is.
 
   const saved = await fetch("/api/images")
@@ -11937,9 +12187,12 @@ async function applyEntry(entry) {
     .then((d) => d.data || []);
   const localIds = entry.mediaLocalIds || { image: entry.imageLocalIds || [] };
   const urlsByKind = {
-    image: input.reference_image_urls || input.image_urls || [],
-    video: input.reference_video_urls || [],
-    audio: input.reference_audio_urls || [],
+    image:
+      input.reference_image_urls || input.image_urls || input.keyframe_urls || [],
+    video: input.reference_video_urls || input.video_urls || [],
+    audio:
+      input.reference_audio_urls ||
+      (input.voices || []).map((v) => v.audio_url).filter(Boolean),
     firstFrame: input.first_frame_url ? [input.first_frame_url] : [],
     lastFrame: input.last_frame_url ? [input.last_frame_url] : [],
   };

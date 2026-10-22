@@ -1617,6 +1617,7 @@
               <option value="default">Video prompt guide (⚙ LLM settings)</option>
               <option value="minimax">MiniMax H3 Ref2Video guide</option>
               <option value="minimax_t2v">MiniMax H3 Text2Video guide</option>
+              <option value="kling">Kling 4.0 guide</option>
             </select></label>
           <label class="inline" title="Also follow the Rules from this project's ✨ Build with AI form"><input type="checkbox" class="llm-qrev-rules" /> Follow my Rules</label>
         </span>

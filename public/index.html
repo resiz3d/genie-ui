@@ -62,6 +62,8 @@
               <option value="minimax-h3/text-to-video">MiniMax H3 (text-to-video)</option>
               <option value="minimax-h3/image-to-video">MiniMax H3 (image-to-video)</option>
               <option value="minimax-h3/reference-to-video">MiniMax H3 (reference-to-video)</option>
+              <option value="kling-4.0/reference-to-video">Kling 4.0 (reference-to-video)</option>
+              <option value="kling-4.0/keyframe-to-video">Kling 4.0 (keyframe-to-video)</option>
             </optgroup>
           </select>
         </label>
@@ -103,7 +105,7 @@
 
         <div class="field" id="imageField">
           <div class="field-head">
-            <span>Reference images <span class="hint">(drag files or URLs in, or click to browse)</span></span>
+            <span><span id="imageLabel">Reference images</span> <span class="hint" id="imageHint">(drag files or URLs in, or click to browse)</span></span>
             <button type="button" id="clear-image" class="link-btn hidden">Clear all</button>
           </div>
           <div id="dz-image" class="dropzone">
@@ -151,7 +153,7 @@
 
         <div class="field" id="audioField">
           <div class="field-head">
-            <span>Reference audio <span class="hint" id="audioHint">(up to 3, total ≤ 15s, ≤ 15MB each)</span></span>
+            <span><span id="audioLabel">Reference audio</span> <span class="hint" id="audioHint">(up to 3, total ≤ 15s, ≤ 15MB each)</span></span>
             <button type="button" id="clear-audio" class="link-btn hidden">Clear all</button>
           </div>
           <div id="dz-audio" class="dropzone">
@@ -231,6 +233,12 @@
           </label>
           <label class="inline" id="nsfwField">
             <input id="nsfw_checker" type="checkbox" /> NSFW checker
+          </label>
+          <label class="inline hidden" id="keepSoundField" title="Keep the reference video's own soundtrack in the output">
+            <input id="keep_original_sound" type="checkbox" /> Keep original sound
+          </label>
+          <label class="inline hidden" id="seedanceDraftField" title="A cheap 480p preview; finalize it at 1080p from its History card within 7 days">
+            <input id="seedance_draft" type="checkbox" /> Draft (480p preview)
           </label>
           <label class="inline hidden" id="returnLastFrameField">
             <input id="return_last_frame" type="checkbox" /> Return last frame
@@ -508,7 +516,7 @@
     <script src="llm.js?v=12"></script>
     <script src="video-fx.js?v=1"></script>
     <script src="video-editor.js?v=7"></script>
-    <script src="image-editor.js?v=2"></script>
+    <script src="image-editor.js?v=3"></script>
     <script src="paste.js?v=2"></script>
     <script src="plugins.js"></script>
   </body>

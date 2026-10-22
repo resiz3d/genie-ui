@@ -25,9 +25,12 @@ project's history. Your whole library of prompts, references, and results stays
 organized on your own disk.
 
 **Cloud models (optional)** via [kie.ai](https://kie.ai): **Seedance 2.5** /
-**Seedance 2** / **Seedance 2 Fast** / **Seedance 2 Mini** (video; 2.5, Fast and Mini
-are 480p/720p only — 2.5 adds start/end keyframes, an adaptive aspect ratio, up to 30s
-duration, and mp4/mov output), **MiniMax H3 / Hailuo 03** text-to-video /
+**Seedance 2** / **Seedance 2 Fast** / **Seedance 2 Mini** (video; Fast and Mini are
+480p/720p only — 2.5 reaches 1080p and adds an adaptive aspect ratio, up to 30s
+duration, mp4/mov output, and cheap 480p drafts you can finalize at 1080p from
+History), **Kling 4.0** reference-to-video / keyframe-to-video (3–30s at 720p or
+1080p, with reference images, videos and voices, or first/middle/last keyframes),
+**MiniMax H3 / Hailuo 03** text-to-video /
 image-to-video / reference-to-video (4–15s at 768P or 2K with native audio — one
 dropdown entry per mode, since kie.ai ships them as separate models), and
 **Seedream 5.0 Lite** image-to-image / text-to-image (the form adapts: quality tier

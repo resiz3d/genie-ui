@@ -590,6 +590,8 @@ async function forward(res, upstreamPromise) {
 // --- create generation task ---------------------------------------------
 const ALLOWED_MODELS = new Set([
   "bytedance/seedance-2-5",
+  // finalizes a 2.5 draft (draft: true) at 1080p from its draft_task_id
+  "bytedance/seedance-2-5-draft",
   "bytedance/seedance-2",
   "bytedance/seedance-2-fast",
   "bytedance/seedance-2-mini",
@@ -600,6 +602,8 @@ const ALLOWED_MODELS = new Set([
   "minimax-h3/text-to-video",
   "minimax-h3/image-to-video",
   "minimax-h3/reference-to-video",
+  "kling-4.0/reference-to-video",
+  "kling-4.0/keyframe-to-video",
 ]);
 
 app.post("/api/create", requireKieKey, (req, res) => {
@@ -3129,6 +3133,7 @@ function escapeHtml(s) {
 function modelLabel(model) {
   const m = model || "bytedance/seedance-2";
   if (m === "bytedance/seedance-2-5") return "Seedance 2.5";
+  if (m === "bytedance/seedance-2-5-draft") return "Seedance 2.5 (from draft)";
   if (m === "bytedance/seedance-2") return "Seedance 2";
   if (m === "bytedance/seedance-2-fast") return "Seedance 2 Fast";
   if (m === "bytedance/seedance-2-mini") return "Seedance 2 Mini";
@@ -3136,6 +3141,8 @@ function modelLabel(model) {
     const mode = m.slice("minimax-h3/".length);
     return `MiniMax H3 (${mode})`;
   }
+  if (m.startsWith("kling-4.0/"))
+    return `Kling 4.0 (${m.slice("kling-4.0/".length)})`;
   const family = m.includes("5-pro") ? "Seedream 5.0 Pro" : "Seedream 5.0 Lite";
   if (m.includes("text-to-image")) return `${family} (text-to-image)`;
   if (m.includes("image-to-image")) return `${family} (image-to-image)`;

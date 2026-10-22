@@ -1,4 +1,4 @@
-# kie.ai API reference (Seedance / Seedream / MiniMax H3)
+# kie.ai API reference (Seedance / Seedream / MiniMax H3 / Kling 4.0)
 
 Local copies of the kie.ai model API docs this tool talks to, so we don't have to
 re-check the web. One file per model family:
@@ -8,6 +8,8 @@ re-check the web. One file per model family:
 - [seedance-2-0-mini.md](seedance-2-0-mini.md) — `bytedance/seedance-2-mini`
 - [minimax-h3.md](minimax-h3.md) — `minimax-h3/text-to-video`,
   `minimax-h3/image-to-video`, `minimax-h3/reference-to-video`
+- [kling-4-0.md](kling-4-0.md) — `kling-4.0/reference-to-video`,
+  `kling-4.0/keyframe-to-video`
 
 Seedream (image) models are used by the tool too but aren't documented here yet.
 
@@ -15,7 +17,8 @@ Seedream (image) models are used by the tool too but aren't documented here yet.
 
 | Model | Source | Confidence |
 | --- | --- | --- |
-| Seedance 2.5 / 2.0 / Fast / Mini | Official OpenAPI specs under <https://docs.kie.ai/market/bytedance/> (retrieved 2026-10-01) | High — full schemas with types/enums/defaults |
+| Seedance 2.5 / 2.0 / Fast / Mini | Official OpenAPI specs under <https://docs.kie.ai/market/bytedance/> (retrieved 2026-10-01; re-checked 2026-10-22: 2.5 gained `draft` + the `seedance-2-5-draft` model, its prompt cap is 20,480; Mini is still listed and not deprecated) | High — full schemas with types/enums/defaults |
+| Kling 4.0 | Official OpenAPI specs under <https://docs.kie.ai/market/kling/> (`v4-reference-to-video`, `v4-keyframe-to-video`; retrieved 2026-10-22) | High — full schemas with types/enums/defaults |
 | MiniMax H3 | Official OpenAPI specs under <https://docs.kie.ai/market/minimax-h3/> (retrieved 2026-09-17; re-checked 2026-10-01, unchanged) | High — full schemas with types/enums/defaults |
 
 The index of every doc page is <https://docs.kie.ai/llms.txt>; append `.md` to a
@@ -73,7 +76,7 @@ Rate limit is ~20 new requests / 10s; rejected requests are **not** queued.
 | `resolution` | 480p–1080p | 480p–4k | 480p/720p | 480p/720p |
 | `aspect_ratio` (+`adaptive`) | ✓ (default) | ✓ | ✓ | ✓ |
 | `duration` | 4..30 or −1 | 4..15 or −1 | 4..15 or −1 | 4..15 or −1 |
-| prompt max chars | 30,000 | 20,000 | 20,000 | 20,000 |
+| prompt max chars | 20,480 | 20,000 | 20,000 | 20,000 |
 | `output_format` (mp4/mov) | ✓ | ✗ | ✗ | ✗ |
 | `return_last_frame` | ✓ | deprecated | deprecated | ✗ |
 
