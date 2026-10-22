@@ -63,6 +63,15 @@ heading for that version with the date, commit, then tag the commit `vX.Y.Z`.
   1080p through `bytedance/seedance-2-5-draft`; the new card keeps the draft's prompt
   and settings. Unrelated to the 📝 draft tag.
 
+### Removed
+
+- **Prompt groups.** The 📚 group picker in the prompt editor, the group blocks on the
+  Saved Prompts tab (▶ on a group, **Render**, ＋ Next, Rename, Ungroup, group 🗑) and
+  dragging cards into or out of a group are gone; ▶ on a card generates one prompt as
+  before. Existing groups are dropped the first time their project is loaded — their
+  prompts stay, in the same order, on their own. A ✨ Build with AI with breaks now
+  saves its prompts one after another (`Title — 1/3`…) instead of as a group.
+
 ### Changed
 
 - **Seedance 2.5 prompt cap is 20,480 characters** (was 30,000), per kie.ai's current

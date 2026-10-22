@@ -2094,19 +2094,6 @@ function ratePerSec(model, resolution, audioOn) {
   return rates.length ? { rate: median(rates), n: rates.length } : null;
 }
 
-// The runs Generate would make from an active prompt group (see savedRunPlan), or
-// null for one ordinary run. Set further down, once the saved-prompt state it reads
-// exists.
-let groupRuns = () => null;
-
-// A group member's length as the duration its run is sent with: whole seconds, within
-// what the model allows.
-function runDuration(seconds) {
-  const el = document.getElementById("duration");
-  const s = Math.ceil(seconds);
-  return Math.min(Math.max(s, Number(el.min) || 1), Number(el.max) || s);
-}
-
 function updateEstimate() {
   const model = modelSelect.value;
 
@@ -2131,28 +2118,19 @@ function updateEstimate() {
   }
 
   const resolution = document.getElementById("resolution").value;
-  // An active prompt group makes a run per member, each at its own length.
-  const runs = groupRuns();
-  if (!runs && durationAuto()) {
+  if (durationAuto()) {
     estimateEl.textContent =
       "No estimate — the model picks the duration (Auto).";
     estimateEl.title = "";
     return;
   }
-  const durations =
-    runs ?
-      runs.map((x) =>
-        x.duration > 0 ?
-          runDuration(x.duration)
-        : Number(document.getElementById("duration").value) || 0,
-      )
-    : [Number(document.getElementById("duration").value) || 0];
+  const duration = Number(document.getElementById("duration").value) || 0;
   const audioOn =
     isH3() || isKling() ? null : (
       document.getElementById("generate_audio").checked
     );
   const r = ratePerSec(model, resolution, audioOn);
-  if (!r || !durations.every((d) => d > 0)) {
+  if (!r || !(duration > 0)) {
     const label = `${videoModelLabel(model)} at ${resolution}`;
     estimateEl.textContent = `No estimate yet for ${label} — will measure after a run.`;
     estimateEl.title = "";
@@ -2160,24 +2138,14 @@ function updateEstimate() {
   }
   const refSecs = usesRefMedia() ? refVideoSeconds() : 0;
   // (a reference video is billed on every run it's sent with)
-  const est = durations.reduce(
-    (a, d) => a + Math.round(r.rate * (d + refSecs)),
-    0,
-  );
-  const groupNote =
-    !runs ? ""
-    : runs.length > 1 ?
-      ` for ${runs.length} prompts of “${escapeHtmlJs(runs[0].group.name)}” (${durations.map((d) => `${d}s`).join(" + ")})`
-    : ` for part ${runs[0].part} of “${escapeHtmlJs(runs[0].group.name)}” (${durations[0]}s)`;
+  const est = Math.round(r.rate * (duration + refSecs));
   const refNote =
-    refSecs > 0 ?
-      ` (incl. ~${Math.round(refSecs)}s video ref${durations.length > 1 ? " each" : ""})`
-    : "";
+    refSecs > 0 ? ` (incl. ~${Math.round(refSecs)}s video ref)` : "";
   const overLimit =
     refSecs > refLimits().secs ?
       ` ⚠ video refs exceed the ${refLimits().secs}s total limit`
     : "";
-  estimateEl.innerHTML = `Est. cost: ~<b>${est.toLocaleString()}</b> credits${groupNote}${refNote}${batchCostNote(est)}${overLimit}`;
+  estimateEl.innerHTML = `Est. cost: ~<b>${est.toLocaleString()}</b> credits${refNote}${batchCostNote(est)}${overLimit}`;
   estimateEl.title = `Based on your ${r.n} most recent run${r.n > 1 ? "s" : ""} at this resolution/audio setting (median).`;
 }
 
@@ -2505,13 +2473,11 @@ async function loadAppSettings() {
   const changed =
     JSON.stringify(d.kieForm?.[model]) !== JSON.stringify(kieForm[model]);
   kieForm = d.kieForm || {};
-  groupRenderChoice = d.groupRender || {};
   Object.assign(prefs, d.prefs || {}); // read on the next load (the open tab keeps its own view)
   if (changed && !isComfy()) {
     kieFormModel = null;
     applyModelUI();
   }
-  syncGroupRender();
   updateEstimate();
 }
 document.addEventListener("visibilitychange", () => {
@@ -4886,13 +4852,10 @@ async function submitComfy() {
   const allLoras = comfyLoraControl ? comfyLoraControl.getLoras() : [];
   const wfMedia = comfyMediaControl ? comfyMediaControl.getMedia() : [];
   const bypass = comfyBypassControl ? comfyBypassControl.getDisabled() : [];
-  // One run, or one per member of an active prompt group (each with its own text,
-  // references and length). Redoing a run in place takes just the first.
+  // The Prompt tab's text, or the active saved prompt's (with its references).
   const plan = (comfyFields.some((f) => f.isPrompt) && savedRunPlan()) || [
     { prompt: null, text: null, duration: null },
   ];
-  if (cont?.into) plan.length = 1;
-  const formDuration = currentDuration();
   const mediaNotes = [];
   try {
     for (const run of plan) {
@@ -4902,10 +4865,6 @@ async function submitComfy() {
       mediaNotes.push(plan.length > 1 ? `${fromSaved.title}: ${note}` : note);
     if (mediaNotes.length) setError(mediaNotes.join("\n"));
     const promptOverride = run.text;
-    // A member's own length; one without a length runs at the form's duration (not
-    // the member before it's).
-    if (run.duration > 0) setCurrentDuration(Math.ceil(run.duration));
-    else if (run.group && formDuration) setCurrentDuration(formDuration);
     for (let i = 0; i < count; i++) {
       const { values, prune, tails, references, templates } =
         await collectComfyValues(promptOverride);
@@ -4928,7 +4887,7 @@ async function submitComfy() {
       if (fromSaved) {
         if (!input.prompt && promptOverride.trim())
           input.prompt = resolveWildcards(promptOverride).trim();
-        input.savedPrompt = savedPromptStamp(fromSaved, run); // History only, not sent to ComfyUI
+        input.savedPrompt = savedPromptStamp(fromSaved); // History only, not sent to ComfyUI
       }
       await queueComfyRun(
         wf,
@@ -4948,8 +4907,6 @@ async function submitComfy() {
         if (typeof f.advance === "function") f.advance();
     }
     }
-    // A member's length was only for its run — put the form's own duration back.
-    if (plan.some((r) => r.duration > 0)) setCurrentDuration(formDuration);
     saveComfySettings(wf.file); // remember the final values + LoRAs (server-side)
     disarmContinuation(); // one arm, one submit
   } catch (err) {
@@ -5193,71 +5150,14 @@ function exportSavedPromptText(p) {
   return p.prompt || "";
 }
 
-// --- prompt groups ---
-// A group is a named sequence of whole saved prompts — { id, name } on each member,
-// kept next to each other in the list by the server. ▶ on a group's header makes it
-// what Generate uses: every member in order, a run and History card each, with that
-// prompt's own text, references and length — or just the member picked in Render.
-const GROUP_ACTIVE_PREFIX = "group:"; // in activeSavedPromptIds, for an active group
-function savedGroupMembers(gid) {
-  return savedPrompts.filter((p) => p.group?.id === gid);
-}
-function activeGroupId() {
-  const v = activeSavedPromptIds[activeProjectId];
-  return typeof v === "string" && v.startsWith(GROUP_ACTIVE_PREFIX) ?
-      v.slice(GROUP_ACTIVE_PREFIX.length)
-    : null;
-}
-function activeGroup() {
-  const gid = activeGroupId();
-  const members = gid ? savedGroupMembers(gid) : [];
-  return members.length ? { id: gid, name: members[0].group.name, members } : null;
-}
-function setActiveGroup(gid) {
-  setActiveSavedPrompt(gid ? GROUP_ACTIVE_PREFIX + gid : null);
-}
-
-// What an active group renders: "all" (each member in turn) or one member's id. Per
-// group, kept on the server with the other shared settings (see loadAppSettings).
-let groupRenderChoice = serverSettings.groupRender || {}; // group id → "all" | prompt id
-function setGroupRender(gid, value) {
-  groupRenderChoice[gid] = value;
-  putAppSettings({ groupRender: { [gid]: value } });
-}
-
-// How long a saved prompt's clip is: a MiniMax prompt's shots, else its saved duration.
-function savedPromptSeconds(p) {
-  return (
-    (isMmType(p.type) ? minimaxDuration(p.minimax, p.duration) : p.duration) || null
-  );
-}
-
-// The runs Generate makes from the Saved Prompts tab right now, in order:
-// [{ prompt, text, duration, group?, part?, parts? }] — or null when it uses the
-// Prompt tab's text. A single active prompt runs at the form's duration (null); a
-// group's members each run at their own length.
+// The run Generate makes from the Saved Prompts tab right now, as a one-item list
+// [{ prompt, text, duration }] — or null when it uses the Prompt tab's text. It runs
+// at the form's duration (null).
 function savedRunPlan() {
   if (promptSource !== "saved" || !activePromptHost()) return null;
-  const g = activeGroup();
-  if (g) {
-    const pick = groupRenderChoice[g.id];
-    const one = pick && pick !== "all" && g.members.find((p) => p.id === pick);
-    return (one ? [one] : g.members).map((p) => ({
-      prompt: p,
-      text: exportSavedPromptText(p),
-      duration: savedPromptSeconds(p),
-      group: g,
-      part: g.members.indexOf(p) + 1,
-      parts: g.members.length,
-    }));
-  }
   const p = activeSavedPrompt();
   return p ? [{ prompt: p, text: exportSavedPromptText(p), duration: null }] : null;
 }
-groupRuns = () => {
-  const runs = savedRunPlan();
-  return runs?.[0]?.group ? runs : null;
-};
 
 // The structured formats: both keep their fields in p.minimax (the same shape), and
 // differ only in what's compiled from them and which parts the form shows.
@@ -5874,15 +5774,8 @@ function runSavedPrompt() {
 
 // Stamped on the stored History input (never sent to a model) — what the server's
 // auto-link reads.
-function savedPromptStamp(p, run = null) {
-  return {
-    id: p.id,
-    projectId: activeProjectId,
-    title: p.title,
-    ...(run?.group ?
-      { group: { id: run.group.id, name: run.group.name }, part: run.part, parts: run.parts }
-    : {}),
-  };
+function savedPromptStamp(p) {
+  return { id: p.id, projectId: activeProjectId, title: p.title };
 }
 
 const savedPanel = document.createElement("div");
@@ -5892,42 +5785,11 @@ savedPanel.innerHTML =
   `<div class="sp-toolbar"><button type="button" class="link-btn sp-new-mm">＋ New MiniMax prompt</button>` +
   `<button type="button" class="link-btn sp-new-t2v">＋ New MiniMax T2V prompt</button></div>` +
   `<p class="sp-run-note"></p>` +
-  `<label class="sp-run-group hidden">Render <select></select><span class="hint"></span></label>` +
   `<p class="dz-hint sp-empty"></p>` +
   `<div class="sp-list"></div>`;
 const savedFilterEl = savedPanel.querySelector(".sp-filter");
 const savedEmptyEl = savedPanel.querySelector(".sp-empty");
 const savedRunNoteEl = savedPanel.querySelector(".sp-run-note");
-// Which members of the active group Generate renders (shown while a group is active).
-const savedRunGroupEl = savedPanel.querySelector(".sp-run-group");
-const savedRunGroupSelect = savedRunGroupEl.querySelector("select");
-savedRunGroupSelect.addEventListener("change", () => {
-  const g = activeGroup();
-  if (!g) return;
-  setGroupRender(g.id, savedRunGroupSelect.value);
-  syncGroupRender();
-  updateEstimate();
-});
-function syncGroupRender() {
-  const g = activeGroup();
-  savedRunGroupEl.classList.toggle("hidden", !g);
-  if (!g) return;
-  const len = (p) => (savedPromptSeconds(p) ? `, ${savedPromptSeconds(p)}s` : "");
-  savedRunGroupSelect.innerHTML = "";
-  savedRunGroupSelect.appendChild(
-    new Option(`All ${g.members.length} prompts — one after another`, "all"),
-  );
-  g.members.forEach((p, i) =>
-    savedRunGroupSelect.appendChild(new Option(`${i + 1}. ${p.title}${len(p)}`, p.id)),
-  );
-  const pick = groupRenderChoice[g.id];
-  const one = pick && pick !== "all" && g.members.some((p) => p.id === pick);
-  savedRunGroupSelect.value = one ? pick : "all";
-  savedRunGroupEl.querySelector(".hint").textContent =
-    one ?
-      "— Generate makes this prompt's clip."
-    : `— Generate makes ${g.members.length} clips, each from its own prompt and references, a History card for each, in order.`;
-}
 // A blank MiniMax prompt with the form's current references and duration, opened for editing.
 savedPanel.querySelector(".sp-new-mm").addEventListener("click", async () => {
   try {
@@ -6264,11 +6126,9 @@ function makeWildcardRow(w) {
 // Prompt and the Saved Prompts view.
 function syncWildcardSource() {
   const p = activeSavedPrompt();
-  const g = activeGroup();
   for (const panel of [wildcardsPanel, variablesPanel])
     panel.querySelector(".wc-source").textContent =
-      promptSource === "saved" && g ? `▶ Generate uses the prompt group “${g.name}”.`
-      : promptSource === "saved" && p ?
+      promptSource === "saved" && p ?
         `▶ Generate uses the saved prompt “${p.title}”.`
       : "▶ Generate uses the Prompt tab's text.";
 }
@@ -7800,12 +7660,8 @@ function savedPromptSendsRefs(p) {
 function loadRunMedia(p) {
   return savedPromptSendsRefs(p) ? loadSavedPromptMedia(p) : [];
 }
-// One run of a plan (see savedRunPlan). A group's member that sends no references
-// (T2V, or a plain prompt without any) gets empty reference fields — not whatever
-// the member before it loaded.
+// One run of a plan (see savedRunPlan).
 function loadPlanRunMedia(run) {
-  if (run.group && !savedPromptSendsRefs(run.prompt))
-    return loadSavedPromptMedia({ refs: [] });
   return loadRunMedia(run.prompt);
 }
 
@@ -7858,44 +7714,26 @@ function renderSavedPrompts() {
     : `No saved prompts in ${projectName(activeProjectId)} yet — write one and click 💾 Save prompt.`;
   savedEmptyEl.classList.toggle("hidden", shown.length > 0);
   savedListEl.innerHTML = "";
-  // A group's members are drawn together in a block, where its first member is.
-  const drawn = new Set();
-  for (const p of shown) {
-    const gid = p.group?.id;
-    if (!gid) savedListEl.appendChild(makeSavedPromptCard(p));
-    else if (!drawn.has(gid)) {
-      drawn.add(gid);
-      savedListEl.appendChild(
-        makeSavedGroupBlock(gid, shown.filter((x) => x.group?.id === gid)),
-      );
-    }
-  }
+  for (const p of shown) savedListEl.appendChild(makeSavedPromptCard(p));
   const active = activeSavedPrompt();
-  const group = activeGroup();
-  savedRunNoteEl.classList.toggle("on", !!(active || group));
+  savedRunNoteEl.classList.toggle("on", !!active);
   savedRunNoteEl.textContent =
     !savedPrompts.length ? ""
-    : group ?
-      `▶ Generate uses the group “${group.name}” while this tab is open: each prompt with its own references and length, and links each new History card to its prompt.`
     : active ?
       `▶ Generate uses “${active.title}” (${savedPromptSendsRefs(active) ? "its prompt and its references, in order" : "its prompt text only"}) while this tab is open, and links the new History card to it.`
-    : "Press ▶ on a card — or on a group, to make a clip from each of its prompts — to generate from it while this tab is open. Otherwise Generate uses the Prompt tab's text.";
+    : "Press ▶ on a card to generate from it while this tab is open. Otherwise Generate uses the Prompt tab's text.";
   savedRunNoteEl.classList.toggle("hidden", !savedPrompts.length);
-  syncGroupRender();
   syncWildcardSource();
   syncGenerateLabel();
 }
 
-// Say on the Generate button when a saved prompt (or group) will be used.
+// Say on the Generate button when a saved prompt will be used.
 function syncGenerateLabel() {
   const plan = savedRunPlan();
   submitBtn.classList.toggle("from-saved", !!plan);
   submitBtn.title =
-    !plan ? ""
-    : plan[0].group ?
-      `Generate ${plan.length === 1 ? `part ${plan[0].part}` : `${plan.length} clips`} from the group “${plan[0].group.name}”`
-    : `Generate from the saved prompt “${plan[0].prompt.title}”`;
-  updateEstimate(); // an active group costs a run per prompt
+    !plan ? "" : `Generate from the saved prompt “${plan[0].prompt.title}”`;
+  updateEstimate();
 }
 
 // --- manual order ---
@@ -7932,56 +7770,6 @@ async function saveSavedOrder(focus = null) {
     alert(`Couldn't save the new order: ${err.message || err}`);
     loadSavedPrompts(); // back to what the server has
   }
-}
-
-// The list as units that move as one: an ungrouped prompt, or a whole group.
-function savedUnits() {
-  const units = [];
-  for (const p of savedPrompts) {
-    const gid = p.group?.id;
-    const last = units[units.length - 1];
-    if (gid && last?.gid === gid) last.items.push(p);
-    else units.push({ gid: gid || null, id: gid || p.id, items: [p] });
-  }
-  return units;
-}
-// Move a unit (a prompt id, or a group id) one place up or down past its neighbour —
-// an ungrouped prompt steps over a whole group rather than into it.
-function moveSavedUnit(unitId, delta) {
-  const units = savedUnits();
-  const i = units.findIndex((u) => u.id === unitId);
-  if (i < 0 || i + delta < 0 || i + delta >= units.length) return;
-  [units[i], units[i + delta]] = [units[i + delta], units[i]];
-  savedPrompts = units.flatMap((u) => u.items);
-  const sel = units[i + delta].gid ?
-      `.sp-group[data-group="${CSS.escape(unitId)}"] .sp-group-head`
-    : `[data-id="${CSS.escape(unitId)}"]`;
-  saveSavedOrder(sel);
-}
-
-// Put a prompt in a group (null: out of any), at index `toIndex` of the list.
-async function regroupSavedPrompt(id, group, toIndex) {
-  const p = savedPrompts.find((x) => x.id === id);
-  if (!p) return;
-  const from = savedPrompts.indexOf(p);
-  savedPrompts.splice(from, 1);
-  savedPrompts.splice(Math.max(0, Math.min(savedPrompts.length, toIndex)), 0, p);
-  const changed = (p.group?.id || null) !== (group?.id || null);
-  if (group) p.group = { id: group.id, name: group.name };
-  else delete p.group;
-  if (changed) {
-    try {
-      await promptsApi(`/api/prompts/${encodeURIComponent(id)}`, "PUT", {
-        projectId: activeProjectId,
-        group: group ? { id: group.id, name: group.name } : null,
-        keepPlace: true,
-      });
-    } catch (err) {
-      alert(err.message || String(err));
-      return loadSavedPrompts();
-    }
-  }
-  await saveSavedOrder(`[data-id="${CSS.escape(id)}"]`);
 }
 
 function wireCardReorder(card, p) {
@@ -8028,42 +7816,26 @@ function wireCardReorder(card, p) {
     let to =
       savedPrompts.findIndex((x) => x.id === p.id) + (lowerHalf(e) ? 1 : 0);
     if (from < to) to--; // removing the dragged card first shifts everything after it up
-    // Dropped among a group's prompts it joins that group; among ungrouped ones it
-    // leaves any group it was in.
-    const dragged = savedPrompts[from];
-    if ((dragged?.group?.id || null) !== (p.group?.id || null))
-      regroupSavedPrompt(id, p.group || null, to);
-    else moveSavedPrompt(id, to);
+    moveSavedPrompt(id, to);
   });
 }
 
-// ▲ ▼ / Alt+↑↓ on a card: a group's prompt moves within its group; an ungrouped one
-// steps past its neighbour (a whole group counts as one).
+// ▲ ▼ / Alt+↑↓ on a card: one place up or down.
 function stepSavedCard(p, delta) {
-  if (!p.group) return moveSavedUnit(p.id, delta);
-  const members = savedGroupMembers(p.group.id);
-  const j = members.indexOf(p) + delta;
-  if (j < 0 || j >= members.length) return;
-  moveSavedPrompt(p.id, savedPrompts.indexOf(members[j]));
+  const j = savedPrompts.indexOf(p) + delta;
+  if (j < 0 || j >= savedPrompts.length) return;
+  moveSavedPrompt(p.id, j);
 }
 
-// ▲ ▼ for a card, or — with `unitId` — for a whole group's header.
-function makeCardMoveButtons(p, unitId = null) {
+// ▲ ▼ for a card.
+function makeCardMoveButtons(p) {
   const wrap = document.createElement("span");
   wrap.className = "sp-move";
-  let i, n;
-  if (unitId || !p.group) {
-    const units = savedUnits();
-    i = units.findIndex((u) => u.id === (unitId || p.id));
-    n = units.length;
-  } else {
-    const members = savedGroupMembers(p.group.id);
-    i = members.indexOf(p);
-    n = members.length;
-  }
+  const i = savedPrompts.indexOf(p);
+  const n = savedPrompts.length;
   for (const [text, delta, title] of [
-    ["▲", -1, unitId ? "Move the group up" : "Move up (Alt+↑)"],
-    ["▼", 1, unitId ? "Move the group down" : "Move down (Alt+↓)"],
+    ["▲", -1, "Move up (Alt+↑)"],
+    ["▼", 1, "Move down (Alt+↓)"],
   ]) {
     const b = document.createElement("button");
     b.type = "button";
@@ -8073,168 +7845,14 @@ function makeCardMoveButtons(p, unitId = null) {
     b.disabled = i + delta < 0 || i + delta >= n;
     b.addEventListener("click", (e) => {
       e.stopPropagation(); // not a click on the card (which opens the editor)
-      if (unitId) moveSavedUnit(unitId, delta);
-      else stepSavedCard(p, delta);
+      stepSavedCard(p, delta);
     });
     wrap.appendChild(b);
   }
   return wrap;
 }
 
-// --- group blocks ---
-// Collapsed groups, per browser-independent pref (a list of group ids).
-const COLLAPSED_GROUPS_KEY = "genie_collapsed_groups";
-let collapsedGroups = new Set();
-try {
-  collapsedGroups = new Set(JSON.parse(getPref(COLLAPSED_GROUPS_KEY, "[]")) || []);
-} catch {
-  /* corrupt — none collapsed */
-}
-function setGroupCollapsed(gid, on) {
-  collapsedGroups.delete(gid);
-  if (on) collapsedGroups.add(gid); // newest last
-  // Only the most recent ones are kept, so ids of deleted groups don't pile up.
-  setPref(COLLAPSED_GROUPS_KEY, JSON.stringify([...collapsedGroups].slice(-200)));
-}
-
-// A group's header (▶, name, length, actions) and its prompts' cards, numbered.
-function makeSavedGroupBlock(gid, shownMembers) {
-  const members = savedGroupMembers(gid);
-  const name = members[0]?.group?.name || "Group";
-  const block = document.createElement("div");
-  block.className = "sp-group";
-  block.dataset.group = gid;
-  const isActive = activeGroupId() === gid;
-  block.classList.toggle("run-active", isActive);
-  const collapsed = collapsedGroups.has(gid) && !savedPromptsFilter;
-  block.classList.toggle("collapsed", collapsed);
-
-  const head = document.createElement("div");
-  head.className = "sp-group-head";
-  head.tabIndex = 0;
-  const btn = (cls, text, title, onClick) => {
-    const b = document.createElement("button");
-    b.type = "button";
-    b.className = cls;
-    b.textContent = text;
-    b.title = title;
-    b.addEventListener("click", async (e) => {
-      e.stopPropagation();
-      try {
-        await onClick();
-      } catch (err) {
-        alert(err.message || String(err));
-      }
-    });
-    return b;
-  };
-  const use = btn(
-    "sp-use" + (isActive ? " on" : ""),
-    isActive ? "▶ Active" : "▶",
-    isActive ?
-      "Generate uses this group while the Saved Prompts tab is open — click to stop"
-    : "Use this group for Generate: a clip from each of its prompts, in order (while the Saved Prompts tab is open)",
-    () => setActiveGroup(isActive ? null : gid),
-  );
-  const toggle = btn(
-    "link-btn sp-group-toggle",
-    collapsed ? "▸" : "▾",
-    collapsed ? "Show the group's prompts" : "Hide the group's prompts",
-    () => {
-      setGroupCollapsed(gid, !collapsed);
-      renderSavedPrompts();
-    },
-  );
-  const title = document.createElement("span");
-  title.className = "sp-group-name";
-  title.textContent = name;
-  const total = members.reduce((a, p) => a + (savedPromptSeconds(p) || 0), 0);
-  const meta = document.createElement("span");
-  meta.className = "sp-meta";
-  meta.textContent = [
-    `${members.length} prompt${members.length === 1 ? "" : "s"}`,
-    total ? `${+total.toFixed(3)}s in all` : null,
-  ]
-    .filter(Boolean)
-    .join(" · ");
-  const tools = document.createElement("span");
-  tools.className = "sp-group-tools";
-  tools.append(
-    btn("link-btn", "＋ Next", "Add the next prompt: a copy of the last one's subjects, references, style and sound, with a blank summary and shots", async () => {
-      const created = await promptsApi(
-        `/api/prompt-groups/${encodeURIComponent(gid)}/next`,
-        "POST",
-        { projectId: activeProjectId },
-      );
-      setGroupCollapsed(gid, false);
-      await loadSavedPrompts();
-      openPromptEditor(savedPrompts.find((x) => x.id === created.id) || created);
-    }),
-    btn("link-btn", "✎ Rename", "Rename the group", async () => {
-      const next = prompt("Group name:", name);
-      if (next == null || !next.trim() || next.trim() === name) return;
-      await promptsApi(`/api/prompt-groups/${encodeURIComponent(gid)}`, "PUT", {
-        projectId: activeProjectId,
-        name: next.trim(),
-      });
-      await loadSavedPrompts();
-    }),
-    btn("link-btn", "Ungroup", "Remove the group — its prompts stay, ungrouped, where they are", async () => {
-      if (!confirm(`Ungroup “${name}”?\n\nIts ${members.length} prompt${members.length === 1 ? "" : "s"} stay where they are, just no longer grouped.`))
-        return;
-      await promptsApi(
-        `/api/prompt-groups/${encodeURIComponent(gid)}?projectId=${encodeURIComponent(activeProjectId)}`,
-        "DELETE",
-      );
-      if (isActive) setActiveSavedPrompt(null);
-      await loadSavedPrompts();
-    }),
-  );
-  // Beside ▲ ▼ rather than among the tools: on a phone it gets their row, away from Ungroup.
-  const del = btn("link-btn sp-group-delete", "🗑", "Delete the group and all its prompts", async () => {
-      const n = members.length;
-      if (
-        !confirm(
-          `Delete the group “${name}” and its ${n} prompt${n === 1 ? "" : "s"}?\n\n` +
-            members.map((p, i) => `${i + 1}. ${p.title}`).join("\n") +
-            "\n\nThis can't be undone. Their images stay in the gallery and their runs stay in History. (Ungroup keeps the prompts instead.)",
-        )
-      )
-        return;
-      await promptsApi(
-        `/api/prompt-groups/${encodeURIComponent(gid)}?projectId=${encodeURIComponent(activeProjectId)}&withPrompts=1`,
-        "DELETE",
-      );
-      if (isActive) setActiveSavedPrompt(null);
-      projectPromptsCache.delete(activeProjectId);
-      await loadSavedPrompts();
-    });
-  head.append(use, toggle, title, meta, tools, del);
-  if (!savedPromptsFilter) head.appendChild(makeCardMoveButtons(members[0], gid));
-  head.addEventListener("click", () => toggle.click());
-  head.addEventListener("keydown", (e) => {
-    if (e.target !== head) return; // a button in the header handles its own keys
-    if (e.altKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
-      e.preventDefault();
-      moveSavedUnit(gid, e.key === "ArrowUp" ? -1 : 1);
-    } else if (e.key === "Enter" || e.key === " ") {
-      e.preventDefault();
-      toggle.click();
-    }
-  });
-  block.appendChild(head);
-
-  const body = document.createElement("div");
-  body.className = "sp-group-body";
-  if (!collapsed)
-    for (const p of shownMembers)
-      body.appendChild(makeSavedPromptCard(p, members.indexOf(p) + 1));
-  block.appendChild(body);
-  return block;
-}
-
-// `part`: the prompt's place in its group (1-based), shown on the card.
-function makeSavedPromptCard(p, part = null) {
+function makeSavedPromptCard(p) {
   const refs = p.refs || [];
   const card = document.createElement("div");
   card.className = "sp-card";
@@ -8311,13 +7929,6 @@ function makeSavedPromptCard(p, part = null) {
         "MiniMax H3 text-to-video format — compiled into its three fields when used"
       : "MiniMax H3 format — compiled into its six sections when used";
     title.prepend(badge);
-  }
-  if (part) {
-    const num = document.createElement("span");
-    num.className = "sp-part";
-    num.textContent = String(part);
-    num.title = `Prompt ${part} of the group “${p.group?.name || ""}”`;
-    title.prepend(num);
   }
   head.append(title, meta);
   if (!savedPromptsFilter) {
@@ -9274,8 +8885,7 @@ function renderMinimaxRefParts(mm) {
 }
 
 // The shot cards and ＋ Add cut, into `desc`. A shot holds how long it lasts; its start
-// time comes from the order, which the grip (drag) and ▲ ▼ change. A clip longer than
-// one generation belongs in a prompt group: one whole prompt per clip.
+// time comes from the order, which the grip (drag) and ▲ ▼ change.
 const MM_SHOT_TYPE = "application/x-genie-shot";
 function renderMinimaxShots(mm, desc, t2v) {
   const shots = mmEl("div", "pe-mm-shots");
@@ -9649,56 +9259,6 @@ function renderEditorActions() {
       openPromptEditor(fresh || copy, projectId);
     },
   );
-
-  // Group: put the prompt in one of the project's groups, a new one, or none — at once,
-  // like Move / Copy (it changes the saved prompt, not the edits).
-  {
-    const sel = document.createElement("select");
-    sel.className = "sp-transfer sp-group-pick";
-    sel.title = "Put this prompt in a group — a sequence of prompts generated one clip each";
-    const cur = editing.p.group?.id || "";
-    sel.appendChild(new Option(cur ? "📚 Leave the group" : "📚 No group", ""));
-    const seen = new Map();
-    getProjectPrompts(projectId).then((list) => {
-      for (const x of list)
-        if (x.group?.id && !seen.has(x.group.id)) seen.set(x.group.id, x.group);
-      for (const g of seen.values())
-        sel.appendChild(new Option(`📚 ${g.name}`, g.id));
-      sel.appendChild(new Option("📚 ＋ New group…", "__new"));
-      sel.value = cur;
-    });
-    sel.addEventListener("change", async () => {
-      const to = sel.value;
-      if (to === cur) return;
-      if (!okToLeaveEdits()) return void (sel.value = cur);
-      try {
-        if (to === "__new") {
-          const name = prompt("Name the new group:", editing.p.title);
-          if (!name?.trim()) return void (sel.value = cur);
-          await promptsApi("/api/prompt-groups", "POST", {
-            projectId,
-            name: name.trim(),
-            promptIds: [editing.p.id],
-          });
-        } else {
-          await promptsApi(base(), "PUT", {
-            projectId,
-            group: to ? seen.get(to) : null,
-          });
-        }
-        projectPromptsCache.delete(projectId);
-        await loadSavedPrompts();
-        const fresh = (await getProjectPrompts(projectId)).find(
-          (x) => x.id === editing.p.id,
-        );
-        if (fresh) openPromptEditor(fresh, projectId);
-      } catch (err) {
-        alert(err.message || String(err));
-        sel.value = cur;
-      }
-    });
-    peActions.appendChild(sel);
-  }
 
   // Move / copy to another project: a dropdown of the other projects, like the gallery's ⇄.
   const others = projects.filter((x) => x.id !== projectId);
@@ -10110,12 +9670,9 @@ function closePreviewStream() {
 }
 
 // `prompt`: the text to send — the textarea's, or an active saved prompt's export.
-// `seconds`: a group member's own length, in place of the form's duration — as whole
-// seconds within what the model allows.
-function collectInput(resolved, prompt = promptEl.value, seconds = null) {
+function collectInput(resolved, prompt = promptEl.value) {
   prompt = String(prompt).trim();
   const durEl = document.getElementById("duration");
-  const runSeconds = seconds > 0 ? runDuration(seconds) : null;
   if (isSeedream()) {
     const input = {
       model: modelSelect.value,
@@ -10136,7 +9693,7 @@ function collectInput(resolved, prompt = promptEl.value, seconds = null) {
     const input = {
       model: modelSelect.value,
       prompt,
-      duration: runSeconds ?? Number(durEl.value),
+      duration: Number(durEl.value),
       resolution: resolutionSelect.value,
     };
     if (isH3I2V()) {
@@ -10159,7 +9716,7 @@ function collectInput(resolved, prompt = promptEl.value, seconds = null) {
     const input = {
       model: modelSelect.value,
       prompt,
-      duration: runSeconds ?? Number(durEl.value),
+      duration: Number(durEl.value),
       resolution: resolutionSelect.value,
       aspect_ratio: aspectSelect.value,
     };
@@ -10191,7 +9748,7 @@ function collectInput(resolved, prompt = promptEl.value, seconds = null) {
     generate_audio: document.getElementById("generate_audio").checked,
     resolution: document.getElementById("resolution").value,
     aspect_ratio: document.getElementById("aspect_ratio").value,
-    duration: runSeconds ?? (durationAuto() ? -1 : Number(durEl.value)),
+    duration: durationAuto() ? -1 : Number(durEl.value),
     web_search:
       document.getElementById("web_search").checked &&
       !(webSearchT2VOnly() && hasActiveMedia()),
@@ -10229,32 +9786,18 @@ form.addEventListener("submit", async (e) => {
   // Pinned now, so switching tabs (or the active prompt) mid-upload can't change the run.
   const plan = savedRunPlan();
   if (!plan) return submitKieRuns(null, [{ text: promptEl.value, duration: null }]);
-  // A saved prompt, or each member of an active group in turn — every one with its own
-  // references, so they're loaded, checked and uploaded per prompt.
-  const inGroup = !!plan[0].group;
-  if (inGroup) hide(errorEl);
-  const notes = []; // every member's notes, shown together
-  for (const [i, run] of plan.entries()) {
-    const ok = await submitKieRuns(run.prompt, [run], inGroup, notes);
-    if (!ok) {
-      if (i > 0)
-        setError(
-          `${errorEl.textContent}\n(The ${i} prompt${i === 1 ? "" : "s"} before it ${i === 1 ? "was" : "were"} submitted; the rest weren't.)`,
-        );
-      break;
-    }
-  }
+  // A saved prompt, with its own references, loaded, checked and uploaded.
+  submitKieRuns(plan[0].prompt, plan);
 });
 
 // Submit the runs of one prompt to kie.ai (×N each): `fromSaved` is the saved prompt
 // they come from (its references are loaded into the form first), or null for the
 // Prompt tab's text. Resolves false when the form can't be submitted as it is.
-async function submitKieRuns(fromSaved, plan, inGroup = false, notes = []) {
-  for (const n of loadPlanRunMedia({ ...plan[0], prompt: fromSaved }))
-    notes.push(inGroup ? `${fromSaved.title}: ${n}` : n);
+async function submitKieRuns(fromSaved, plan) {
+  const notes = loadPlanRunMedia({ ...plan[0], prompt: fromSaved });
   const mediaNotes = notes;
   const fail = (msg) => {
-    setError([...notes, inGroup ? `${fromSaved.title}: ${msg}` : msg].join("\n"));
+    setError([...notes, msg].join("\n"));
     return false;
   };
 
@@ -10337,7 +9880,7 @@ async function submitKieRuns(fromSaved, plan, inGroup = false, notes = []) {
     return false;
   }
 
-  if (!inGroup) hide(errorEl);
+  hide(errorEl);
   if (mediaNotes.length) setError(mediaNotes.join("\n"));
   // Lock only for the upload→create window so a double-click can't double-submit
   // the same form. It re-enables once the task is created, freeing you to queue
@@ -10361,9 +9904,8 @@ async function submitKieRuns(fromSaved, plan, inGroup = false, notes = []) {
     const s = collectInput(
       { image: [], video: [], audio: [], firstFrame: [], lastFrame: [] },
       runs[i].prompt,
-      runs[i].duration,
     );
-    if (fromSaved) s.savedPrompt = savedPromptStamp(fromSaved, runs[i]); // History only, not sent to kie.ai
+    if (fromSaved) s.savedPrompt = savedPromptStamp(fromSaved); // History only, not sent to kie.ai
     if (hasPromptTokens(runs[i].text)) s.promptTemplate = runs[i].text; // History only: Re-import restores the %tokens%
     return s;
   };
@@ -10442,7 +9984,7 @@ async function submitKieRuns(fromSaved, plan, inGroup = false, notes = []) {
       try {
         // The real input (hosted URLs, this run's wildcard picks) for the API call.
         job.taskId = await createTask(
-          collectInput(resolved, runs[i].prompt, runs[i].duration),
+          collectInput(resolved, runs[i].prompt),
           job.live,
         );
         job.live.setStatus("Generating… this can take a few minutes.");

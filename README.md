@@ -140,8 +140,8 @@ submit a prompt + reference media, then polls until the result is ready.
   Ollama, or any OpenAI-compatible server) looks at gallery images and writes
   a shot list from a short description and theme. You edit the shots and add breaks;
   it then writes the rest of each prompt around its shots, unchanged, and saves them
-  to Saved Prompts with the images as references (several runs of shots become a
-  prompt group, one prompt per run). GENie loads the model only when ComfyUI is idle and
+  to Saved Prompts with the images as references (several runs of shots become
+  separate prompts, one per run). GENie loads the model only when ComfyUI is idle and
   VRAM allows (freeing ComfyUI's models if needed), and unloads it the moment a
   generation starts. See [`docs/LLM.md`](docs/LLM.md).
 

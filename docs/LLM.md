@@ -53,9 +53,9 @@ opening paragraph and a closing one on sound). The shots are never sent back to 
 rewritten. They go into the saved prompt exactly as you left them, and anything the
 model says about them is ignored.
 
-With no breaks you get one prompt. With breaks you get a **prompt group** named after
-the **Video title**: 9 shots over 45 seconds with breaks after the 3rd and 6th become
-a group of 3 prompts. Each prompt is its own LLM request and is shown the whole shot
+With no breaks you get one prompt. With breaks you get several prompts, saved one
+after another and titled after the **Video title** (`Title — 1/3`…): 9 shots over 45
+seconds with breaks after the 3rd and 6th become 3 prompts. Each prompt is its own LLM request and is shown the whole shot
 list plus the style and subjects of the prompts before it, so keys and definitions
 stay the same from clip to clip. For MiniMax H3 the model also says which images each
 prompt needs, and only those are attached to it, renumbered as `<Picture 1>`,

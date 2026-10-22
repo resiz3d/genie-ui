@@ -24,7 +24,8 @@
 // file for the user to edit and to put breaks in. Then, for each run of shots between
 // breaks, the model writes the rest of a prompt around them (subjects, summary, style,
 // sound, music…): the shots themselves go into the saved prompt exactly as the user
-// left them, and are never sent back to be rewritten. Several runs make a prompt group.
+// left them, and are never sent back to be rewritten. Several runs make several prompts,
+// saved one after another.
 //
 // Both steps run as server-side jobs, so they keep going with the browser closed (or
 // from the phone). Each prompt is saved to the project's Saved Prompts the moment
@@ -1350,7 +1351,7 @@ export function createLlm(deps) {
   // Step 2: the prompts around a finished shot list. `body.shots` is the list as the
   // user left it — [{ len, text, brk }], `brk` marking a break after a shot. Each run
   // of shots between breaks becomes one saved prompt holding exactly those shots; two
-  // or more runs are saved as a prompt group named `body.title`.
+  // or more runs are saved one after another, titled `body.title — 1/N`…
   function startBuild(body = {}) {
     const inp = buildInputs(body, false);
     const list = cleanShotList({ shots: body.shots, title: body.title });
@@ -1369,7 +1370,6 @@ export function createLlm(deps) {
       groups, // each prompt's shots, fixed (stripped from the public view)
       clips: groups.map(total), // each prompt's seconds
       videoTitle: list.title.trim(),
-      group: null, // the prompt group they go into, when there are several
       clipsDone: [], // the prompts written so far, for the next one's context
       duration: total(list.shots),
       count: groups.length,
@@ -1927,7 +1927,7 @@ export function createLlm(deps) {
         job,
         "done",
         job.count > 1 ?
-          `Saved a prompt group of ${job.count} prompts to Saved Prompts.`
+          `Saved ${job.count} prompts to Saved Prompts.`
         : "Saved the prompt to Saved Prompts.",
       );
     } finally {
@@ -2416,14 +2416,9 @@ export function createLlm(deps) {
     let images = job.format === "minimax_t2v" ? [] : job.images;
     let minimax = result.minimax;
     let title = prefixed(job.videoTitle || result.title || `Prompt ${n}`);
-    let group;
     if (job.groups.length > 1) {
-      job.group ||= {
-        id: randomUUID(),
-        name: prefixed(job.videoTitle || result.title || "Video").slice(0, 200),
-      };
-      group = job.group;
-      title = `${result.title || group.name} — ${n}/${job.groups.length}`;
+      const name = prefixed(job.videoTitle || result.title || "Video");
+      title = `${result.title || name} — ${n}/${job.groups.length}`;
       // Only the images this clip uses, renumbered: its <Picture N> labels count from
       // its own reference list (the one change a shot's text can see — a label that
       // would otherwise point at the wrong image).
@@ -2441,7 +2436,6 @@ export function createLlm(deps) {
       type: structured ? job.format : "default",
       prompt: structured ? "" : result.prompt,
       ...(structured ? { minimax } : {}),
-      ...(group ? { group } : {}),
       duration: job.clips[n - 1],
       weight: at >= 0 ? list[at].weight ?? 0 : 0,
       refs: images.map((g) => ({ id: g.id, kind: "image", name: g.name })),
@@ -2758,7 +2752,7 @@ export function parseReply(raw) {
 // With `fixedShots` (a build: the user's own shots) the reply's shots, if it sent any,
 // are ignored and those go in untouched; without (a revision) the shots are the
 // reply's, and a reply with only a "prompt" string becomes a single shot.
-// `pictures` comes from one prompt of a group (see buildMessages).
+// `pictures` comes from one prompt of a multi-prompt build (see buildMessages).
 export function parseStructuredReply(raw, format, fixedShots = null) {
   const j = replyJson(raw);
   if (!j || Array.isArray(j))
