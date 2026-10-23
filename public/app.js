@@ -696,8 +696,9 @@ function makeMediaList(kind, opts = {}) {
     },
 
     // Host any local items on kie.ai now, returning the ordered URL list.
-    async resolve() {
-      const ready = list.items.filter((i) => i.status === "ready");
+    // `ready` is the items to upload — the caller's click-time snapshot, by default
+    // whatever is ready now.
+    async resolve(ready = list.items.filter((i) => i.status === "ready")) {
       // Sequential on purpose: parallel uploads saturate the (usually much
       // smaller) upstream link and stall everything else on the connection.
       const urls = [];
@@ -9791,6 +9792,41 @@ function collectInput(resolved, prompt = promptEl.value) {
   return input;
 }
 
+// A reference URL that isn't uploaded yet. The request is built from the form at click
+// time with these in place of URLs (REF_TOKEN + "kind:index"), and fillRefs swaps in the
+// hosted URLs after the upload — so changing the model or settings while references
+// upload can't change what is sent.
+const REF_TOKEN = "\u0000ref:";
+
+// `input` with its REF_TOKENs replaced from `urls` ({kind: [url]}). With no `urls`,
+// they're dropped instead — the History copy, which keeps no hosted URLs — along with
+// any object built around one (e.g. a Kling voice).
+function fillRefs(input, urls) {
+  const fill = (v) => {
+    if (typeof v === "string" && v.startsWith(REF_TOKEN)) {
+      const [kind, i] = v.slice(REF_TOKEN.length).split(":");
+      return urls ? urls[kind][i] : undefined;
+    }
+    if (Array.isArray(v)) return v.map(fill).filter((x) => x !== undefined);
+    if (v && typeof v === "object") {
+      const out = {};
+      for (const [k, x] of Object.entries(v)) {
+        const f = fill(x);
+        if (f === undefined) return undefined;
+        out[k] = f;
+      }
+      return out;
+    }
+    return v;
+  };
+  const out = {};
+  for (const [k, v] of Object.entries(input)) {
+    const f = fill(v);
+    if (f !== undefined) out[k] = f;
+  }
+  return out;
+}
+
 // --- submit / generate --------------------------------------------------------
 form.addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -9915,14 +9951,30 @@ async function submitKieRuns(fromSaved, plan) {
     lastFrame: usesFrames() ? lists.lastFrame.localIds() : [],
   };
 
+  // The references to upload and every run's request, pinned now: the upload below
+  // takes a while, and the form may change under it (a different model, settings or
+  // references for the next run). Nothing after this point reads the form.
+  const readyItems = (kind) => lists[kind].items.filter((i) => i.status === "ready");
+  const refItems = {
+    image: usesRefImages() ? readyItems("image") : [],
+    video: refMedia ? readyItems("video") : [],
+    audio: refMedia ? readyItems("audio") : [],
+    firstFrame: usesFrames() ? readyItems("firstFrame") : [],
+    lastFrame: usesFrames() ? readyItems("lastFrame") : [],
+  };
+  const refTokens = Object.fromEntries(
+    Object.entries(refItems).map(([kind, items]) => [
+      kind,
+      items.map((_, i) => `${REF_TOKEN}${kind}:${i}`),
+    ]),
+  );
+  const sends = runs.map((r) => collectInput(refTokens, r.prompt));
+
   // ×N: one batch of identical requests. Each run gets its own job, History card and
   // kie.ai task, but the reference media is uploaded once and shared by all of them.
   const count = runs.length;
   const storedInputFor = (i) => {
-    const s = collectInput(
-      { image: [], video: [], audio: [], firstFrame: [], lastFrame: [] },
-      runs[i].prompt,
-    );
+    const s = fillRefs(sends[i], null);
     if (fromSaved) s.savedPrompt = savedPromptStamp(fromSaved); // History only, not sent to kie.ai
     if (hasPromptTokens(runs[i].text)) s.promptTemplate = runs[i].text; // History only: Re-import restores the %tokens%
     return s;
@@ -9963,22 +10015,18 @@ async function submitKieRuns(fromSaved, plan) {
   // Host reference media on kie.ai now — nothing was sent when they were dropped.
   let resolved;
   try {
-    if (allItems().some((i) => i.status === "ready")) {
+    if (Object.values(refItems).some((items) => items.length)) {
       setAllStatus(
         count > 1 ?
           `Uploading reference media (shared by ${count} runs)…`
         : "Uploading reference media…",
       );
     }
-    resolved = {
-      // only upload the reference kinds the selected model+mode actually uses
-      // (2.5 forbids mixing reference images with first/last frames)
-      image: usesRefImages() ? await lists.image.resolve() : [],
-      video: refMedia ? await lists.video.resolve() : [],
-      audio: refMedia ? await lists.audio.resolve() : [],
-      firstFrame: usesFrames() ? await lists.firstFrame.resolve() : [],
-      lastFrame: usesFrames() ? await lists.lastFrame.resolve() : [],
-    };
+    // only the reference kinds the selected model+mode actually uses (2.5 forbids
+    // mixing reference images with first/last frames), as pinned above
+    resolved = {};
+    for (const [kind, items] of Object.entries(refItems))
+      resolved[kind] = items.length ? await lists[kind].resolve(items) : [];
   } catch (err) {
     const msg = err.message || "Failed to upload reference media.";
     for (const job of jobs) await failJob(job, msg);
@@ -10001,10 +10049,7 @@ async function submitKieRuns(fromSaved, plan) {
       job.live.setStatus("Submitting…");
       try {
         // The real input (hosted URLs, this run's wildcard picks) for the API call.
-        job.taskId = await createTask(
-          collectInput(resolved, runs[i].prompt),
-          job.live,
-        );
+        job.taskId = await createTask(fillRefs(sends[i], resolved), job.live);
         job.live.setStatus("Generating… this can take a few minutes.");
         await persistEntryTask(job); // let the server-side sweep finish it if this tab goes away
         pollJob(job);
