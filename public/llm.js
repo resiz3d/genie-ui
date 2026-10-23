@@ -35,10 +35,28 @@
 
   async function loadCfg() {
     cfg = await api("/api/llm/settings");
+    showRevModel();
     return cfg;
   }
   const activeSource = () =>
     cfg?.sources.find((s) => s.id === cfg.activeSourceId) || cfg?.sources[0] || null;
+
+  // A cloud API, or a server on this PC / the home network?
+  const isApi = (src) =>
+    !!cfg.kinds[src.kind]?.cloud ||
+    (src.kind === "openai" &&
+      !/^https?:\/\/(localhost|127\.|\[::1\]|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/i.test(src.baseUrl || ""));
+  // The line under each ✨ Revise button: the model it will use.
+  function showRevModel() {
+    const els = document.querySelectorAll(".llm-rev-model");
+    if (!els.length) return;
+    if (!cfg) return void loadCfg().catch(() => {});
+    const src = activeSource();
+    const text =
+      !src ? "No LLM server set up — ⚙ LLM settings"
+      : `Model: ${src.model || "(none chosen)"} · ${src.name} (${isApi(src) ? "API" : "local"})`;
+    for (const el of els) el.textContent = text;
+  }
 
   // ------------------------------------------------------------- markup
   const buildModal = document.createElement("div");
@@ -149,7 +167,7 @@
           <select class="llm-s-kind"></select>
         </label>
       </div>
-      <label class="llm-s-url-wrap"><span>Server URL <span class="hint">— the OpenAI-compatible address, with or without /v1</span></span>
+      <label class="llm-s-url-wrap"><span>Server URL <span class="hint llm-s-url-hint">— the OpenAI-compatible address, with or without /v1</span></span>
         <input type="text" class="llm-s-url" placeholder="http://127.0.0.1:1234" autocomplete="off" />
       </label>
       <label class="llm-s-key-wrap"><span>API key <span class="hint llm-s-keyhint"></span></span>
@@ -186,7 +204,7 @@
         <input type="text" class="llm-s-model" autocomplete="off" spellcheck="false" placeholder="test the server to list its models, or type an id" />
       </label>
       <p class="muted llm-s-model-info"></p>
-      <div class="pe-row">
+      <div class="pe-row llm-s-local">
         <label title="How much free VRAM the model needs before GENie loads it. 0 = the model file size plus the headroom below."><span>VRAM needed (GB) <span class="hint">0 = auto</span></span>
           <input type="number" class="llm-s-vram" min="0" step="0.5" />
         </label>
@@ -194,7 +212,7 @@
           <input type="number" class="llm-s-ctx" min="0" step="1024" />
         </label>
       </div>
-      <label class="inline" title="For a model kept in system RAM (no GPU layers). GENie then doesn't wait for ComfyUI or check VRAM before using it, a generation doesn't interrupt it, and it stays loaded. Its jobs run alongside a GPU build."><input type="checkbox" class="llm-s-cpu" /> CPU only <span class="hint">— runs in system RAM: no turn-taking with ComfyUI, and it stays loaded</span></label>
+      <label class="inline llm-s-local" title="For a model kept in system RAM (no GPU layers). GENie then doesn't wait for ComfyUI or check VRAM before using it, a generation doesn't interrupt it, and it stays loaded. Its jobs run alongside a GPU build."><input type="checkbox" class="llm-s-cpu" /> CPU only <span class="hint">— runs in system RAM: no turn-taking with ComfyUI, and it stays loaded</span></label>
       <details class="llm-adv">
         <summary>Load options (advanced)</summary>
         <label><span class="hint llm-s-args-hint"></span>
@@ -999,7 +1017,18 @@
     $(".llm-s-llama", setModal).classList.toggle("hidden", !on);
     for (const c of [".llm-s-url-wrap", ".llm-s-key-wrap", ".llm-s-model-wrap", ".llm-adv"])
       $(c, setModal).classList.toggle("hidden", on);
+    // A cloud server: nothing to load, no VRAM, and always in its own lane.
+    const cloud = !!cfg.kinds[s.kind.value]?.cloud;
+    setModal.querySelectorAll(".llm-s-local").forEach((el) => el.classList.toggle("hidden", cloud));
+    if (cloud) $(".llm-adv", setModal).classList.add("hidden");
+    $(".llm-s-url-hint", setModal).textContent =
+      s.kind.value === "kieai" ? "— https://api.kie.ai" : "— the OpenAI-compatible address, with or without /v1";
     const src = draft?.sources.find((x) => x.id === editingId);
+    s.keyhint.textContent =
+      src?.hasApiKey ? "— a key is saved; leave blank to keep it"
+      : s.kind.value === "kieai" && cfg.kieEnvKey ? "— leave blank to use KIE_API_KEY from .env"
+      : s.kind.value === "kieai" ? "— from kie.ai/api-key"
+      : "— only if the server requires one";
     s.clearWrap.classList.toggle("hidden", on || !src?.hasApiKey);
     s.test.textContent = on ? "🔌 Check the files" : "🔌 Test & list models";
     s.llamaHint.textContent =
@@ -1014,7 +1043,7 @@
     s.analyze.innerHTML = "";
     s.analyze.appendChild(new Option("The one builds use", ""));
     for (const x of draft.sources)
-      s.analyze.appendChild(new Option(x.cpuOnly ? `${x.name} (CPU)` : x.name, x.id));
+      s.analyze.appendChild(new Option(x.cpuOnly && !cfg.kinds[x.kind]?.cloud ? `${x.name} (CPU)` : x.name, x.id));
     s.analyze.value = draft.sources.some((x) => x.id === value) ? value : "";
   }
 
@@ -1050,8 +1079,6 @@
     s.kind.value = src.kind;
     s.url.value = src.baseUrl;
     s.key.value = src.apiKey || "";
-    s.keyhint.textContent =
-      src.hasApiKey ? "— a key is saved; leave blank to keep it" : "— only if the server requires one";
     s.clearWrap.classList.toggle("hidden", !src.hasApiKey);
     s.clear.checked = !!src.clearApiKey;
     s.model.value = src.model;
@@ -1122,7 +1149,7 @@
           `✓ Files found — ${testModels[0]?.loaded ? "running now" : "not running: GENie starts it when a job needs it"}`
         : `✓ Connected — ${testModels.length} model${testModels.length === 1 ? "" : "s"}` +
           (nVision ? `, ${nVision} with vision (👁)` : "") +
-          (d.gpu ? ` · GPU ${(d.gpu.freeMiB / 1024).toFixed(1)} GB free` : "");
+          (d.gpu && !cfg.kinds[src.kind]?.cloud ? ` · GPU ${(d.gpu.freeMiB / 1024).toFixed(1)} GB free` : "");
       if (!s.model.value && sorted[0]) s.model.value = sorted.find((m) => m.vision)?.id || "";
       renderModelInfo();
     } catch (err) {
@@ -1198,6 +1225,11 @@
     // Switching type on an untouched default URL moves it to that server's usual port.
     if (port && /^http:\/\/(127\.0\.0\.1|localhost):\d+\/?$/.test(s.url.value.trim()))
       s.url.value = `http://127.0.0.1:${port}`;
+    if (k === "kieai") {
+      s.url.value = "https://api.kie.ai";
+      s.cpu.checked = true;
+      if (/^New server$/.test(s.name.value.trim())) s.name.value = "kie.ai";
+    }
   });
   s.model.addEventListener("input", () => {
     syncModelPick();
@@ -1285,6 +1317,7 @@
           instructions: s.instr.value,
         },
       });
+      showRevModel();
       closeSettings();
       if (!buildModal.classList.contains("hidden")) {
         fillSourceSelect(b.source, cfg.activeSourceId);
@@ -1349,12 +1382,12 @@
     <div class="llm-rev-body">
       <textarea class="llm-rev-ask" rows="3" placeholder="e.g. Make her lines teasing and playful · add a cut at 00:06 to a close-up of her face · slow the pacing down"></textarea>
       <div class="llm-rev-bar">
-        <label class="inline" title="Also follow the Rules from this project's ✨ Build with AI form"><input type="checkbox" class="llm-rev-rules" checked /> Follow my Rules</label>
         <span class="llm-rev-btns">
           <button type="button" class="btn-secondary llm-rev-cancel hidden">Stop</button>
           <button type="button" class="llm-rev-go">✨ Revise</button>
         </span>
       </div>
+      <p class="muted llm-rev-model"></p>
       <p class="muted llm-rev-status"></p>
       <div class="llm-rev-result hidden">
         <div class="pe-refs-head">Suggested revision <span class="hint">— <ins>added</ins> / <del>removed</del> compared with the editor</span></div>
@@ -1370,7 +1403,6 @@
   peActions.after(rev);
   const r = {
     ask: $(".llm-rev-ask", rev),
-    rules: $(".llm-rev-rules", rev),
     go: $(".llm-rev-go", rev),
     stop: $(".llm-rev-cancel", rev),
     status: $(".llm-rev-status", rev),
@@ -1466,6 +1498,7 @@
     r.result.classList.toggle("hidden", !res);
     if (res) r.diff.innerHTML = diffHtml(st.before ?? editorText(), resultText(res));
     r.applied.classList.toggle("hidden", !st?.undo);
+    showRevModel();
   }
 
   async function pollRev() {
@@ -1506,7 +1539,6 @@
         refs: v.refs,
         duration: v.duration,
         instruction,
-        useRules: r.rules.checked,
       });
       const old = revState.get(id);
       revState.set(id, { jobId: job.id, job, before, undo: old?.undo || null });
@@ -1618,14 +1650,15 @@
               <option value="minimax">MiniMax H3 Ref2Video guide</option>
               <option value="minimax_t2v">MiniMax H3 Text2Video guide</option>
               <option value="kling">Kling 4.0 guide</option>
+              <option value="seedance">Seedance 2.5 guide</option>
             </select></label>
-          <label class="inline" title="Also follow the Rules from this project's ✨ Build with AI form"><input type="checkbox" class="llm-qrev-rules" /> Follow my Rules</label>
         </span>
         <span class="llm-rev-btns">
           <button type="button" class="btn-secondary llm-rev-cancel hidden">Stop</button>
           <button type="button" class="llm-rev-go">✨ Revise</button>
         </span>
       </div>
+      <p class="muted llm-rev-model"></p>
       <p class="muted llm-rev-status"></p>
       <div class="llm-rev-result hidden">
         <div class="pe-refs-head">Suggested revision <span class="hint">— <ins>added</ins> / <del>removed</del></span></div>
@@ -1648,15 +1681,11 @@
     diff: $(".llm-rev-diff", qrev),
     applied: $(".llm-rev-applied", qrev),
     guide: $(".llm-qrev-guide", qrev),
-    rules: $(".llm-qrev-rules", qrev),
   };
   const QGUIDE_KEY = "genie_qrev_guide";
-  const QRULES_KEY = "genie_qrev_rules";
   q.guide.value = getPref(QGUIDE_KEY, "") || "";
   if (q.guide.selectedIndex < 0) q.guide.value = "";
-  q.rules.checked = getPref(QRULES_KEY, "0") === "1";
   q.guide.addEventListener("change", () => setPref(QGUIDE_KEY, q.guide.value));
-  q.rules.addEventListener("change", () => setPref(QRULES_KEY, q.rules.checked ? "1" : "0"));
   let qta = null; // the prompt box the panel is under
   let qst = null; // { jobId, job, before, applied }
   let qundo = null; // { ta, value }
@@ -1774,6 +1803,7 @@
     q.result.classList.toggle("hidden", !res);
     if (res) q.diff.innerHTML = diffHtml(qst.before, revisedText(res, false).text);
     q.applied.classList.toggle("hidden", !qundo);
+    showRevModel();
   }
 
   // The reply as it would go in the box: with reference images, each <Picture k>
@@ -1815,7 +1845,6 @@
         instruction,
         images: qimgs.map((g) => g.id),
         guide: q.guide.value,
-        useRules: q.rules.checked,
       });
       qst = { jobId: job.id, job, before, images: qimgs.slice() };
       renderQ();

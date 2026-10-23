@@ -50,7 +50,41 @@ export const SOURCE_KINDS = {
   // No server of its own to connect to: GENie launches llama-server on `port`.
   llamacpp: { label: "llama.cpp server (GENie runs it)", port: 8090, managed: true, launched: true },
   openai: { label: "Other OpenAI-compatible", port: null, managed: false },
+  // kie.ai's chat models (see kieRoute). A cloud server: its jobs run in the CPU lane,
+  // never waiting on ComfyUI or the GPU.
+  kieai: { label: "kie.ai (cloud: Claude, GPT, Gemini…)", port: null, managed: false, cloud: true },
 };
+
+const KIE_URL = "https://api.kie.ai";
+// kie.ai now and then answers "Internal error, please try again later" (or a 5xx
+// code) to a request that goes through on the next try.
+const KIE_TRIES = 4;
+// kie.ai lists only its Claude models over the API; these are the rest, from
+// docs.kie.ai (2026-10). An id that isn't here can still be typed in.
+const KIE_MODELS = [
+  ["gpt-6-1-sol", "GPT-6.1 Sol"],
+  ["gpt-6-sol", "GPT-6 Sol"],
+  ["gpt-6-luna", "GPT-6 Luna"],
+  ["gpt-6-astra", "GPT-6 Astra"],
+  ["gpt-5-6-sol", "GPT-5.6 Sol"],
+  ["gpt-5-6-terra", "GPT-5.6 Terra"],
+  ["gpt-5-6-luna", "GPT-5.6 Luna"],
+  ["gemini-4-argon-openai", "Gemini 4 Argon"],
+  ["gemini-3-8-flash-openai", "Gemini 3.8 Flash"],
+  ["gemini-3.1-pro", "Gemini 3.1 Pro"],
+  ["grok-4-7", "Grok 4.7"],
+  ["kimi-k3", "Kimi K3"],
+  ["deepseek-v4-1-flash", "DeepSeek V4.1 Flash"],
+];
+// Where a kie.ai model is and how it's spoken to: Claude in Anthropic's Messages
+// format; Gemini in OpenAI's chat format, at an address named after the model (no
+// model in the body); the rest in OpenAI's Responses format, at one address per family.
+function kieRoute(model) {
+  if (/^claude/i.test(model)) return { format: "anthropic", path: "/claude/v1/messages" };
+  if (/^gemini/i.test(model)) return { format: "chat", path: `/${encodeURIComponent(model)}/v1/chat/completions` };
+  const family = /^gpt/i.test(model) ? "codex" : /^grok/i.test(model) ? "grok" : "openai";
+  return { format: "responses", path: `/${family}/v1/responses` };
+}
 
 // The llama-servers GENie has running, across every createLlm(): { child, pid, file }.
 // They're stopped when GENie exits, so none is left behind holding RAM. (On Windows a
@@ -108,7 +142,7 @@ export const PLAIN_REVISE_INSTRUCTIONS =
 const PLAIN_REVISE_REPLY =
   "Reply with ONLY the complete revised text: no preamble, no explanation, no quotes, no code fences, no markers around it.";
 // The guides a quick revise can follow (see guideFor in createLlm).
-export const PLAIN_REVISE_GUIDES = new Set(["", "default", "minimax", "minimax_t2v", "kling"]);
+export const PLAIN_REVISE_GUIDES = new Set(["", "default", "minimax", "minimax_t2v", "kling", "seedance"]);
 
 export const BUILD_FORMATS = new Set(["default", "minimax", "minimax_t2v"]);
 
@@ -169,6 +203,21 @@ export const KLING_INSTRUCTIONS = [
   "Dialogue: put each line in double quotes after who says it, in which language and how, e.g. She says in slow, clear Spanish: \"…\". With several speakers, one speaks at a time with no overlap. Describe ambience, effects and music in words.",
   "Prefer positive wording (\"she is shown in profile\") over negatives, which can cause mistakes. The exclusions worth stating are \"No subtitles\" and \"No background music\" when they are not wanted.",
   "Stay within 8,000 characters.",
+].join("\n\n");
+
+// Seedance 2.5 (through kie.ai) — a guide for ✨ Revise with AI only; the prompt is
+// plain text. Distilled from Runway's Seedance 2.5 prompt guide; see
+// docs/SEEDANCE-PROMPTING.md.
+export const SEEDANCE_INSTRUCTIONS = [
+  "You write prompts for Seedance 2.5, an AI video model (4–30 seconds) that takes reference images, videos and audio, or a first and last frame. It generates its own dialogue, sound effects and music in the same pass.",
+  "References are named the way kie.ai's API names them: reference images @Image1, @Image2 …, reference videos @Video1 …, reference audio @Audio1 …, numbered in the order they are sent. Never write <Picture 1>, @image_1, [Image 1] or any other form, and don't invent mentions for files that aren't there. With a first and last frame there are no @ mentions: describe what the first frame shows, what the last frame shows and how the video gets from one to the other. When the user attaches pictures to look at, describe what they show in words instead.",
+  "Write the prompt in this order: (1) Asset bindings — one line per reference binding it to one role only (subject, product, setting, voice, motion, camera move …), e.g. \"@Image1: Mara, the hero — short silver hair, green raincoat\". Loose bindings like \"use this for style\" pull in things that weren't wanted. (2) A one-sentence summary: subject, location, event, genre or style, camera movement — it ties the shots into one scene. (3) A timeline of continuous whole-second beats with no gaps, like \"BEAT 1 (0s-6s): …\", each covering the visuals, camera, action, dialogue and sound; beats of about 6–8 seconds with a 3–4 second closing beat work well, and the last beat ends at the clip's length. (4) A short consistency line: what stays constant — camera feel, lighting, environment, recurring elements. A single continuous take needs no timeline: describe the camera's route in order, as one unbroken move from start to finish.",
+  "Cite a reference by its @ name rather than re-describing it in prose, which can make the model treat it as a new element. For the main subject, name it once with two or three fixed traits, and restate those traits at the major beats.",
+  "To change an existing video, state the scope, the change from A to B and what stays the same, naming the video directly: \"Preserve the composition, camera position, lighting and performance rhythm of @Video1. Only change …\"",
+  "Camera: plain film language — locked-off, push-in, pull-away, orbit, half orbit, crane, lateral tracking, low angle, overhead top-down, macro, whip pan. A beat longer than about 4 seconds can combine moves. Mark cuts explicitly (\"Hard cut to …\"); timestamps pace the action rather than fix frame-exact cuts.",
+  "Dialogue: plain labelled lines, e.g. Dialogue (Mara): \"…\" — and name the language when it isn't English or Chinese. Spell out the sound for each beat: effects, whether there is music, and how they sit together (effects under the voiceover).",
+  "Describe what should be seen positively; broad negative exclusions cause mistakes. Use negatives only for subtitles and audio, e.g. \"No subtitles. No background music, environmental sounds only.\"",
+  "Be concrete: say what makes a look (materials, light, colours, lens, film stock, depth of field) instead of words like cinematic or premium. Stay within 20,000 characters.",
 ].join("\n\n");
 
 // Step 1 of a build — the shot list alone.
@@ -328,6 +377,7 @@ export function createLlm(deps) {
     ensureComfyWs = () => {},
     spawn = spawnProcess, // (file, args, options) => ChildProcess — the tests' way in
     llamaStartMs = 10 * 60 * 1000, // how long a llama-server may take to load its model
+    kieApiKey = "", // KIE_API_KEY from .env: a kie.ai server with no key of its own uses it
     log = console,
   } = deps;
 
@@ -409,6 +459,10 @@ export function createLlm(deps) {
       src.baseUrl = llamaUrl(src);
       src.model = llamaModelId(src);
     }
+    if (kind === "kieai") {
+      src.baseUrl ||= KIE_URL;
+      src.cpuOnly = true; // nothing of ours to load: no turn-taking with ComfyUI
+    }
     return src;
   }
 
@@ -428,6 +482,7 @@ export function createLlm(deps) {
         Object.entries(SOURCE_KINDS).map(([k, v]) => [k, v]),
       ),
       defaultInstructions: DEFAULT_INSTRUCTIONS,
+      kieEnvKey: !!kieApiKey,
     };
   }
 
@@ -499,18 +554,21 @@ export function createLlm(deps) {
   // ------------------------------------------------------------ HTTP helpers
   // "http://host:1234/v1" and "http://host:1234" both mean the server root.
   const rootUrl = (src) =>
-    src.kind === "llamacpp" ?
-      llamaUrl(src)
+    src.kind === "llamacpp" ? llamaUrl(src)
+    : src.kind === "kieai" ? (src.baseUrl || KIE_URL).replace(/\/+$/, "")
     : src.baseUrl.replace(/\/+$/, "").replace(/\/v1$/i, "");
 
   function headers(src) {
     const h = { "Content-Type": "application/json" };
-    if (src.apiKey) h.Authorization = `Bearer ${src.apiKey}`;
+    const key = src.apiKey || (src.kind === "kieai" ? kieApiKey : "");
+    if (key) h.Authorization = `Bearer ${key}`;
     return h;
   }
 
   async function call(src, method, p, body, { timeoutMs = 15000, signal } = {}) {
-    if (!src.baseUrl) throw new Error(`${src.name}: no server URL set`);
+    if (!rootUrl(src)) throw new Error(`${src.name}: no server URL set`);
+    if (src.kind === "kieai" && !headers(src).Authorization)
+      throw new Error(`${src.name}: no API key — enter one here, or set KIE_API_KEY in .env`);
     const signals = [AbortSignal.timeout(timeoutMs)];
     if (signal) signals.push(signal);
     let r;
@@ -893,6 +951,21 @@ export function createLlm(deps) {
           instances: loaded.has(id) ? [id] : [],
         };
       });
+    }
+    if (src.kind === "kieai") {
+      // Claude's list comes from kie.ai (and checks the key); the rest are built in.
+      const d = await call(src, "GET", "/anthropic/v1/models");
+      return [
+        ...(d.data || []).map((m) => [m.id, m.display_name || m.id]),
+        ...KIE_MODELS,
+      ].map(([id, name]) => ({
+        id,
+        name,
+        vision: true, // every one of them reads images
+        sizeBytes: null,
+        loaded: null,
+        instances: [],
+      }));
     }
     return openAiModels(src);
   }
@@ -1862,7 +1935,7 @@ export function createLlm(deps) {
           if (reason?.yielded) continue; // resumes after the generation
           failures++;
           log.error?.(`LLM: ${job.kind === "shots" ? "shot list" : subject ? `<${subject.key}>` : `prompt ${n}`} failed:`, err.message);
-          if (failures >= 3) throw err;
+          if (failures >= 3 || err.final) throw err;
           setJob(job, undefined, `That failed (${err.message}) — retrying…`);
           await sleep(2000);
           continue;
@@ -1976,6 +2049,7 @@ export function createLlm(deps) {
       name === "minimax" ? MINIMAX_INSTRUCTIONS
       : name === "minimax_t2v" ? MINIMAX_T2V_INSTRUCTIONS
       : name === "kling" ? KLING_INSTRUCTIONS
+      : name === "seedance" ? SEEDANCE_INSTRUCTIONS
       : name === "default" ? readSettings().options.instructions || DEFAULT_INSTRUCTIONS
       : "";
     const cut = whole.indexOf("Reply with only");
@@ -2308,17 +2382,125 @@ export function createLlm(deps) {
     ];
   }
 
+  const systemText = (messages) =>
+    messages
+      .filter((m) => m.role === "system")
+      .map((m) => (typeof m.content === "string" ? m.content : m.content.map((p) => p.text || "").join("\n")))
+      .join("\n\n");
+
+  // Our OpenAI-style messages → an Anthropic Messages request: the system messages
+  // become `system`, and data-URL images become base64 image blocks. No temperature:
+  // kie.ai's Claude endpoint fails every request that sends one.
+  function anthropicBody(messages, model, maxTokens) {
+    const system = systemText(messages);
+    const out = [];
+    for (const m of messages) {
+      if (m.role === "system") continue;
+      const content =
+        typeof m.content === "string" ?
+          m.content
+        : m.content.map((p) => {
+            if (p.type !== "image_url") return { type: "text", text: p.text || "" };
+            const d = /^data:([^;,]+);base64,(.*)$/s.exec(p.image_url.url);
+            return {
+              type: "image",
+              source: d ? { type: "base64", media_type: d[1], data: d[2] } : { type: "url", url: p.image_url.url },
+            };
+          });
+      out.push({ role: m.role === "assistant" ? "assistant" : "user", content });
+    }
+    const body = { model, max_tokens: maxTokens, stream: true, messages: out };
+    if (system) body.system = system;
+    return body;
+  }
+
+  // …and an OpenAI Responses request: the system messages become `instructions`.
+  // Nothing else is sent: kie.ai documents neither a temperature nor a token limit
+  // for these models (DeepSeek's page says it ignores both).
+  function responsesBody(messages, model) {
+    const input = messages
+      .filter((m) => m.role !== "system")
+      .map((m) => {
+        const role = m.role === "assistant" ? "assistant" : "user";
+        if (typeof m.content === "string") return { role, content: m.content };
+        return {
+          role,
+          content: m.content.map((p) =>
+            p.type === "image_url" ?
+              { type: "input_image", image_url: p.image_url.url }
+            : { type: role === "assistant" ? "output_text" : "input_text", text: p.text || "" },
+          ),
+        };
+      });
+    const body = { model, stream: true, input };
+    const system = systemText(messages);
+    if (system) body.instructions = system;
+    return body;
+  }
+
   // One streamed chat completion → the reply text.
   async function complete(job, src, messages, temperature, hasImages, signal, onProgress) {
+    if (src.kind !== "kieai") return completeOnce(job, src, messages, temperature, hasImages, signal, onProgress);
+    for (let i = 1; ; i++) {
+      try {
+        return await completeOnce(job, src, messages, temperature, hasImages, signal, onProgress);
+      } catch (err) {
+        if (!err.retry || signal.aborted) throw err;
+        if (i >= KIE_TRIES) {
+          // kie.ai is turning this model away (it does for minutes at a time): say so,
+          // and don't let the job start the whole round of tries over again.
+          const e = new Error(
+            `kie.ai's ${job.model} isn't answering right now (${err.message}). ` +
+              "Try again in a while, or pick another model in ⚙ LLM settings.",
+          );
+          e.final = true;
+          throw e;
+        }
+        log.warn?.(`LLM: ${src.name}: ${err.message} — trying again (${i + 1} of ${KIE_TRIES}).`);
+        setJob(job, undefined, `kie.ai is busy (${err.message}) — trying again (${i + 1} of ${KIE_TRIES})…`);
+        await sleep(2000 * i);
+      }
+    }
+  }
+
+  async function completeOnce(job, src, messages, temperature, hasImages, signal, onProgress) {
     const opts = readSettings().options;
-    const body = {
-      messages,
-      temperature,
-      max_tokens: opts.maxTokens,
-      stream: true,
+    const kie = src.kind === "kieai";
+    if (kie && !job.model) throw new Error(`${src.name}: no model chosen — pick one in ⚙ LLM settings.`);
+    const format = kie ? kieRoute(job.model).format : "chat";
+    const anthropic = format === "anthropic";
+    const responses = format === "responses";
+    let body;
+    if (anthropic) body = anthropicBody(messages, job.model, opts.maxTokens);
+    else if (responses) body = responsesBody(messages, job.model);
+    else if (kie) body = { messages, stream: true }; // Gemini: the model is in the address
+    else {
+      body = {
+        messages,
+        temperature,
+        max_tokens: opts.maxTokens,
+        stream: true,
+      };
+      if (job.model) body.model = job.model;
+    }
+    const url = kie ? rootUrl(src) + kieRoute(job.model).path : `${rootUrl(src)}/v1/chat/completions`;
+    // A failure worth another try (kie.ai): a server error before any text came back.
+    const failed = (msg, status) => {
+      const e = new Error(msg);
+      e.retry = kie && !text && (!status || status >= 500 || /internal error|try again|unavailable/i.test(msg));
+      return e;
     };
-    if (job.model) body.model = job.model;
-    const url = `${rootUrl(src)}/v1/chat/completions`;
+    // kie.ai's error bodies: { code, msg } (often with HTTP 200), { error: { message } },
+    // or a Responses stream's "error" / "response.failed" event.
+    const kieError = (j) => {
+      if (!kie || !j || typeof j !== "object") return null;
+      if (Number.isFinite(j.code) && j.code !== 200 && j.msg !== undefined)
+        return failed(`kie.ai ${j.code} — ${j.msg}`, j.code);
+      if (j.error) return failed(j.error.message || String(j.error));
+      if (j.type === "error") return failed(j.message || "error");
+      if (j.type === "response.failed") return failed(j.response?.error?.message || "the response failed");
+      return null;
+    };
     const idle = new AbortController(); // no tokens for 3 minutes → give up
     let idleTimer = setTimeout(() => idle.abort(new Error("the LLM stopped responding")), 180000);
     const bump = () => {
@@ -2344,13 +2526,23 @@ export function createLlm(deps) {
         }
         if (/image|vision|multimodal|mmproj/i.test(String(msg)) && hasImages)
           msg += " — is this a vision model? (LM Studio shows an eye icon on vision models.)";
-        throw new Error(`HTTP ${r.status} — ${msg}`);
+        throw failed(`HTTP ${r.status} — ${msg}`, r.status);
       }
       const ctype = r.headers.get("content-type") || "";
       if (!ctype.includes("event-stream")) {
-        // Server ignored stream:true.
+        // Server ignored stream:true (or kie.ai answered with an error body).
         const j = await r.json();
-        text = j.choices?.[0]?.message?.content || "";
+        const e = kieError(j);
+        if (e) throw e;
+        text =
+          anthropic ? (j.content || []).filter((c) => c.type === "text").map((c) => c.text).join("")
+          : responses ?
+            (j.output || [])
+              .flatMap((o) => o.content || [])
+              .filter((c) => c.type === "output_text")
+              .map((c) => c.text)
+              .join("")
+          : j.choices?.[0]?.message?.content || "";
       } else {
         const reader = r.body.getReader();
         const dec = new TextDecoder();
@@ -2369,8 +2561,12 @@ export function createLlm(deps) {
             if (data === "[DONE]") continue;
             try {
               const j = JSON.parse(data);
-              if (j.error) throw new Error(j.error.message || String(j.error));
-              const piece = j.choices?.[0]?.delta?.content;
+              const e = kie ? kieError(j) : j.error && new Error(j.error.message || String(j.error));
+              if (e) throw e;
+              const piece =
+                anthropic ? j.type === "content_block_delta" && j.delta?.type === "text_delta" && j.delta.text
+                : responses ? j.type === "response.output_text.delta" && j.delta
+                : j.choices?.[0]?.delta?.content;
               if (piece) {
                 text += piece;
                 onProgress?.(text.length);

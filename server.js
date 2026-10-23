@@ -5220,6 +5220,7 @@ const llm = createLlm({
   withRefDetails,
   gpuMemory,
   ensureComfyWs,
+  kieApiKey: API_KEY,
   builderFile: (proj) =>
     path.join(PROJECT_DATA_DIR, proj.slug, "llm-builder.json"),
 });

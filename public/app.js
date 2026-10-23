@@ -2118,12 +2118,6 @@ function updateEstimate() {
   }
 
   const resolution = document.getElementById("resolution").value;
-  if (durationAuto()) {
-    estimateEl.textContent =
-      "No estimate — the model picks the duration (Auto).";
-    estimateEl.title = "";
-    return;
-  }
   const duration = Number(document.getElementById("duration").value) || 0;
   const audioOn =
     isH3() || isKling() ? null : (
@@ -2314,10 +2308,6 @@ const seedanceDraftEl = document.getElementById("seedance_draft");
 const seedanceDraft = () => is25() && seedanceDraftEl.checked;
 const DRAFT_FINAL_MODEL = "bytedance/seedance-2-5-draft";
 const DRAFT_VALID_MS = 7 * 24 * 60 * 60 * 1000;
-
-// "Auto" duration (the API's duration: -1) lets a Seedance model pick the length.
-const durationAutoEl = document.getElementById("duration_auto");
-const durationAuto = () => isSeedanceVideo() && durationAutoEl.checked;
 
 // Seedance 2 Fast and Mini only accept web_search for text-to-video, so it is left
 // off a run that carries any reference or keyframe.
@@ -2583,6 +2573,8 @@ function applyModelUI() {
       `(in order, up to ${lim.image} — mention as @keyframe_1 …; the frames are @first_frame / @last_frame)`
     : isKlingRef() ?
       `(up to ${lim.image} — mention as @image_1, @image_2 …; videos as @video_1 …)`
+    : is25() ?
+      `(up to ${lim.image} — mention as @Image1, @Image2 …; videos @Video1 …, audio @Audio1 …)`
     : "(drag files or URLs in, or click to browse)";
   // H3 image-to-video takes no aspect_ratio — the frames decide it.
   document.getElementById("aspectField").classList.toggle("hidden", isH3I2V());
@@ -2651,10 +2643,6 @@ function applyModelUI() {
   durInput.max = frames || kling ? 30 : 15;
   if (Number(durInput.value) > Number(durInput.max))
     durInput.value = durInput.max;
-  document
-    .getElementById("durationAutoField")
-    .classList.toggle("hidden", !seedanceVideo);
-  durInput.disabled = durationAuto();
   updatePromptCount(); // the cap depends on the selected model
   updateEstimate();
   updateModelChrome();
@@ -2895,11 +2883,12 @@ qualitySelect.addEventListener("change", updateEstimate);
 // Switching the 2.5 image-source toggle re-shapes which reference set is shown.
 document
   .querySelectorAll('input[name="imageSource"]')
-  .forEach((r) => r.addEventListener("change", applyModelUI));
-durationAutoEl.addEventListener("change", () => {
-  document.getElementById("duration").disabled = durationAuto();
-  updateEstimate();
-});
+  .forEach((r) =>
+    r.addEventListener("change", () => {
+      applyModelUI();
+      syncPromptTabs(); // the Seedance template follows the mode
+    }),
+  );
 // The 2.5 draft switch pins the resolution to 480p (and back).
 seedanceDraftEl.addEventListener("change", applyModelUI);
 
@@ -5260,6 +5249,31 @@ Overall: [style, lighting, camera tone]. Keep the same people, clothing, props a
 
 Audio: [ambience, effects, music or none, any dialogue in quotes]. No subtitles.`;
 
+// Seedance 2.5 templates, in the layout docs/SEEDANCE-PROMPTING.md describes: kie.ai's
+// @Image1 / @Video1 / @Audio1 names (not Runway's @Image 1), each bound to one role,
+// a one-sentence summary, gapless beats, and a consistency line.
+const SEEDANCE_REF_TEMPLATE = `@Image1: [who or what] ([role: main character / product / setting]) — [two or three fixed traits].
+@Video1: [role: camera movement / choreography / timing].
+@Audio1: [role: voice of who / music bed].
+
+Summary: [One sentence: subject, location, event, genre or style, camera movement.]
+
+BEAT 1 (0s-6s): [Visuals, camera move, action.] Dialogue ([who]): "[the line, word for word]". SFX: [sounds].
+BEAT 2 (6s-12s): [What develops; restate the subject's fixed traits; the camera move.] SFX: [sounds].
+BEAT 3 (12s-15s): [The closing beat.]
+
+Consistency: [camera feel, lighting, environment, recurring elements that stay constant].
+No subtitles. [Music, or: No background music, environmental sounds only.]`;
+
+const SEEDANCE_FRAMES_TEMPLATE = `Summary: [One sentence: subject, location, event, genre or style, camera movement.]
+First frame: [what it shows]. Last frame: [what it shows].
+
+BEAT 1 (0s-4s): [What happens from the first frame; the camera move.] SFX: [sounds].
+BEAT 2 (4s-8s): [How the shot settles on the last frame.]
+
+Consistency: Keep the same people, clothing, props, lighting and positions throughout.
+No subtitles. [Music, or: No background music, environmental sounds only.]`;
+
 // The template for the model picked now, or null where none fits.
 function mmTemplateFor() {
   if (isComfy()) return comfyRefLabelScheme === "minimax_h3" ? MM_R2V_TEMPLATE : null;
@@ -5268,6 +5282,7 @@ function mmTemplateFor() {
   if (isH3I2V()) return MM_I2V_TEMPLATE;
   if (isKlingRef()) return KLING_REF_TEMPLATE;
   if (isKlingKey()) return KLING_KEY_TEMPLATE;
+  if (is25()) return usesFrames() ? SEEDANCE_FRAMES_TEMPLATE : SEEDANCE_REF_TEMPLATE;
   return null;
 }
 
@@ -7260,15 +7275,21 @@ function syncPromptTabs() {
   // with the MiniMaxH3ReferenceToVideo node (the shipped Basic / Advanced).
   const mmTpl = mmTemplateFor();
   const kling = mmTpl === KLING_REF_TEMPLATE || mmTpl === KLING_KEY_TEMPLATE;
+  const seedance = mmTpl === SEEDANCE_REF_TEMPLATE || mmTpl === SEEDANCE_FRAMES_TEMPLATE;
   const mmKind =
     mmTpl === MM_T2V_TEMPLATE ? "MiniMax Text2Video"
     : mmTpl === MM_I2V_TEMPLATE ? "MiniMax Image2Video"
     : mmTpl === KLING_REF_TEMPLATE ? "Kling 4.0 reference-to-video"
     : mmTpl === KLING_KEY_TEMPLATE ? "Kling 4.0 keyframe-to-video"
+    : mmTpl === SEEDANCE_REF_TEMPLATE ? "Seedance 2.5 reference"
+    : mmTpl === SEEDANCE_FRAMES_TEMPLATE ? "Seedance 2.5 first/last-frame"
     : "MiniMax Ref2Video";
   for (const h of promptHosts) {
     h.mmTemplate.classList.toggle("hidden", !mmTpl);
-    h.mmTemplate.textContent = kling ? "＋ Kling template" : "＋ MiniMax template";
+    h.mmTemplate.textContent =
+      kling ? "＋ Kling template"
+      : seedance ? "＋ Seedance template"
+      : "＋ MiniMax template";
     h.mmTemplate.title = `Insert a blank ${mmKind} prompt at the cursor (Ctrl+Z takes it out)`;
     for (const [tab, btn] of Object.entries(h.tabs)) {
       btn.classList.toggle("active", tab === promptTab);
@@ -7430,7 +7451,6 @@ function currentDuration() {
   }
   if (document.getElementById("durationField").classList.contains("hidden"))
     return null;
-  if (durationAuto()) return null;
   const v = Number(document.getElementById("duration").value);
   return Number.isFinite(v) && v > 0 ? v : null;
 }
@@ -7447,8 +7467,6 @@ function setCurrentDuration(seconds) {
     return;
   }
   const el = document.getElementById("duration");
-  durationAutoEl.checked = false; // an explicit length replaces Auto
-  el.disabled = false;
   el.value = Math.min(
     Math.max(seconds, Number(el.min) || 1),
     Number(el.max) || seconds,
@@ -9748,7 +9766,7 @@ function collectInput(resolved, prompt = promptEl.value) {
     generate_audio: document.getElementById("generate_audio").checked,
     resolution: document.getElementById("resolution").value,
     aspect_ratio: document.getElementById("aspect_ratio").value,
-    duration: durationAuto() ? -1 : Number(durEl.value),
+    duration: Number(durEl.value),
     web_search:
       document.getElementById("web_search").checked &&
       !(webSearchT2VOnly() && hasActiveMedia()),
@@ -11699,6 +11717,7 @@ async function applyEntry(entry) {
   );
   if (modeRadio) modeRadio.checked = true;
   applyModelUI(); // shape the form (and aspect options) before filling values
+  syncPromptTabs(); // the model template follows the model and mode
   document.getElementById("prompt").value =
     input.promptTemplate || input.prompt || "";
   // applyModelUI already populated this model family's options and picked a
@@ -11710,10 +11729,8 @@ async function applyEntry(entry) {
   // override when the saved entry recorded one.
   if (input.output_format) outputFormatSelect.value = input.output_format;
   updatePromptCount();
-  durationAutoEl.checked = input.duration === -1;
   if (input.duration > 0)
     document.getElementById("duration").value = input.duration;
-  document.getElementById("duration").disabled = durationAuto();
   document.getElementById("generate_audio").checked =
     input.generate_audio !== false;
   document.getElementById("web_search").checked = !!input.web_search;

@@ -14,6 +14,41 @@ It talks to any **OpenAI-compatible** server, so one setup covers:
 | Ollama | `http://127.0.0.1:11434` | yes — `keep_alive` |
 | llama.cpp server (GENie runs it) | `http://127.0.0.1:8090` — the port you set | yes — GENie starts and stops `llama-server` itself |
 | Other OpenAI-compatible (cloud, a llama.cpp server you start, vLLM…) | your URL | no — used as-is |
+| kie.ai (cloud: Claude, GPT, Gemini…) | `https://api.kie.ai` | no — a cloud server |
+
+### kie.ai
+
+kie.ai's chat models don't share one format, so they have a type of their own. Pick
+**kie.ai (cloud: Claude, GPT, Gemini…)**, leave the API key blank to use `KIE_API_KEY`
+from `.env` (or enter another key), **Test & list models**, and choose a model. One
+server covers every model: GENie works out where to send each request from the model
+name.
+
+| Models | Address | Format |
+| --- | --- | --- |
+| `claude-…` | `/claude/v1/messages` | Anthropic Messages (the list comes from `GET /anthropic/v1/models`) |
+| `gemini-…` | `/<model>/v1/chat/completions` | OpenAI chat completions, model in the address |
+| `gpt-…` | `/codex/v1/responses` | OpenAI Responses |
+| `grok-…` | `/grok/v1/responses` | OpenAI Responses |
+| anything else (`kimi-k3`, `deepseek-v4-1-flash`) | `/openai/v1/responses` | OpenAI Responses |
+
+Only Claude's models are listed by kie.ai's API; the others are a built-in list in
+`llm.js` (`KIE_MODELS`). A model kie.ai adds later can be typed into the Model box.
+Every model on the list reads images; all were tested with one (2026-10).
+
+It's a cloud server, so its jobs run in their own lane, like a CPU-only one. They never
+wait for ComfyUI, a generation never pauses them, and the VRAM options don't apply.
+Quirks of kie.ai's API, as of 2026-10:
+
+- It sometimes answers "Internal error, please try again later", or an error code such
+  as 503 or 524 (often inside an HTTP 200 reply), to a request that goes through on
+  the next try. GENie tries up to 4 times before giving up.
+- Every Claude request that sent `temperature` failed, and the other models don't
+  document one, so GENie never sends it: the Temperature setting has no effect here.
+- **Max tokens** is sent to Claude only. The other models don't document a limit
+  (Gemini requests that sent `max_tokens` got 503s).
+- Gemini 3.8 Flash follows the instructions (the system prompt) only some of the time,
+  which can break replies GENie reads as JSON. 3.1 Pro and 4 Argon followed them.
 
 ## Setup
 
@@ -84,7 +119,10 @@ revised version in the same format. You see it as a diff against the editor:
 - **Apply to editor** puts it in. Nothing is saved until you press **Save changes**,
   and **↶ Undo** puts back what was there.
 - **Try again** asks for another take on the same request.
-- **Follow my Rules** also applies the Rules from the project's ✨ Build form.
+
+The line under **✨ Revise** shows the model it will use, from the active server in
+**⚙ LLM settings**, and whether that server is local or an API. The quick revise under
+the main prompt box shows the same line.
 
 For MiniMax prompts, a field the model leaves empty keeps its current text, so a
 model that only returns the fields it changed can't blank the rest.

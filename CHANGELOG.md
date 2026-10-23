@@ -12,6 +12,21 @@ heading for that version with the date, commit, then tag the commit `vX.Y.Z`.
 
 ### Added
 
+- **Seedance 2.5 prompting.** A guide in [docs/SEEDANCE-PROMPTING.md](docs/SEEDANCE-PROMPTING.md)
+  (from Runway's Seedance 2.5 prompt guide, using kie.ai's `@Image1` / `@Video1` /
+  `@Audio1` names). **＋ Seedance template** on the prompt box inserts a blank prompt
+  for the selected mode: asset bindings, a summary, timed beats and a consistency
+  line for references, or the first and last frames and the beats between them.
+  **✨ Revise with AI** has a **Seedance 2.5 guide**. The reference-image hint shows
+  the `@Image1` names on 2.5.
+- **kie.ai's chat models as an LLM server.** ⚙ LLM settings → ＋ Add → type **kie.ai
+  (cloud: Claude, GPT, Gemini…)** runs ✨ Build, Revise and Analyze on any of kie.ai's
+  chat models — Claude (Opus 5.5, Sonnet 5.5, Haiku 5.5 …), GPT-6 / 6.1 / 5.6, Gemini 4
+  Argon, 3.8 Flash and 3.1 Pro, Grok 4.7, Kimi K3 and DeepSeek V4.1 Flash — images
+  included. It uses the `KIE_API_KEY` from `.env` unless the server has a key of its
+  own. Being a cloud server, it never waits for ComfyUI or the GPU, and GENie retries
+  kie.ai's occasional "Internal error" on its own. The temperature setting doesn't
+  apply to it, and Max tokens applies only to Claude.
 - **✏ Draw in the 🖼 Image editor.** A Crop / Draw switch; Draw gives a pen, line,
   arrow and box, an eraser, an eyedropper (💧 Pick, a colour from the picture), a size
   slider and a 12-colour palette (plus any colour from the system picker), with Undo
@@ -85,14 +100,24 @@ heading for that version with the date, commit, then tag the commit `vX.Y.Z`.
 
 ### Removed
 
+- **Auto duration** on the Seedance video models. Kie accepted `duration: -1` but
+  the runs failed on their side ("Internal Error") while the same request with a set
+  length went through. Re-running an old Auto entry fills in the length field's
+  current value instead.
 - **Prompt groups.** The 📚 group picker in the prompt editor, the group blocks on the
   Saved Prompts tab (▶ on a group, **Render**, ＋ Next, Rename, Ungroup, group 🗑) and
   dragging cards into or out of a group are gone; ▶ on a card generates one prompt as
   before. Existing groups are dropped the first time their project is loaded — their
   prompts stay, in the same order, on their own. A ✨ Build with AI with breaks now
   saves its prompts one after another (`Title — 1/3`…) instead of as a group.
+- **Follow my Rules** in ✨ Revise with AI (the saved-prompt editor and the quick
+  revise under the prompt box). A revise no longer adds the ✨ Build form's Rules;
+  builds still use them.
 
 ### Changed
+
+- **✨ Revise shows its model.** A line under the ✨ Revise button names the model and
+  server it will use, and whether that's a local server or an API.
 
 - **Seedance 2.5 prompt cap is 20,480 characters** (was 30,000), per kie.ai's current
   docs.
