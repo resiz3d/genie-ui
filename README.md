@@ -123,8 +123,8 @@ submit a prompt + reference media, then polls until the result is ready.
   size the result takes and whether the others get black bars (**Fit**) or are cropped
   (**Fill**). **🎨 Effects** under the clips add PNG **overlay layers** (on the whole
   video or on one clip; full-frame or placed in a corner, edge or centre, with size,
-  margin and opacity), **desaturate** by a set amount, and **resize** to a width,
-  height or both; the player previews the overlays and desaturation, and saved edit
+  margin and opacity), adjust **brightness, contrast, saturation and hue**, and **resize** to a width,
+  height or both; the player previews the overlays and colour, and saved edit
   projects keep the effects. Needs [ffmpeg](docs/FFMPEG.md).
 - **🧩 Local plugins** — personal additions that stay out of the repo: a folder in
   `plugins/` (git-ignored) with a `server.js` (`export default (app, ctx) => …`, where

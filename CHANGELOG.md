@@ -12,6 +12,24 @@ heading for that version with the date, commit, then tag the commit `vX.Y.Z`.
 
 ### Added
 
+- **✏ Draw in the 🖼 Image editor.** A Crop / Draw switch; Draw gives a pen, line,
+  arrow and box, an eraser, an eyedropper (💧 Pick, a colour from the picture), a size
+  slider and a 12-colour palette (plus any colour from the system picker), with Undo
+  (Ctrl+Z), Redo (Ctrl+Y) and Clear drawing. A stylus draws thicker the harder it's
+  pressed. The drawing is a layer of its own over the image — the eraser only rubs out
+  drawing, never the image — and is merged in when the edit is saved. The pen's
+  colour, size and tool are remembered on the server, shared by phone and desktop.
+  Works by touch on a phone; follows the image when flipped.
+- **Zoom in the 🖼 Image editor.** Pinch with two fingers (or Ctrl + scroll / a
+  trackpad pinch) to zoom up to 8× and move around, for fine cropping and drawing;
+  ⤢ Fit zooms back out.
+- **◐ Mask in the 🖼 Image editor.** Paint a mask (brush, filled box, eraser, with its
+  own Undo / Redo / Clear) over the image, shown half see-through, and save it as a
+  black-and-white PNG — white where painted, or **Invert** for black — to the Gallery,
+  straight into the form's reference images (a ComfyUI workflow's first image input, or
+  the Reference images list), or to the device. The mask is its own layer, apart from
+  the drawing, and comes out the size of the crop box, so it lines up with the image
+  as saved (flipped too).
 - **Reference images for ✨ Revise with AI on the prompt box.** Drop, browse, paste or
   pick from the gallery up to 10 images under the instruction; the LLM sees them as
   <Picture 1>, <Picture 2> … and works what it sees into the revised prompt ("describe
@@ -31,9 +49,11 @@ heading for that version with the date, commit, then tag the commit `vX.Y.Z`.
   the whole video or on one clip, stretched over the frame or placed in a corner, on
   an edge or in the centre, with size, margin and opacity, stacked in order; images
   are kept in `edited_videos/overlays` and offered again under **Reuse an overlay…**.
-  **Desaturate** by 0–100%, and **resize** to a width, a height (the other follows) or
+  **Brightness**, **Contrast** and **Saturation** sliders from -100 through 0 (as is) to
+  +100 (twice as much; -100 is black, flat grey and black & white), a **Hue** shift of
+  ±180°, and **resize** to a width, a height (the other follows) or
   both (**Fit** with bars, **Fill** with a crop, or **Stretch**). The player previews
-  the overlays and desaturation; overlays keep their colour. Saved edit projects keep
+  the overlays and colour changes; overlays keep their colour. Saved edit projects keep
   the effects, and an effect alone is enough to Save.
 - **🧩 Local plugins.** Folders in `plugins/` (git-ignored; `PLUGINS_DIR` in `.env`)
   are loaded at startup: a `server.js` gets the app and the video editor's export

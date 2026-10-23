@@ -6,7 +6,7 @@
 // that card as another video (or, ticked, in place of its video). Picked frames go to
 // the gallery as images or download as PNGs. The browser previews the clips itself;
 // the server (video-editor.js, ffmpeg) does the re-encode. Without ffmpeg, frames can
-// still be picked, at an assumed frame rate. Effects (overlay layers, desaturation,
+// still be picked, at an assumed frame rate. Effects (overlay layers, colour,
 // a new size) come from the form in video-fx.js. window.GENie.videoEditor is the hook
 // for plugins (see plugins.js).
 (() => {

@@ -4494,6 +4494,7 @@ textarea.wc-hl-on {
   margin-left: 0.3rem;
 }
 .vfx-body {
+  container-type: inline-size;
   display: flex;
   flex-direction: column;
   gap: 0.6rem;
@@ -4510,7 +4511,17 @@ textarea.wc-hl-on {
   color: var(--muted);
   font-size: 0.8rem;
 }
-.vfx-desat {
+/* the colour sliders: two columns where the form is wide enough */
+.vfx-tones {
+  display: grid;
+  gap: 0.6rem 1.4rem;
+}
+@container (min-width: 40rem) {
+  .vfx-tones {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+.vfx-tone {
   flex: 1 1 8rem;
   min-width: 0;
 }
@@ -4519,6 +4530,9 @@ textarea.wc-hl-on {
   align-items: center;
   gap: 0.25rem;
   white-space: nowrap;
+}
+.vfx-unit {
+  width: 0.5rem; /* the same in every row, so the number boxes line up */
 }
 .vfx-row input[type="number"],
 .vfx-layer input[type="number"] {
@@ -4739,6 +4753,139 @@ textarea.wc-hl-on {
 }
 .ie-tip {
   margin: 0;
+}
+/* ✏ Draw: the ink canvas sits over the image, under the crop box. While drawing, the
+   crop box is only a guide — no handles, lighter shade, pointer goes to the canvas. */
+.ie-modes {
+  display: flex;
+  gap: 0.35rem;
+}
+.ie-ink,
+.ie-live {
+  position: absolute;
+  left: 0;
+  top: 0;
+  pointer-events: none;
+}
+/* ◐ Mask: painted in one colour, shown half see-through over the image (and the
+   drawing) only while masking; its tools are the pen, box and eraser. */
+.ie-mask {
+  position: absolute;
+  left: 0;
+  top: 0;
+  pointer-events: none;
+  opacity: 0.55;
+  display: none;
+}
+.ie-masking .ie-mask {
+  display: block;
+}
+.ie-masking .ie-live {
+  opacity: 0.55;
+}
+.ie-tools.ie-masking :is([data-t="line"], [data-t="arrow"], [data-t="pick"]),
+.ie-tools.ie-masking .ie-palette {
+  display: none;
+}
+.ie-maskbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.9rem;
+}
+/* Pinch / Ctrl + wheel zoom scales the frame from its top-left corner. */
+.ie-frame {
+  transform-origin: 0 0;
+}
+.ie-drawing .ie-crop {
+  pointer-events: none;
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.35);
+}
+.ie-drawing .ie-h {
+  display: none;
+}
+.ie-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.9rem;
+}
+.ie-tool-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 0.75rem;
+}
+.ie-tool-group .ie-tool {
+  white-space: nowrap;
+}
+.ie-tool-group:has(.ie-tool) {
+  gap: 0.35rem;
+}
+.ie-sizer {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.ie-pensize {
+  width: 8rem;
+}
+.ie-dot-box {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+}
+.ie-dot {
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px var(--border);
+}
+.ie-dot.ie-dot-eraser {
+  box-shadow: none;
+  border: 1px dashed var(--muted);
+}
+.ie-palette {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+.ie-swatch {
+  position: relative;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 2px solid var(--border);
+  border-radius: 50%;
+  cursor: pointer;
+}
+.ie-swatch:hover {
+  border-color: var(--muted);
+}
+.ie-swatch.on {
+  border-color: var(--text);
+  box-shadow: 0 0 0 2px var(--accent);
+}
+.ie-custom {
+  overflow: hidden;
+  background: conic-gradient(red, yellow, lime, cyan, blue, magenta, red);
+}
+.ie-custom input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+@media (pointer: coarse) {
+  .ie-swatch {
+    width: 34px;
+    height: 34px;
+  }
+  .ie-pensize {
+    width: 10rem;
+  }
 }
 .ie-lib-thumb {
   display: block;

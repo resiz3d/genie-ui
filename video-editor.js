@@ -5,7 +5,7 @@
 // page polls; the result is downloaded, saved as a new file in the project's
 // edited_videos folder, or — when the editor was opened from a History card or a
 // Gallery video — handed to server.js to add to (or replace) that card's video.
-// Effects (PNG overlay layers, desaturation, a new size) are applied in the same
+// Effects (PNG overlay layers, colour, a new size) are applied in the same
 // re-encode. registerVideoEditor returns the export engine for plugins to drive.
 import fs from "node:fs";
 import os from "node:os";
@@ -28,7 +28,9 @@ const MAX_OVERLAY = 50 * 1024 ** 2;
 const MAX_LAYERS = 8;
 
 // ------------------------------------------------------------- effects
-// fx: { desat: 0–100 (% of the colour taken out), width, height (0 = keep; one of
+// fx: { bright, contrast, sat: -100–100 (0 = as is; -100 = black, flat grey, black &
+// white; +100 = twice as much — older projects' desat: 0–100 reads as -desat), hue:
+// -180–180 (degrees round the colour wheel), width, height (0 = keep; one of
 // them alone keeps the shape), sizeMode: "fit" | "fill" | "stretch" (when both are
 // set and the shape changes), layers: [{ url, name, clip (index into the export's
 // clips, null = the whole video), pos, scale (% of the frame's width), opacity,
@@ -64,7 +66,10 @@ export function cleanFx(fx, clipCount = 1) {
     });
   }
   return {
-    desat: num(fx.desat, 0, 100, 0),
+    bright: Math.round(num(fx.bright, -100, 100, 0)),
+    contrast: Math.round(num(fx.contrast, -100, 100, 0)),
+    sat: Math.round(num(fx.sat ?? (fx.desat > 0 ? -fx.desat : 0), -100, 100, 0)),
+    hue: Math.round(num(fx.hue, -180, 180, 0)),
     width: dim(fx.width),
     height: dim(fx.height),
     sizeMode: ["fill", "stretch"].includes(fx.sizeMode) ? fx.sizeMode : "fit",
@@ -690,7 +695,7 @@ export function registerVideoEditor(
     // clips, every piece is first brought to the base clip's size and frame rate —
     // never stretched: either shrunk inside it with black bars, or grown to cover it
     // and cropped — and to one audio format (silence for a clip that has no sound),
-    // because the join needs them all alike. Desaturation and a clip's own overlay
+    // because the join needs them all alike. The colour effects and a clip's own overlay
     // layers go on each piece; the resize and whole-video layers on the joined result,
     // so a layer is drawn at the size it ends up and never loses its colour.
     const first = infos[clips.findIndex((c) => c.id === body.base)] || infos[0];
@@ -707,7 +712,14 @@ export function registerVideoEditor(
           `increase,crop=${W}:${H}`
         : `decrease,pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2`) +
         ",setsar=1,format=yuv420p";
-    const tone = fx.desat ? `,hue=s=${(1 - fx.desat / 100).toFixed(3)}` : "";
+    // Brightness then contrast, as the preview's CSS filter does them (scale, then
+    // stretch round mid-grey), then saturation and hue; back to one format for the join.
+    const [b, c] = [1 + fx.bright / 100, 1 + fx.contrast / 100].map((x) => x.toFixed(3));
+    const lut = `(val*${b}-maxval/2)*${c}+maxval/2`;
+    const tone =
+      (fx.bright || fx.contrast ? `,lutrgb=r=${lut}:g=${lut}:b=${lut}` : "") +
+      (fx.sat || fx.hue ? `,hue=h=${fx.hue}:s=${(1 + fx.sat / 100).toFixed(3)}` : "") +
+      (fx.bright || fx.contrast || fx.sat || fx.hue ? ",format=yuv420p" : "");
     const mix = multi ? ",aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo" : "";
     const [pw, ph] = multi ? [W, H] : [first.width, first.height]; // a piece's size
     const [ow, oh] = resized(W, H, fx); // the result's

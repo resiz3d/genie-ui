@@ -1,9 +1,10 @@
-// --- 🎨 Video effects: PNG overlay layers, desaturation, a new size ---------------
+// --- 🎨 Video effects: PNG overlay layers, colour, a new size --------------------
 // The form the video editor shows under its clips (and a plugin can reuse, e.g. for
 // a batch), plus a rough live preview of it on a <video>. The server (video-editor.js,
 // cleanFx) applies the effects in the export's re-encode.
 //
-// fx: { desat: 0–100, width, height (0 = keep), sizeMode: "fit" | "fill" | "stretch",
+// fx: { bright, contrast, sat: -100–100, hue: -180–180 (0 = as is; see TONES), width,
+//   height (0 = keep), sizeMode: "fit" | "fill" | "stretch",
 //   layers: [{ url, name, clip, pos, scale, opacity, margin }] } — a layer's `clip` is
 //   whatever the host's clips() list hands out (null = the whole video); the host maps
 //   it to the clip's index when it exports (see forExport).
@@ -11,7 +12,19 @@
   const $ = (sel, root = document) => root.querySelector(sel);
   const API = "/api/video-editor";
 
-  const blank = () => ({ desat: 0, width: 0, height: 0, sizeMode: "fit", layers: [] });
+  // The colour sliders, applied in this order (here as a CSS filter, on the server as
+  // lutrgb + hue). `css` maps a value to its filter function.
+  const TONES = [
+    { k: "bright", label: "Brightness", min: -100, max: 100, css: (n) => `brightness(${1 + n / 100})`,
+      tip: "0 = as is · -100 = black · +100 = twice as bright" },
+    { k: "contrast", label: "Contrast", min: -100, max: 100, css: (n) => `contrast(${1 + n / 100})`,
+      tip: "0 = as is · -100 = flat grey · +100 = twice the contrast" },
+    { k: "sat", label: "Saturation", min: -100, max: 100, css: (n) => `saturate(${1 + n / 100})`,
+      tip: "0 = as is · -100 = black & white · +100 = twice as vivid" },
+    { k: "hue", label: "Hue", min: -180, max: 180, unit: "°", css: (n) => `hue-rotate(${n}deg)`,
+      tip: "Turns every colour round the colour wheel, in degrees" },
+  ];
+  const blank = () => ({ bright: 0, contrast: 0, sat: 0, hue: 0, width: 0, height: 0, sizeMode: "fit", layers: [] });
   const newLayer = (url, name) => ({ url, name, clip: null, pos: "full", scale: 25, opacity: 100, margin: 3 });
   const POSITIONS = [
     ["full", "Full frame (stretched over it)"],
@@ -27,14 +40,19 @@
   ];
   const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
-  const isEmpty = (fx) => !fx || (!fx.desat && !fx.width && !fx.height && !fx.layers.length);
+  const isEmpty = (fx) =>
+    !fx || (!TONES.some((t) => fx[t.k]) && !fx.width && !fx.height && !fx.layers.length);
 
-  // The effects in a few words, e.g. "1 overlay · 40% desaturated · 1280×720".
+  // The effects in a few words, e.g. "1 overlay · saturation -40 · 1280×720".
   function summary(fx) {
     if (isEmpty(fx)) return "none";
     return [
       fx.layers.length && plural(fx.layers.length, "overlay"),
-      fx.desat && (fx.desat >= 100 ? "black & white" : `${fx.desat}% desaturated`),
+      ...TONES.map(({ k, label, unit = "" }) =>
+        !fx[k] ? ""
+        : k === "sat" && fx.sat <= -100 ? "black & white"
+        : `${label.toLowerCase()} ${fx[k] > 0 ? "+" : ""}${fx[k]}${unit}`,
+      ),
       fx.width && fx.height ? `${fx.width}×${fx.height}`
       : fx.width ? `${fx.width} wide`
       : fx.height ? `${fx.height} tall`
@@ -73,10 +91,14 @@
       <details class="vfx-box">
         <summary>🎨 Effects <span class="muted vfx-sum">none</span></summary>
         <div class="vfx-body">
-          <div class="vfx-row">
-            <span class="vfx-label">Desaturate</span>
-            <input type="range" class="vfx-desat" min="0" max="100" step="1" value="0" aria-label="Desaturate" />
-            <span class="vfx-num"><input type="number" class="vfx-desatn" min="0" max="100" step="1" value="0" aria-label="Desaturate, percent" />%</span>
+          <div class="vfx-tones">${TONES.map(
+            ({ k, label, min, max, unit = "", tip }) => `
+            <div class="vfx-row" data-tone="${k}">
+              <span class="vfx-label">${label}</span>
+              <input type="range" class="vfx-tone" min="${min}" max="${max}" step="1" value="0" aria-label="${label}" title="${tip} (double-click to reset)" />
+              <span class="vfx-num"><input type="number" min="${min}" max="${max}" step="1" value="0" aria-label="${label}" /><span class="vfx-unit">${unit}</span></span>
+            </div>`,
+          ).join("")}
           </div>
           <div class="vfx-row">
             <span class="vfx-label">Resize</span>
@@ -104,9 +126,13 @@
         </div>
       </details>`;
     const el = {};
-    for (const k of ["sum", "desat", "desatn", "w", "h", "mode", "hint", "add", "recent", "empty", "layers", "err", "file"])
+    for (const k of ["sum", "w", "h", "mode", "hint", "add", "recent", "empty", "layers", "err", "file"])
       el[k] = $(`.vfx-${k}`, root);
     const box = $(".vfx-box", root);
+    const tones = TONES.map((t) => {
+      const row = $(`[data-tone="${t.k}"]`, root);
+      return { ...t, range: $("input[type=range]", row), num: $("input[type=number]", row) };
+    });
 
     let started = false; // the first set() isn't a change
     const changed = () => {
@@ -266,14 +292,17 @@
       upload(imgs);
     });
 
-    const setDesat = (n) => {
-      fx.desat = Math.min(100, Math.max(0, Math.round(Number(n) || 0)));
-      el.desat.value = el.desatn.value = fx.desat;
-      changed();
-    };
-    el.desat.addEventListener("input", () => setDesat(el.desat.value));
-    el.desatn.addEventListener("input", () => el.desatn.value !== "" && setDesat(el.desatn.value));
-    el.desatn.addEventListener("change", () => setDesat(el.desatn.value));
+    for (const t of tones) {
+      const setTone = (n) => {
+        fx[t.k] = Math.min(t.max, Math.max(t.min, Math.round(Number(n) || 0)));
+        t.range.value = t.num.value = fx[t.k];
+        changed();
+      };
+      t.range.addEventListener("input", () => setTone(t.range.value));
+      t.range.addEventListener("dblclick", () => setTone(0));
+      t.num.addEventListener("input", () => !["", "-"].includes(t.num.value) && setTone(t.num.value));
+      t.num.addEventListener("change", () => setTone(t.num.value));
+    }
     const dim = (input) => {
       const n = Math.round(Number(input.value));
       return input.value !== "" && n >= 16 && n <= 8192 ? n : 0;
@@ -298,8 +327,10 @@
       // Show these effects (a copy); `open` unfolds the form.
       set(next, open) {
         fx = { ...blank(), ...(next || {}) };
+        if (next?.sat == null && next?.desat) fx.sat = -next.desat; // saved before Saturation
+        delete fx.desat;
         fx.layers = (fx.layers || []).map((l) => ({ ...newLayer(l.url, l.name), ...l }));
-        el.desat.value = el.desatn.value = fx.desat;
+        for (const t of tones) t.range.value = t.num.value = fx[t.k] = Number(fx[t.k]) || 0;
         el.w.value = fx.width || "";
         el.h.value = fx.height || "";
         el.mode.value = fx.sizeMode;
@@ -312,7 +343,7 @@
         renderLayers();
         const off = !!opts.disabled?.();
         if (off) for (const n of root.querySelectorAll("input, select, button")) n.disabled = true;
-        else for (const n of [el.desat, el.desatn, el.w, el.h, el.add]) n.disabled = false;
+        else for (const n of [...tones.flatMap((t) => [t.range, t.num]), el.w, el.h, el.add]) n.disabled = false;
         el.recent.disabled = off || !recent?.length;
         el.mode.disabled = off || !(fx.width && fx.height);
       },
@@ -324,7 +355,7 @@
   }
 
   // A rough live preview on `video` (which must sit in a position: relative stage):
-  // desaturation as a CSS filter, the layers drawn over it. `clip` is the clip on
+  // the colour sliders as a CSS filter, the layers drawn over it. `clip` is the clip on
   // screen, for layers on one clip only. The resize isn't shown.
   function preview(video, fx, clip) {
     const stage = video.parentElement;
@@ -337,7 +368,7 @@
       video.addEventListener("loadedmetadata", () => pane._draw?.());
     }
     pane._draw = () => {
-      video.style.filter = fx?.desat ? `saturate(${1 - fx.desat / 100})` : "";
+      video.style.filter = TONES.filter((t) => fx?.[t.k]).map((t) => t.css(fx[t.k])).join(" ");
       pane.innerHTML = "";
       const w = video.offsetWidth;
       const h = video.offsetHeight;
