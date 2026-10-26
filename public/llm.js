@@ -1632,14 +1632,14 @@
     <div class="llm-qrev-head"><b>✨ Revise with AI</b> <span class="hint">— tell the LLM what to change in the prompt</span>
       <button type="button" class="link-btn llm-qrev-close" title="Close">✕</button></div>
     <div class="llm-rev-body">
-      <textarea class="llm-rev-ask" rows="2" placeholder="e.g. Make her lines angrier · translate the dialogue to French · tighten it up"></textarea>
-      <div class="dropzone llm-qrev-drop" title="Pictures for the LLM to look at while it revises — e.g. “describe her outfit from the picture”">
+      <textarea class="llm-rev-ask" rows="2" placeholder="e.g. Make her lines angrier · translate the dialogue to French · tighten it up — or leave blank to rework the prompt to fit the guide and length"></textarea>
+      <div class="dropzone llm-qrev-drop" title="Pictures for the LLM to look at while it revises — e.g. “describe her outfit from the picture” — and audio clips for the prompt to cite as <Audio 1> … (the LLM sees only their names)">
         <div class="thumbs"></div>
-        <p class="dz-hint">🖼 Reference images for the LLM — drop here or <span class="browse">browse</span></p>
-        <input type="file" accept="image/*" multiple hidden />
+        <p class="dz-hint">🖼 Reference images ♪ audio for the LLM — drop here or <span class="browse">browse</span></p>
+        <input type="file" accept="image/*,audio/*" multiple hidden />
       </div>
       <details class="gallery-wrap llm-qrev-gallery"><summary>Pick from gallery</summary>
-        <p class="dz-hint gallery-empty">No saved images in this project yet.</p>
+        <p class="dz-hint gallery-empty">No saved images or audio in this project yet.</p>
         <div class="thumbs gallery"></div></details>
       <div class="llm-rev-bar">
         <span class="llm-qrev-opts">
@@ -1652,6 +1652,8 @@
               <option value="kling">Kling 4.0 guide</option>
               <option value="seedance">Seedance 2.5 guide</option>
             </select></label>
+          <label class="inline" title="The clip's length, for the LLM to pace the action to. Blank: leave the pacing as it is.">Length
+            <input type="number" class="llm-qrev-len" min="1" max="120" step="1" placeholder="—" /> s</label>
         </span>
         <span class="llm-rev-btns">
           <button type="button" class="btn-secondary llm-rev-cancel hidden">Stop</button>
@@ -1681,35 +1683,44 @@
     diff: $(".llm-rev-diff", qrev),
     applied: $(".llm-rev-applied", qrev),
     guide: $(".llm-qrev-guide", qrev),
+    len: $(".llm-qrev-len", qrev),
   };
   const QGUIDE_KEY = "genie_qrev_guide";
   q.guide.value = getPref(QGUIDE_KEY, "") || "";
   if (q.guide.selectedIndex < 0) q.guide.value = "";
   q.guide.addEventListener("change", () => setPref(QGUIDE_KEY, q.guide.value));
+  const QLEN_KEY = "genie_qrev_len";
+  q.len.value = getPref(QLEN_KEY, "") || "";
+  q.len.addEventListener("change", () => setPref(QLEN_KEY, q.len.value));
   let qta = null; // the prompt box the panel is under
   let qst = null; // { jobId, job, before, applied }
   let qundo = null; // { ta, value }
   let qTimer = null;
 
-  // Reference images for the LLM to look at: gallery entries ({ id, localUrl, name }).
-  // A dropped, browsed or pasted file is saved to the gallery first, like any reference.
+  // Reference media for the LLM: gallery entries ({ id, kind, localUrl, name }). Images
+  // it looks at (<Picture N>); audio clips it can't hear but cites by label (<Audio N>,
+  // numbered on their own). A dropped, browsed or pasted file is saved to the gallery
+  // first, like any reference.
   const qdrop = $(".llm-qrev-drop", qrev);
   const qthumbs = $(".thumbs", qdrop);
   const qfile = $("input[type=file]", qdrop);
   const qgal = $(".llm-qrev-gallery", qrev);
-  const QMAX_IMAGES = 10; // the server's MAX_IMAGES
+  const QMAX = { image: 10, audio: 10 }; // the server's MAX_IMAGES / MAX_AUDIO
+  const QLABEL = { image: "Picture", audio: "Audio" };
   let qimgs = [];
+  const qOfKind = (kind, list = qimgs) => list.filter((g) => g.kind === kind);
 
   function renderQImgs() {
     qthumbs.innerHTML = "";
-    qimgs.forEach((g, i) => {
+    const n = { image: 0, audio: 0 };
+    qimgs.forEach((g) => {
       const div = document.createElement("div");
-      div.className = "thumb ready";
+      div.className = `thumb ready${g.kind === "audio" ? " audio-thumb" : ""}`;
       div.title = g.name || "";
-      div.appendChild(makeThumbContent("image", { thumb: g.localUrl, name: g.name }));
+      div.appendChild(makeThumbContent(g.kind, { thumb: g.localUrl, name: g.name }));
       const label = document.createElement("span");
       label.className = "img-label";
-      label.textContent = `Picture ${i + 1}`;
+      label.textContent = `${QLABEL[g.kind]} ${++n[g.kind]}`;
       div.appendChild(label);
       const x = document.createElement("button");
       x.type = "button";
@@ -1722,7 +1733,7 @@
         renderQImgs();
       });
       div.appendChild(x);
-      div.appendChild(makeZoomButton("image", g.localUrl, g.name));
+      div.appendChild(makeZoomButton(g.kind, g.localUrl, g.name));
       div.addEventListener("click", (e) => e.stopPropagation()); // not the file picker
       qthumbs.appendChild(div);
     });
@@ -1730,20 +1741,21 @@
 
   function addQImgs(items) {
     for (const g of items) {
-      if (qimgs.length >= QMAX_IMAGES) {
-        q.status.textContent = `⚠ Up to ${QMAX_IMAGES} reference images.`;
-        break;
+      const kind = (g.kind || "image") === "audio" ? "audio" : "image";
+      if (qimgs.some((y) => y.id === g.id)) continue;
+      if (qOfKind(kind).length >= QMAX[kind]) {
+        q.status.textContent = `⚠ Up to ${QMAX[kind]} reference ${kind === "audio" ? "audio clips" : "images"}.`;
+        continue;
       }
-      if (!qimgs.some((y) => y.id === g.id))
-        qimgs.push({ id: g.id, localUrl: g.localUrl || g.url, name: g.name });
+      qimgs.push({ id: g.id, kind, localUrl: g.localUrl || g.url, name: g.name });
     }
     renderQImgs();
   }
 
   async function uploadQImgs(files) {
-    const list = [...files].filter((f) => f.type.startsWith("image/"));
+    const list = [...files].filter((f) => /^(image|audio)\//.test(f.type));
     if (!list.length) return;
-    q.status.textContent = `Saving ${list.length} image${list.length === 1 ? "" : "s"} to the gallery…`;
+    q.status.textContent = `Saving ${list.length} file${list.length === 1 ? "" : "s"} to the gallery…`;
     const saved = await uploadToGallery(list);
     q.status.textContent = "";
     addQImgs(saved);
@@ -1754,7 +1766,7 @@
     const box = $(".gallery", qgal);
     box.innerHTML = "";
     const items = galleryItems.filter(
-      (i) => (i.kind || "image") === "image" && (i.projectId || "default") === activeProjectId,
+      (i) => ["image", "audio"].includes(i.kind || "image") && (i.projectId || "default") === activeProjectId,
     );
     $(".gallery-empty", qgal).classList.toggle("hidden", items.length > 0);
     for (const item of items)
@@ -1809,10 +1821,11 @@
   // The reply as it would go in the box: with reference images, each <Picture k>
   // renumbered to where that image is (or will be) in the form's references; `apply`
   // also adds the ones the form doesn't have yet.
-  const revisedText = (res, apply) =>
-    qst.images?.length ?
-      placeRevisePictures(qst.images, res.prompt || "", apply)
-    : { text: res.prompt || "", added: 0, left: [] };
+  const revisedText = (res, apply) => {
+    const pics = placeRevisePictures(qOfKind("image", qst.images || []), res.prompt || "", apply);
+    const aud = placeRevisePictures(qOfKind("audio", qst.images || []), pics.text, apply, "audio");
+    return { text: aud.text, added: pics.added, left: pics.left, addedAudio: aud.added, leftAudio: aud.left };
+  };
 
   async function pollQ() {
     clearTimeout(qTimer);
@@ -1829,8 +1842,13 @@
 
   async function startQ() {
     if (!qta) return;
+    // Blank: the server reworks the prompt to fit the guide and/or length.
     const instruction = q.ask.value.trim();
-    if (!instruction) return q.ask.focus();
+    const duration = Number(q.len.value) > 0 ? Number(q.len.value) : null;
+    if (!instruction && !q.guide.value && !duration) {
+      q.status.textContent = "⚠ Say what to change, or pick a guide or length.";
+      return q.ask.focus();
+    }
     try {
       if (!cfg) await loadCfg();
       const src = activeSource();
@@ -1843,8 +1861,10 @@
         title: "prompt box",
         prompt: before,
         instruction,
-        images: qimgs.map((g) => g.id),
+        images: qOfKind("image").map((g) => g.id),
+        audio: qOfKind("audio").map((g) => g.id),
         guide: q.guide.value,
+        duration,
       });
       qst = { jobId: job.id, job, before, images: qimgs.slice() };
       renderQ();
@@ -1888,6 +1908,12 @@
             isH3T2V() ? "text-to-video takes no references"
             : isH3I2V() ? "image-to-video takes one, as its first frame"
             : "the reference field is full"
+          }.`
+      : "") +
+      (placed.addedAudio ? ` ${placed.addedAudio} audio clip${placed.addedAudio === 1 ? "" : "s"} added to the references.` : "") +
+      (placed.leftAudio.length ?
+        ` ${placed.leftAudio.length} audio clip${placed.leftAudio.length === 1 ? "" : "s"} not added — ${
+            usesRefMedia() ? "the audio field is full" : "this model or mode takes no reference audio"
           }.`
       : "");
     renderQ();

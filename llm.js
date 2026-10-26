@@ -167,6 +167,8 @@ const FIELD = {
     '- style: one sentence with the visual style, e.g. "The target video uses a live action cinematic style."',
   shots:
     '- shots: the shots in order, each with "seconds": how many seconds it lasts. The seconds of all the shots add up to the clip\'s length. Each "text" is concrete, filmable action in the present tense: who does what and in what order, how the camera moves and frames them, the lighting and mood. Pace the action to fit the clip\'s length; use one shot unless the action needs a cut.',
+  dialogue:
+    '- dialogue, inside a shot\'s text: who speaks, their speaker tag, then the line word for word in <d>[Language] …</d>, e.g. <hulk> (S1) says, <d>[English] Get down!</d>. Tags go (S1), (S2) … in the order the voices are first heard, and a speaker keeps the same tag in every shot. Write a stutter, a drawn-out word or a pause as it should be spoken. Don\'t write the shot\'s start time or "cut to" — they are added.',
   soundscape: "- soundscape: the diegetic sound — ambience, footsteps, voices, effects.",
   music: '- music: the non-diegetic music, or "None".',
 };
@@ -177,16 +179,71 @@ export const MINIMAX_INSTRUCTIONS = [
   MM_HEAD,
   MM_SUBJECTS,
   LOOK_CLOSELY,
-  fieldList("subjects", "summary", "retention", "style", "shots", "soundscape", "music"),
+  fieldList("subjects", "summary", "retention", "style", "shots", "dialogue", "soundscape", "music"),
   PLAIN_TEXT,
   `${JSON_ONLY}\n{"title": "a short title, at most 8 words", "subjects": [{"key": "…", "definition": "…"}], "summary": "…", "retention": {"key": "…"}, "style": "…", "shots": [{"seconds": 5, "text": "…"}], "soundscape": "…", "music": "…"}`,
 ].join("\n\n");
 
 export const MINIMAX_T2V_INSTRUCTIONS = [
   T2V_HEAD,
-  fieldList("style", "shots", "soundscape", "music"),
+  fieldList("style", "shots", "dialogue", "soundscape", "music"),
+  'With no <key> labels, name the speaker in words before the tag, e.g. the blonde woman (S1) says, <d>[English] …</d>.',
   PLAIN_TEXT,
   `${JSON_ONLY}\n{"title": "a short title, at most 8 words", "style": "…", "shots": [{"seconds": 5, "text": "…"}], "soundscape": "…", "music": "…"}`,
+].join("\n\n");
+
+// The same two formats as finished text — what a quick ✨ Revise (which edits the
+// prompt box's text, not a structured prompt's fields) follows. It teaches MiniMax's
+// own section layout and its shot, cut and dialogue syntax (from
+// VIDEO_PROMPT_WRITING_GUIDE_ref_en / _base_en), so a prompt written from scratch comes
+// out in the layout compileMinimax writes and parseMinimax reads.
+const MM_TEXT_SHOTS = [
+  '[Shot 1] opens with no time. Every cut starts a new line: "[Shot N] At MM:SS.mmm, the shot cuts to …" and the new framing and subject, e.g. "[Shot 2] At 00:03.000, the shot cuts to a medium close-up of <ana> …". The times follow from how long each shot lasts, and the last shot runs to the end of the clip. Use one shot unless the action needs a cut, and a cut wherever the request asks for one.',
+  "Each shot is concrete, filmable action in the present tense: framing, who does what and in what order, how the camera moves, the expressions and mood.",
+  'Dialogue goes inside the shot where it is spoken: who speaks, their speaker tag, then the line word for word in <d>[Language] …</d>, e.g. <ana> (S1) says, stammering, <d>[English] Y-y-you… you\'re her!</d>. Tags go (S1), (S2) … in the order the voices are first heard, and a speaker keeps the same tag in every shot. Keep stutters, drawn-out words and pauses as they should be spoken; describe a pause in the action around the lines.',
+];
+export const MINIMAX_TEXT_GUIDE = [
+  "The text is a MiniMax Hailuo H3 reference-to-video prompt. The video model receives the reference images as <Picture 1>, <Picture 2> … (reference videos as <Video 1> …, audio as <Audio 1> …). When the text is empty or isn't in this layout yet, write it in this layout; otherwise keep its sections. The sections, in this order, each label on its own line with its text below:",
+  [
+    "subject_definitions:",
+    "<ana> is [who or what, how they look], seen in <Picture 1>.",
+    "<Audio 1> is [what the audio is for, e.g. the voice reference for <ana> (S1)]. (only when audio is given)",
+    "",
+    "summary:",
+    "[reference generation] The target video shows <ana> [what happens].",
+    "",
+    "retention_analysis:",
+    "<ana> (appears in [Shot 1], [Shot 3]): fully_preserved - [what must stay the same: face, hair, build, outfit].",
+    "",
+    "detailed_description:",
+    "[One opening line: the visual style, lighting, camera and lens.]",
+    "[Shot 1] [The opening shot.]",
+    "[Shot 2] At 00:03.000, the shot cuts to [the next framing and subject]. <ana> (S1) says, <d>[English] [the line]</d>",
+    "",
+    "overall_soundscape:",
+    "[Ambience, action sounds, breaths and effects — no dialogue, no music.]",
+    "",
+    "non_diegetic_music:",
+    "N/A",
+  ].join("\n"),
+  'Subjects: every person, character, creature, object or place the video keeps from the references is a subject with a <key> label — one short lowercase word (underscores allowed), like <ana> or <stall>. Use the keys already in the text; otherwise invent them. Define each subject once in subject_definitions, saying which <Picture N> it is seen in; everywhere else refer to it only by its <key>, never by picture number or by a name.',
+  'retention_analysis: one line per subject, "<key> (appears in [Shot …]): " then a marker, " - ", and what is kept. Markers: fully_preserved, partially_preserved, attribute_transfer, weak_reference. No speaker tags here.',
+  ...MM_TEXT_SHOTS,
+  'non_diegetic_music is the score, or "N/A" when there is none. Plain text — no markdown, no JSON.',
+].join("\n\n");
+
+export const MINIMAX_T2V_TEXT_GUIDE = [
+  "The text is a MiniMax Hailuo H3 text-to-video prompt. There are no reference images: the text alone describes everything on screen, so describe each person, character and place fully the first time it appears — build, clothing, hair, expression, setting, lighting and colours. When the text is empty or isn't in this layout yet, write it in this layout; otherwise keep its sections. Three fields, each \"name: text\" as one paragraph, separated by a blank line:",
+  [
+    "integrated_multimodal_description: [Shot 1] [Style, e.g. Live-action, cinematic], [the opening shot]. [Shot 2] At 00:03.000, the shot cuts to [the next framing and subject]. The blonde woman (S1) says, <d>[English] [the line]</d>",
+    "",
+    "overall_soundscape: [1–4 sentences: ambience, action sounds, breaths — no dialogue, no music.]",
+    "",
+    "non_diegetic_music: N/A",
+  ].join("\n"),
+  ...MM_TEXT_SHOTS,
+  "The shots run on in the one paragraph rather than on lines of their own. With no <key> labels, name each speaker in words before their tag.",
+  'non_diegetic_music is the score, or "N/A" when there is none. Plain text — no markdown, no JSON.',
 ].join("\n\n");
 
 // Kling 4.0 (through kie.ai) — a guide for ✨ Revise with AI only; the prompt is plain
@@ -236,6 +293,9 @@ export const shotListInstructions = (format) =>
     ...(format === "minimax_t2v" ? [] : [LOOK_CLOSELY]),
     'Each shot is one continuous camera setup, with "seconds": how many whole seconds it lasts (at least 1). Its "text" is concrete, filmable action in the present tense: who does what and in what order, how the camera frames them and moves, the lighting and mood. Write exactly the number of shots asked for, and make their seconds add up to exactly the video\'s length. Pace what should happen across the whole video: the first shot opens it and the last one ends it.',
     "The shots are edited together into one continuous video, so write them as one sequence: each shot carries on from the one before, without setting the scene again.",
+    ...(format === "minimax" ? [FIELD.dialogue.slice(2)]
+      : format === "minimax_t2v" ? [FIELD.dialogue.slice(2), "With no <key> labels, name the speaker in words before the tag, e.g. the blonde woman (S1) says, <d>[English] …</d>."]
+      : []),
     "Plain text — no markdown, no bullet points, no notes to the reader.",
     `${JSON_ONLY}\n{"title": "a short title for the video, at most 8 words", "shots": [{"seconds": 5, "text": "…"}]}`,
   ].join("\n\n");
@@ -355,6 +415,7 @@ const DEFAULT_SETTINGS = {
 };
 
 const MAX_IMAGES = 10;
+const MAX_AUDIO = 10; // a quick revise's reference audio clips (labels only)
 const MAX_SHOTS = 60; // in one shot list
 const MAX_RULES = 12000;
 const MAX_RECENT = 20;
@@ -1463,13 +1524,23 @@ export function createLlm(deps) {
       throw new Error(`Pick a model for ${src.name} in ⚙ LLM settings.`);
     const proj = findProject(body.projectId);
     if (!proj) throw new Error("unknown projectId");
-    const instruction = String(body.instruction || "").trim().slice(0, 8000);
-    if (!instruction) throw new Error("Say what to change.");
     // `plain`: the main prompt box's quick revise — the text goes in as it is and
     // comes back as text, no JSON, no references; `body.images` (gallery ids) are
     // pictures for the model to look at while it makes the changes.
     const plain = !!body.plain;
     const guide = plain && PLAIN_REVISE_GUIDES.has(body.guide) ? body.guide : "";
+    const d = Number(body.duration);
+    const duration = Number.isFinite(d) && d > 0 ? d : null;
+    // A quick revise with nothing typed reworks the prompt to fit the guide and/or length.
+    let instruction = String(body.instruction || "").trim().slice(0, 8000);
+    if (!instruction && plain && (guide || duration))
+      instruction = [
+        guide && "Rewrite the prompt so it follows the prompting guide. Keep its content — the same people, action, dialogue and details — and change only how it is written.",
+        duration && `Pace the action to fit a ${duration}-second clip.`,
+      ]
+        .filter(Boolean)
+        .join(" ");
+    if (!instruction) throw new Error("Say what to change, or pick a guide or length.");
     const format = !plain && BUILD_FORMATS.has(body.format) ? body.format : "default";
     const structured = format !== "default";
     const prompt = String(body.prompt || "").slice(0, 50000);
@@ -1503,12 +1574,20 @@ export function createLlm(deps) {
         const isImage = (g?.kind || (String(g?.mime || "").startsWith("image/") ? "image" : "")) === "image";
         if (g && isImage && !images.includes(g)) images.push(g);
       }
+    // `body.audio` (gallery ids): clips the video model will get as <Audio 1> … The LLM
+    // can't hear them, so only their labels and file names go in, for the text to cite.
+    const audio = [];
+    if (plain)
+      for (const id of (Array.isArray(body.audio) ? body.audio : []).slice(0, MAX_AUDIO)) {
+        const g = gallery.find((x) => x.id === String(id));
+        const isAudio = (g?.kind || (String(g?.mime || "").startsWith("audio/") ? "audio" : "")) === "audio";
+        if (g && isAudio && !audio.includes(g)) audio.push(g);
+      }
     let rules = "";
     if (body.useRules) {
       const b = readBuilder(proj);
       rules = (b.draft?.rules || b.lastRules || "").trim();
     }
-    const d = Number(body.duration);
     const job = {
       id: randomUUID(),
       kind: "revise",
@@ -1525,12 +1604,14 @@ export function createLlm(deps) {
       refs,
       imageIds: images.map((g) => g.id),
       images,
+      audioIds: audio.map((g) => g.id),
+      audioNames: audio.map((g) => String(g.name || "audio").slice(0, 200)),
       description: instruction, // what the job list shows
       instruction,
       theme: "",
       rules,
       titlePrefix: "",
-      duration: Number.isFinite(d) && d > 0 ? d : null,
+      duration,
       count: 1,
       done: 0,
       created: [],
@@ -2046,8 +2127,8 @@ export function createLlm(deps) {
   // their last paragraph): what makes a good prompt, not how to answer.
   function guideFor(name) {
     const whole =
-      name === "minimax" ? MINIMAX_INSTRUCTIONS
-      : name === "minimax_t2v" ? MINIMAX_T2V_INSTRUCTIONS
+      name === "minimax" ? MINIMAX_TEXT_GUIDE
+      : name === "minimax_t2v" ? MINIMAX_T2V_TEXT_GUIDE
       : name === "kling" ? KLING_INSTRUCTIONS
       : name === "seedance" ? SEEDANCE_INSTRUCTIONS
       : name === "default" ? readSettings().options.instructions || DEFAULT_INSTRUCTIONS
@@ -2058,10 +2139,13 @@ export function createLlm(deps) {
 
   function buildPlainReviseMessages(job, imageParts) {
     const guide = guideFor(job.guide);
+    const audioNames = job.audioNames || [];
     const system = [
       PLAIN_REVISE_INSTRUCTIONS,
       imageParts.length &&
         "REFERENCE IMAGES — the user attached pictures (<Picture 1>, <Picture 2> …). Look at them closely and use what you see where the changes call for it: describe people, outfits, places, objects, colours, lighting and style as they appear in the pictures, in concrete words. Don't mention the pictures themselves in the text unless the user asks you to.",
+      audioNames.length &&
+        "REFERENCE AUDIO — the video model also receives audio clips, labelled <Audio 1>, <Audio 2> … You can't hear them: go by their file names and what the user says about them. Where the prompt's format refers to its references (a MiniMax prompt defines each one in subject_definitions, e.g. \"<Audio 1> is the voice reference for <ana> (S1)\"), refer to each clip by exactly its label, and don't invent labels for clips that aren't listed.",
       guide &&
         "PROMPTING GUIDE — the text is a prompt for an AI video model; follow this guide where it bears on the changes. " +
           "Where it describes the prompt as JSON fields, those are the text's labelled sections: keep the text's own layout and write plain text, not JSON.\n\n" +
@@ -2074,6 +2158,10 @@ export function createLlm(deps) {
       (imageParts.length ?
         `Reference images: ${imageParts.map((_, i) => `<Picture ${i + 1}>`).join(", ")}, below.\n\n`
       : "") +
+      (audioNames.length ?
+        `Reference audio: ${audioNames.map((n, i) => `<Audio ${i + 1}> (file "${n}")`).join(", ")}.\n\n`
+      : "") +
+      (job.duration ? `Clip length: ${job.duration} seconds.\n\n` : "") +
       `Changes to make: ${job.instruction}\n\n` +
       "Reply with only the complete revised text.";
     const content = [{ type: "text", text }];

@@ -604,6 +604,8 @@ const ALLOWED_MODELS = new Set([
   "minimax-h3/reference-to-video",
   "kling-4.0/reference-to-video",
   "kling-4.0/keyframe-to-video",
+  "wan/3-0-video",
+  "wan/3-0-video-prime",
 ]);
 
 app.post("/api/create", requireKieKey, (req, res) => {
@@ -1153,6 +1155,94 @@ app.put("/api/comfy/auto-tags", (req, res) => {
   } catch (err) {
     console.error("Failed to save auto-tags:", err);
     res.status(500).json({ code: 500, msg: "Failed to save auto-tags" });
+  }
+});
+
+// Your notes on each LoRA (display name, description, url, trigger phrases), keyed by
+// its filename as ComfyUI lists it. One file for all of them, in the git-ignored
+// settings/ folder so phone and desktop see the same notes.
+const LORA_INFO_FILE = path.join(COMFY_SETTINGS_DIR, "..", "loras.json");
+function readLoraInfo() {
+  try {
+    return plainObject(JSON.parse(fs.readFileSync(LORA_INFO_FILE, "utf8")));
+  } catch {
+    return {};
+  }
+}
+const loraInfoKey = (name) => String(name ?? "").trim().replace(/\\/g, "/");
+app.get("/api/lora-info", (req, res) => {
+  res.json({ code: 200, msg: "success", data: readLoraInfo() });
+});
+app.put("/api/lora-info", (req, res) => {
+  const key = loraInfoKey(req.query.name);
+  if (!key) return res.status(400).json({ code: 400, msg: "name is required" });
+  try {
+    const all = readLoraInfo();
+    const b = req.body || {};
+    const field = (v, max) => String(v ?? "").trim().slice(0, max);
+    const info = {
+      displayName: field(b.displayName, 200),
+      modelType: cleanModelType(b.modelType),
+      description: field(b.description, 10000),
+      url: field(b.url, 2000),
+      triggers: field(b.triggers, 10000),
+    };
+    // All blank = nothing worth keeping, so the entry goes rather than lingering empty.
+    if (Object.values(info).some(Boolean)) all[key] = info;
+    else delete all[key];
+    fs.mkdirSync(path.dirname(LORA_INFO_FILE), { recursive: true });
+    writeJson(LORA_INFO_FILE, all);
+    res.json({ code: 200, msg: "saved", data: all[key] || null });
+  } catch (err) {
+    console.error("Failed to save LoRA info:", err);
+    res.status(500).json({ code: 500, msg: "Failed to save LoRA info" });
+  }
+});
+
+// Model types: your own label for what a model is ("MiniMax H3", "Flux", …), set on
+// any entry of the Model picker (ComfyUI workflow or API model) and on each LoRA, so
+// the LoRA browser can offer only the LoRAs made for the selected model. Keyed by the
+// picker's value (e.g. "comfy:Krea2.json", "minimax-h3/text-to-video").
+const MODEL_TYPES_FILE = path.join(COMFY_SETTINGS_DIR, "..", "model-types.json");
+const cleanModelType = (v) =>
+  String(v ?? "").trim().replace(/\s+/g, " ").slice(0, 60);
+function readModelTypes() {
+  try {
+    return plainObject(JSON.parse(fs.readFileSync(MODEL_TYPES_FILE, "utf8")));
+  } catch {
+    return {};
+  }
+}
+// { byModel: { model: type }, types: every type in use (models + LoRAs), sorted }
+app.get("/api/model-types", (req, res) => {
+  const byModel = readModelTypes();
+  const seen = new Map(); // lowercased → first spelling, so "flux" and "Flux" are one
+  for (const t of [
+    ...Object.values(byModel),
+    ...Object.values(readLoraInfo()).map((i) => i?.modelType),
+  ]) {
+    const c = cleanModelType(t);
+    if (c && !seen.has(c.toLowerCase())) seen.set(c.toLowerCase(), c);
+  }
+  const types = [...seen.values()].sort((a, b) =>
+    a.localeCompare(b, undefined, { sensitivity: "base" }),
+  );
+  res.json({ code: 200, msg: "success", data: { byModel, types } });
+});
+app.put("/api/model-types", (req, res) => {
+  const model = String(req.query.model ?? "").trim();
+  if (!model) return res.status(400).json({ code: 400, msg: "model is required" });
+  try {
+    const all = readModelTypes();
+    const type = cleanModelType(req.body?.type);
+    if (type) all[model] = type;
+    else delete all[model];
+    fs.mkdirSync(path.dirname(MODEL_TYPES_FILE), { recursive: true });
+    writeJson(MODEL_TYPES_FILE, all);
+    res.json({ code: 200, msg: "saved", data: type });
+  } catch (err) {
+    console.error("Failed to save model type:", err);
+    res.status(500).json({ code: 500, msg: "Failed to save model type" });
   }
 });
 
@@ -2901,6 +2991,29 @@ async function sweepPendingKie() {
 setInterval(sweepPendingKie, KIE_WATCH_INTERVAL_MS);
 setTimeout(sweepPendingKie, 4000); // an early pass shortly after startup
 
+// A pending entry that never got a taskId (its create call failed, or the tab closed
+// before recording it) can't be polled by anyone, so it would stay pending forever —
+// and pending cards show in every project. Fail it once it's clearly orphaned.
+const ORPHAN_PENDING_MS = 30 * 60 * 1000;
+function failOrphanedPending() {
+  const entries = readJson(HISTORY_FILE);
+  let changed = false;
+  for (const e of entries) {
+    if (
+      e.status === "pending" &&
+      !e.taskId &&
+      Date.now() - new Date(e.createdAt).getTime() > ORPHAN_PENDING_MS
+    ) {
+      e.status = "failed";
+      e.error = "Never started — no task was recorded for this run.";
+      changed = true;
+    }
+  }
+  if (changed) writeJson(HISTORY_FILE, entries);
+}
+setInterval(failOrphanedPending, 5 * 60 * 1000);
+setTimeout(failOrphanedPending, 5000);
+
 // Host CPU % + system RAM + GPU util % + VRAM usage, for the live readout during local runs.
 app.get("/api/comfy/stats", async (req, res) => {
   const cpu = cpuPercent();
@@ -3052,12 +3165,16 @@ function entryTagSet(entry) {
 // width×height, else a ComfyUI megapixels token (already MP), else an approximate
 // value for a kie.ai resolution tier (16:9 nominal). null when unknown.
 // MiniMax H3 names its two tiers 768P / 2K instead of the Seedance ladder; both
-// are nominal 16:9 areas (1366x768 and 2560x1440).
+// are nominal 16:9 areas (1366x768 and 2560x1440). Wan 3.0 spells the ladder in
+// capitals (480P / 720P / 1080P).
 const KIE_RES_MP = {
   "480p": 0.41,
   "720p": 0.92,
   "1080p": 2.07,
   "4k": 8.29,
+  "480P": 0.41,
+  "720P": 0.92,
+  "1080P": 2.07,
   "768P": 1.05,
   "2K": 3.69,
 };
@@ -3143,6 +3260,8 @@ function modelLabel(model) {
   }
   if (m.startsWith("kling-4.0/"))
     return `Kling 4.0 (${m.slice("kling-4.0/".length)})`;
+  if (m === "wan/3-0-video") return "Wan 3.0";
+  if (m === "wan/3-0-video-prime") return "Wan 3.0 Prime";
   const family = m.includes("5-pro") ? "Seedream 5.0 Pro" : "Seedream 5.0 Lite";
   if (m.includes("text-to-image")) return `${family} (text-to-image)`;
   if (m.includes("image-to-image")) return `${family} (image-to-image)`;
@@ -3853,6 +3972,9 @@ app.delete("/api/images/:id", (req, res) => {
 // its weight). Dragging in the UI rewrites the weights (POST /api/prompts/reorder).
 // A ref's `id` is a gallery (images.json) id, so the file itself stays where the
 // gallery keeps it; its url, subject key and definition are looked up on read.
+// `global: true` lists the prompt in every project too (GET /api/prompts appends other
+// projects' global prompts after the project's own); it stays stored in its home
+// project, which every prompt in a listing names as `projectId`.
 const PROMPT_REF_KINDS = new Set(["image", "video", "audio"]);
 const PROMPT_TYPES = new Set(["default", "minimax", "minimax_t2v"]);
 // The types whose text is compiled from `minimax` fields.
@@ -4029,6 +4151,7 @@ function sanitizePromptFields(body = {}) {
         body.historyId.slice(0, 100)
       : null;
   }
+  if (body.global !== undefined) out.global = body.global === true;
   if (body.weight !== undefined) {
     const w = Number(body.weight);
     out.weight =
@@ -4374,14 +4497,34 @@ app.delete("/api/variables/:id", (req, res) => {
   res.status(404).json({ code: 404, msg: "variable not found" });
 });
 
+// The other projects' global prompts, each with its home `projectId` and `projectName`.
+function foreignGlobalPrompts(proj) {
+  return ensureDefaultProject()
+    .filter((o) => o.id !== proj.id)
+    .flatMap((o) =>
+      readPrompts(o)
+        .filter((p) => p.global)
+        .map((p) => ({ ...p, projectId: o.id, projectName: o.name || o.slug })),
+    );
+}
+
+// The project a prompt listed in `proj` lives in: `proj` itself, or the project whose
+// global prompt it is. Null if it's neither.
+function promptHome(proj, promptId) {
+  if (readPrompts(proj).some((p) => p.id === promptId)) return proj;
+  const g = foreignGlobalPrompts(proj).find((p) => p.id === promptId);
+  return g ? findProject(g.projectId) : null;
+}
+
 app.get("/api/prompts", (req, res) => {
   const proj = findProject(req.query.projectId);
   if (!proj)
     return res.status(400).json({ code: 400, msg: "unknown projectId" });
+  const own = readPrompts(proj).map((p) => ({ ...p, projectId: proj.id }));
   res.json({
     code: 200,
     msg: "success",
-    data: withRefDetails(readPrompts(proj)),
+    data: withRefDetails([...own, ...foreignGlobalPrompts(proj)]),
   });
 });
 
@@ -4408,7 +4551,11 @@ app.post("/api/prompts", (req, res) => {
   const now = new Date().toISOString();
   const entry = { id: randomUUID(), ...fields, createdAt: now, updatedAt: now };
   writePrompts(proj, [entry, ...readPrompts(proj)]);
-  res.json({ code: 200, msg: "saved", data: withRefDetails([entry])[0] });
+  res.json({
+    code: 200,
+    msg: "saved",
+    data: withRefDetails([{ ...entry, projectId: proj.id }])[0],
+  });
 });
 
 // A drag in the UI: renumber the listed prompts' weights 0, 1, 2… in `ids` order (as
@@ -4431,21 +4578,25 @@ app.post("/api/prompts/reorder", (req, res) => {
 });
 
 // Point `promptId` (null = none) at `historyId`, clearing that entry from any other
-// prompt in the project. Returns false if the prompt doesn't exist.
+// prompt in the project (and in the prompt's home project, when it's another project's
+// global prompt). Returns false if the prompt doesn't exist.
 function linkPromptToHistory(proj, promptId, historyId) {
-  const list = readPrompts(proj);
-  if (promptId && !list.some((p) => p.id === promptId)) return false;
+  const home = promptId ? promptHome(proj, promptId) : proj;
+  if (!home) return false;
   const now = new Date().toISOString();
-  for (const p of list) {
-    if (p.id === promptId) {
-      p.historyId = historyId;
-      p.updatedAt = now;
-    } else if (p.historyId === historyId) {
-      p.historyId = null;
-      p.updatedAt = now;
+  for (const pr of home.id === proj.id ? [proj] : [proj, home]) {
+    const list = readPrompts(pr);
+    for (const p of list) {
+      if (p.id === promptId) {
+        p.historyId = historyId;
+        p.updatedAt = now;
+      } else if (p.historyId === historyId) {
+        p.historyId = null;
+        p.updatedAt = now;
+      }
     }
+    writePrompts(pr, list);
   }
-  writePrompts(proj, list);
   return true;
 }
 
@@ -4464,10 +4615,9 @@ app.post("/api/prompts/link", (req, res) => {
   if (!readJson(HISTORY_FILE).some((e) => e.id === historyId)) {
     return res.status(404).json({ code: 404, msg: "history entry not found" });
   }
-  if (promptId && !readPrompts(proj).some((p) => p.id === promptId)) {
+  if (!linkPromptToHistory(proj, promptId || null, historyId)) {
     return res.status(404).json({ code: 404, msg: "prompt not found" });
   }
-  linkPromptToHistory(proj, promptId || null, historyId);
   res.json({
     code: 200,
     msg: promptId ? "linked" : "unlinked",
@@ -4475,10 +4625,13 @@ app.post("/api/prompts/link", (req, res) => {
   });
 });
 
+// The edit/delete/duplicate/transfer routes act on the prompt where it's stored — a
+// global prompt shown in another project is found in its home project.
 app.put("/api/prompts/:id", (req, res) => {
-  const proj = findProject(req.body?.projectId);
-  if (!proj)
+  const listed = findProject(req.body?.projectId);
+  if (!listed)
     return res.status(400).json({ code: 400, msg: "unknown projectId" });
+  const proj = promptHome(listed, req.params.id) || listed;
   const list = readPrompts(proj);
   const entry = list.find((p) => p.id === req.params.id);
   if (!entry)
@@ -4491,13 +4644,18 @@ app.put("/api/prompts/:id", (req, res) => {
   if (fields.type === "default") fields.minimax = null; // converted back to plain text
   Object.assign(entry, fields, { updatedAt: new Date().toISOString() });
   writePrompts(proj, list);
-  res.json({ code: 200, msg: "updated", data: withRefDetails([entry])[0] });
+  res.json({
+    code: 200,
+    msg: "updated",
+    data: withRefDetails([{ ...entry, projectId: proj.id }])[0],
+  });
 });
 
 app.delete("/api/prompts/:id", (req, res) => {
-  const proj = findProject(req.query.projectId);
-  if (!proj)
+  const listed = findProject(req.query.projectId);
+  if (!listed)
     return res.status(400).json({ code: 400, msg: "unknown projectId" });
+  const proj = promptHome(listed, req.params.id) || listed;
   const list = readPrompts(proj);
   if (!list.some((p) => p.id === req.params.id)) {
     return res.status(404).json({ code: 404, msg: "prompt not found" });
@@ -4511,9 +4669,10 @@ app.delete("/api/prompts/:id", (req, res) => {
 
 // Duplicate within the same project; the copy lands right below the original.
 app.post("/api/prompts/:id/duplicate", (req, res) => {
-  const proj = findProject(req.body?.projectId);
-  if (!proj)
+  const listed = findProject(req.body?.projectId);
+  if (!listed)
     return res.status(400).json({ code: 400, msg: "unknown projectId" });
+  const proj = promptHome(listed, req.params.id) || listed;
   const list = readPrompts(proj);
   const idx = list.findIndex((p) => p.id === req.params.id);
   if (idx < 0)
@@ -4522,7 +4681,11 @@ app.post("/api/prompts/:id/duplicate", (req, res) => {
   copy.title = `${list[idx].title} (copy)`.slice(0, 200);
   list.splice(idx + 1, 0, copy);
   writePrompts(proj, list);
-  res.json({ code: 200, msg: "duplicated", data: withRefDetails([copy])[0] });
+  res.json({
+    code: 200,
+    msg: "duplicated",
+    data: withRefDetails([{ ...copy, projectId: proj.id }])[0],
+  });
 });
 
 // Copy or move a prompt to another project. Its refs keep pointing at the same
@@ -4530,7 +4693,8 @@ app.post("/api/prompts/:id/duplicate", (req, res) => {
 // media from either project.
 app.post("/api/prompts/:id/transfer", (req, res) => {
   const { projectId, toProjectId, mode } = req.body || {};
-  const from = findProject(projectId);
+  const listed = findProject(projectId);
+  const from = listed && (promptHome(listed, req.params.id) || listed);
   const to = findProject(toProjectId);
   if (!from || !to)
     return res.status(400).json({ code: 400, msg: "unknown projectId" });
@@ -4561,7 +4725,7 @@ app.post("/api/prompts/:id/transfer", (req, res) => {
   res.json({
     code: 200,
     msg: mode === "move" ? "moved" : "copied",
-    data: withRefDetails([moved])[0],
+    data: withRefDetails([{ ...moved, projectId: to.id }])[0],
   });
 });
 

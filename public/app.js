@@ -134,19 +134,24 @@ const PROJECT_KEY = "seedance_project";
 let projects = [];
 let activeProjectId = getPref(PROJECT_KEY) || "default";
 
-// Which tags to hide from the History list (a set of "video"/"image"/"draft"/
-// "favorite"). The auto-draft MP threshold is a server setting too (so the
-// server-side sweep applies the same rule as the client).
+// History's tag filter chips: { tag: "in" | "out" } — "in" shows only cards with
+// that tag, "out" hides them. Tags are "video"/"image"/"draft"/"favorite"/
+// "cancelled" plus any workflow auto-tag. The auto-draft MP threshold is a server
+// setting too (so the server-side sweep applies the same rule as the client).
+// The old "Hide:" checkboxes (HIDE_TAGS_KEY, a list) carry over as "out" chips.
+const HIST_TAG_FILTER_KEY = "genie_hist_tag_filter";
 const HIDE_TAGS_KEY = "genie_hist_hide_tags";
-let hiddenTags = new Set(
-  (() => {
-    try {
-      return JSON.parse(getPref(HIDE_TAGS_KEY, "[]"));
-    } catch {
-      return [];
-    }
-  })(),
-);
+let histTagFilter = (() => {
+  try {
+    const saved = getPref(HIST_TAG_FILTER_KEY);
+    if (saved != null) return { ...JSON.parse(saved) };
+    return Object.fromEntries(
+      JSON.parse(getPref(HIDE_TAGS_KEY, "[]")).map((t) => [t, "out"]),
+    );
+  } catch {
+    return {};
+  }
+})();
 
 // Live latent previews during a local ComfyUI run. "off" also skips opening the
 // preview stream entirely.
@@ -1387,21 +1392,55 @@ historyFilter.addEventListener("change", () => {
   renderHistory(historyEntries);
 });
 
-// History tag controls: the "Hide:" checkboxes (which tags to drop from the list),
-// and the auto-draft MP threshold (a server setting — the sweep applies it too, so
-// it's fetched/saved server-side).
-const hideTagEls = [...document.querySelectorAll(".hist-hide-tag")];
-const autoDraftMaxEl = document.getElementById("autoDraftMax");
-for (const el of hideTagEls) {
-  el.checked = hiddenTags.has(el.value);
-  el.addEventListener("change", () => {
-    if (el.checked) hiddenTags.add(el.value);
-    else hiddenTags.delete(el.value);
-    setPref(HIDE_TAGS_KEY, JSON.stringify([...hiddenTags]));
-    historyPage = 1;
-    renderHistory(historyEntries);
-  });
+// History tag controls: the "Filter:" chips, and the auto-draft MP threshold (a
+// server setting — the sweep applies it too, so it's fetched/saved server-side).
+// One chip per built-in tag, then every auto-tag on the project's cards, plus any
+// set chip whose tag isn't among them (so it can still be cleared). Click:
+// off → + (only these) → − (all but these) → off; right-click: straight to −.
+const histTagChipsEl = document.getElementById("histTagChips");
+const HIST_BASE_TAGS = ["video", "image", "draft", "favorite", "cancelled"];
+const tagLabel = (t) => (HIST_BASE_TAGS.includes(t) ? t[0].toUpperCase() + t.slice(1) : t);
+function renderHistTagChips() {
+  const tags = new Map(HIST_BASE_TAGS.map((t) => [t, t])); // lowercase → shown
+  const custom = new Map();
+  for (const e of historyOfProject(historyEntries))
+    for (const t of Array.isArray(e.tags) ? e.tags : []) {
+      const k = String(t).toLowerCase();
+      if (!tags.has(k) && !custom.has(k)) custom.set(k, String(t));
+    }
+  for (const [k, t] of [...custom].sort((a, b) => a[1].localeCompare(b[1]))) tags.set(k, t);
+  for (const t of Object.keys(histTagFilter))
+    if (!tags.has(t.toLowerCase())) tags.set(t.toLowerCase(), t);
+  histTagChipsEl.innerHTML = "";
+  for (const [k, t] of tags) {
+    const key = Object.keys(histTagFilter).find((x) => x.toLowerCase() === k) || t;
+    const state = histTagFilter[key] || "";
+    const label = tagLabel(t);
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = `ve-lib-chip${HIST_BASE_TAGS.includes(k) ? " src" : ""}`;
+    b.dataset.state = state;
+    b.textContent = `${state === "in" ? "+ " : state === "out" ? "− " : ""}${label}`;
+    b.title =
+      state === "in" ? `Only ${label} cards — click to hide them instead`
+      : state === "out" ? `Hiding ${label} cards — click to clear`
+      : `Click to show only ${label} cards; right-click to hide them`;
+    const set = (next) => {
+      if (next) histTagFilter[key] = next;
+      else delete histTagFilter[key];
+      setPref(HIST_TAG_FILTER_KEY, JSON.stringify(histTagFilter));
+      historyPage = 1;
+      renderHistory(historyEntries);
+    };
+    b.addEventListener("click", () => set(state === "" ? "in" : state === "in" ? "out" : ""));
+    b.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      set(state === "out" ? "" : "out");
+    });
+    histTagChipsEl.appendChild(b);
+  }
 }
+const autoDraftMaxEl = document.getElementById("autoDraftMax");
 fetch("/api/settings")
   .then((r) => r.json())
   .then((d) => {
@@ -2084,8 +2123,10 @@ function ratePerSec(model, resolution, audioOn) {
     model,
     (e) =>
       e.input?.resolution === resolution &&
-      // H3 has no generate_audio param, so every run of it is an audio run.
-      (audioOn === null || (e.input?.generate_audio !== false) === audioOn) &&
+      // H3 has no generate_audio param, so every run of it is an audio run. Wan
+      // 3.0 names the switch `audio`.
+      (audioOn === null ||
+        ((e.input?.generate_audio ?? e.input?.audio) !== false) === audioOn) &&
       // a 2.5 draft is priced apart from a plain 480p run
       !!e.input?.draft === seedanceDraft() &&
       e.input?.duration > 0,
@@ -2162,6 +2203,149 @@ document.getElementById("queueCount").addEventListener("input", updateEstimate);
 // Seedream 5.0 Lite is image-to-image (no duration/resolution/audio/video, has
 // quality, different aspect ratios).
 const modelSelect = document.getElementById("model");
+
+// Model type: your label for the selected model (ComfyUI workflow or API model), and
+// the same label on a LoRA marks what it's made for — the LoRA browser matches on it.
+// Saved per model server-side (settings/model-types.json); the suggestion list is every
+// type in use on models and LoRAs.
+const modelTypeInput = document.getElementById("modelType");
+const modelTypeStatus = document.getElementById("modelTypeStatus");
+let modelTypes = { byModel: {}, types: [] };
+async function loadModelTypes() {
+  try {
+    const r = await fetch("/api/model-types").then((x) => x.json());
+    modelTypes = r.data || modelTypes;
+  } catch {
+    /* offline — the field just starts empty */
+  }
+  syncModelTypeField();
+}
+
+// Suggestions for a model-type box: the types in use, filtered as you type, in the
+// same dropdown the app's other pickers use (a native <datalist> renders unstyled).
+// Free text stays allowed — a type that isn't listed yet is how a new one starts.
+// Picking one sets the box and fires "change" on it.
+function attachModelTypeSuggest(input) {
+  const root = document.createElement("div");
+  root.className = "combo-search";
+  input.replaceWith(root);
+  input.classList.add("combo-search-input");
+  const list = document.createElement("div");
+  list.className = "combo-search-list hidden";
+  root.append(input, list);
+  let matches = [];
+  let highlight = -1;
+  const isOpen = () => !list.classList.contains("hidden");
+  const close = () => list.classList.add("hidden");
+  const pick = (t) => {
+    input.value = t;
+    close();
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  };
+  function paint(filterText) {
+    const f = (filterText || "").trim().toLowerCase();
+    matches = modelTypes.types.filter((t) => t.toLowerCase().includes(f));
+    if (!modelTypes.types.length) return close(); // nothing to suggest yet
+    list.replaceChildren();
+    if (!matches.length) {
+      const none = document.createElement("div");
+      none.className = "combo-search-empty";
+      none.textContent = "New type — saved as typed";
+      list.appendChild(none);
+    }
+    matches.forEach((t, i) => {
+      const item = document.createElement("div");
+      item.className = "combo-search-item";
+      if (sameModelType(t, input.value)) item.classList.add("selected");
+      if (i === highlight) item.classList.add("active");
+      item.textContent = t;
+      item.addEventListener("mousedown", (e) => {
+        e.preventDefault(); // keep focus, beat the blur
+        pick(t);
+      });
+      list.appendChild(item);
+    });
+    list.classList.remove("hidden");
+    if (highlight >= 0)
+      list.children[highlight]?.scrollIntoView({ block: "nearest" });
+  }
+  // On open, list everything; typing narrows it.
+  const open = () => {
+    highlight = -1;
+    paint("");
+  };
+  input.addEventListener("focus", open);
+  input.addEventListener("click", () => isOpen() || open());
+  input.addEventListener("input", () => {
+    highlight = -1;
+    paint(input.value);
+  });
+  input.addEventListener("blur", () => setTimeout(close, 100));
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      if (!isOpen()) return open();
+      highlight = Math.min(highlight + 1, matches.length - 1);
+      paint(input.value);
+    } else if (e.key === "ArrowUp" && isOpen()) {
+      e.preventDefault();
+      highlight = Math.max(highlight - 1, 0);
+      paint(input.value);
+    } else if (e.key === "Enter" && isOpen() && highlight >= 0) {
+      e.preventDefault();
+      e.stopImmediatePropagation(); // picking isn't the box's own Enter (save/submit)
+      pick(matches[highlight]);
+    } else if (e.key === "Escape" && isOpen()) {
+      e.preventDefault();
+      e.stopPropagation(); // close the list, not the modal around it
+      close();
+    }
+  });
+}
+const currentModelType = () => modelTypes.byModel[modelSelect.value] || "";
+// Same label regardless of case/spacing, so "minimax h3" matches "MiniMax H3".
+const sameModelType = (a, b) =>
+  !!a &&
+  String(a).trim().toLowerCase() === String(b ?? "").trim().toLowerCase();
+function syncModelTypeField() {
+  if (document.activeElement !== modelTypeInput)
+    modelTypeInput.value = currentModelType();
+}
+async function saveModelType() {
+  const model = modelSelect.value;
+  const type = modelTypeInput.value.trim().replace(/\s+/g, " ");
+  if (type === currentModelType()) return;
+  // Reuse an existing spelling, so one type isn't split across "Flux" and "flux".
+  const known = modelTypes.types.find((t) => sameModelType(t, type));
+  try {
+    const r = await fetch(
+      `/api/model-types?model=${encodeURIComponent(model)}`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: known || type }),
+      },
+    ).then((x) => x.json());
+    if (r.code !== 200) throw new Error(r.msg || "save failed");
+    modelTypeStatus.textContent = "saved";
+    setTimeout(() => (modelTypeStatus.textContent = ""), 1500);
+    await loadModelTypes();
+    modelTypeInput.value = currentModelType();
+  } catch (err) {
+    modelTypeStatus.textContent = `not saved: ${err.message || err}`;
+  }
+}
+attachModelTypeSuggest(modelTypeInput);
+attachModelTypeSuggest(document.getElementById("loraInfoType"));
+modelTypeInput.addEventListener("change", saveModelType);
+modelTypeInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    modelTypeInput.blur(); // fires "change" → saves
+  }
+});
+loadModelTypes();
+
 const resolutionSelect = document.getElementById("resolution");
 const qualitySelect = document.getElementById("quality");
 const aspectSelect = document.getElementById("aspect_ratio");
@@ -2214,6 +2398,12 @@ const KLING_RESOLUTIONS = [
   ["720p", "720p"],
   ["1080p", "1080p"],
 ];
+// Wan 3.0's enum is the same ladder in capitals.
+const WAN_RESOLUTIONS = [
+  ["480P", "480p"],
+  ["720P", "720p"],
+  ["1080P", "1080p"],
+];
 
 const isSeedream = () => modelSelect.value.startsWith("seedream/");
 const is25 = () => modelSelect.value === "bytedance/seedance-2-5";
@@ -2229,6 +2419,9 @@ const isH3Ref = () => modelSelect.value === "minimax-h3/reference-to-video";
 const isKling = () => modelSelect.value.startsWith("kling-4.0/");
 const isKlingRef = () => modelSelect.value === "kling-4.0/reference-to-video";
 const isKlingKey = () => modelSelect.value === "kling-4.0/keyframe-to-video";
+// Wan 3.0 (standard and the faster Prime) — one model id for every mode, Seedance-style
+// field names, and the same references-or-frames choice as Seedance 2.5.
+const isWan = () => modelSelect.value.startsWith("wan/3-0-video");
 // Local ComfyUI workflows are selected as `comfy:<file.json>`.
 const isComfy = () => modelSelect.value.startsWith("comfy:");
 const comfyFile = () => modelSelect.value.slice("comfy:".length);
@@ -2248,17 +2441,22 @@ function frameMode() {
 }
 // H3 image-to-video has no reference-image alternative — it is always the frame form.
 const usesFrames = () =>
-  isH3I2V() || isKlingKey() || (isSeedanceVideo() && frameMode() === "frames");
+  isH3I2V() ||
+  isKlingKey() ||
+  ((isSeedanceVideo() || isWan()) && frameMode() === "frames");
+// Models whose first/last-frame mode shuts out every reference (video and audio too)
+// and needs a first frame for any last frame.
+const framesExcludeAllRefs = () => is25() || isWan();
 // Which reference fields the active model+mode actually sends. Image models take
 // neither; H3 takes video/audio only in reference-to-video, and takes reference
 // images in that mode alone too.
-// Seedance 2.5 goes further than the other Seedance models: its first/last-frame
-// mode excludes reference video and audio too, not just reference images.
+// Seedance 2.5 (and Wan 3.0) go further than the other Seedance models: their
+// first/last-frame mode excludes reference video and audio too, not just images.
 const usesRefMedia = () =>
   !isSeedream() &&
   (!isH3() || isH3Ref()) &&
   !isKlingKey() &&
-  !(is25() && usesFrames());
+  !(framesExcludeAllRefs() && usesFrames());
 // Kling keyframe-to-video uses the image list for its middle keyframes.
 const usesRefImages = () =>
   !isT2I() && !isH3T2V() && (isKlingKey() || !usesFrames());
@@ -2287,6 +2485,8 @@ const MAX_RESOLUTION = {
 const hasAdaptiveAspect = () => isSeedanceVideo() || isH3Ref();
 // Kling 4.0 has its own short list, with "auto" (follow the references/frames).
 const KLING_ASPECTS = ["auto", "16:9", "9:16", "1:1", "21:9"];
+// Wan 3.0: adaptive (its default) plus five fixed ratios — no 21:9.
+const WAN_ASPECTS = ["adaptive", "16:9", "4:3", "1:1", "3:4", "9:16"];
 
 // Reference-media limits per model: how many of each kind, the total seconds of
 // reference video (and of audio), and the per-video size. Seedance 2.5 is far
@@ -2297,10 +2497,13 @@ const REF_LIMITS = { image: 9, video: 3, audio: 3, secs: 15, videoMB: 50 };
 // takes up to 8 middle keyframes.
 const REF_LIMITS_KLING = { image: 10, video: 5, audio: 3, secs: 30, videoMB: 10 };
 const REF_LIMITS_KLING_KEY = { ...REF_LIMITS_KLING, image: 8 };
+// Wan 3.0: 10 images, 5 videos (100MB each) and 5 audio clips, each kind ≤ 15s total.
+const REF_LIMITS_WAN = { image: 10, video: 5, audio: 5, secs: 15, videoMB: 100 };
 const refLimits = () =>
   is25() ? REF_LIMITS_25
   : isKlingRef() ? REF_LIMITS_KLING
   : isKlingKey() ? REF_LIMITS_KLING_KEY
+  : isWan() ? REF_LIMITS_WAN
   : REF_LIMITS;
 
 // Seedance 2.5 draft mode: a 480p preview whose task id can be finalized at 1080p
@@ -2337,6 +2540,8 @@ const VIDEO_VARIANT_LABEL = {
   "minimax-h3/reference-to-video": "H3 ref2v",
   "kling-4.0/reference-to-video": "Kling 4 ref2v",
   "kling-4.0/keyframe-to-video": "Kling 4 keyframes",
+  "wan/3-0-video": "Wan 3",
+  "wan/3-0-video-prime": "Wan 3 Prime",
   "bytedance/seedance-2-5-draft": "2.5 from draft",
 };
 
@@ -2348,6 +2553,8 @@ function videoModelLabel(model) {
   if ((model || "").startsWith("kling-4.0/")) {
     return `Kling 4.0 (${model.slice("kling-4.0/".length)})`;
   }
+  if (model === "wan/3-0-video") return "Wan 3.0";
+  if (model === "wan/3-0-video-prime") return "Wan 3.0 Prime";
   if (model === "bytedance/seedance-2-5") return "Seedance 2.5";
   if (model === DRAFT_FINAL_MODEL) return "Seedance 2.5 (from draft)";
   if (model === "bytedance/seedance-2-fast") return "Seedance 2 Fast";
@@ -2497,6 +2704,7 @@ for (const id of KIE_FORM_FIELDS)
 
 function applyModelUI() {
   const comfy = isComfy();
+  syncModelTypeField();
   const cc = document.getElementById("comfyControls");
   cc.classList.toggle("hidden", !comfy);
   cc.classList.toggle("comfy-grid", comfy);
@@ -2524,6 +2732,7 @@ function applyModelUI() {
   const frames = is25();
   const h3 = isH3();
   const kling = isKling();
+  const wan = isWan();
   // Reference video/audio belong to Seedance and to H3's reference-to-video only.
   for (const id of ["videoField", "audioField"]) {
     document.getElementById(id).classList.toggle("hidden", !usesRefMedia());
@@ -2532,12 +2741,13 @@ function applyModelUI() {
     document.getElementById(id).classList.toggle("hidden", seedream);
   }
   // H3 and Kling generate audio natively and document neither web_search nor
-  // nsfw_checker.
-  for (const id of ["genAudioField", "webSearchField"]) {
-    document
-      .getElementById(id)
-      .classList.toggle("hidden", seedream || h3 || kling);
-  }
+  // nsfw_checker. Wan 3.0 has an audio switch and the checker, but no web_search.
+  document
+    .getElementById("genAudioField")
+    .classList.toggle("hidden", seedream || h3 || kling);
+  document
+    .getElementById("webSearchField")
+    .classList.toggle("hidden", seedream || h3 || kling || wan);
   document.getElementById("nsfwField").classList.toggle("hidden", h3 || kling);
   document
     .getElementById("keepSoundField")
@@ -2552,7 +2762,7 @@ function applyModelUI() {
   // The reference limits and the exclusivity rule differ by model (2.5 vs the rest).
   const lim = refLimits();
   document.getElementById("imageSourceHint").textContent =
-    is25() ?
+    framesExcludeAllRefs() ?
       "(references — images, video, audio — and first/last frames can't be combined)"
     : "(reference images and first/last frames can't be combined)";
   document.getElementById("videoHint").textContent =
@@ -2576,6 +2786,8 @@ function applyModelUI() {
       `(up to ${lim.image} — mention as @image_1, @image_2 …; videos as @video_1 …)`
     : is25() ?
       `(up to ${lim.image} — mention as @Image1, @Image2 …; videos @Video1 …, audio @Audio1 …)`
+    : wan ?
+      `(up to ${lim.image} — mention as Image1, Image2 …; videos Video1 …, audio Audio1 …)`
     : "(drag files or URLs in, or click to browse)";
   // H3 image-to-video takes no aspect_ratio — the frames decide it.
   document.getElementById("aspectField").classList.toggle("hidden", isH3I2V());
@@ -2589,7 +2801,7 @@ function applyModelUI() {
   const refsHidden = !usesRefImages();
   document
     .getElementById("imageSourceField")
-    .classList.toggle("hidden", !seedanceVideo);
+    .classList.toggle("hidden", !seedanceVideo && !wan);
   document.getElementById("imageField").classList.toggle("hidden", refsHidden);
   document.getElementById("qualityField").classList.toggle("hidden", !seedream);
   for (const id of ["firstFrameField", "lastFrameField"]) {
@@ -2609,10 +2821,11 @@ function applyModelUI() {
   setAspectOptions(
     seedream ? IMAGE_ASPECTS
     : kling ? KLING_ASPECTS
+    : wan ? WAN_ASPECTS
     : hasAdaptiveAspect() ? VIDEO_ASPECTS_ADAPTIVE
     : VIDEO_ASPECTS,
-    // 2.5 and H3 reference-to-video are the ones that document adaptive as default
-    frames || isH3Ref() ? "adaptive"
+    // 2.5, H3 reference-to-video and Wan 3.0 document adaptive as the default
+    frames || isH3Ref() || wan ? "adaptive"
     : kling ? "auto"
     : "16:9",
   );
@@ -2620,6 +2833,8 @@ function applyModelUI() {
     setResolutionOptions(H3_RESOLUTIONS, "2K");
   } else if (kling) {
     setResolutionOptions(KLING_RESOLUTIONS, "720p");
+  } else if (wan) {
+    setResolutionOptions(WAN_RESOLUTIONS, "720P");
   } else {
     setResolutionOptions(SEEDANCE_RESOLUTIONS, "720p");
     // Disable any resolution above this model's ceiling; if the current selection
@@ -2637,11 +2852,11 @@ function applyModelUI() {
   if (draft) resolutionSelect.value = "480p";
   resolutionSelect.disabled = draft;
   document.getElementById("return_last_frame").disabled = draft;
-  // Seedance 2.5 and Kling 4.0 allow up to 30s (Kling from 3s); the other video
-  // models cap at 15s.
+  // Seedance 2.5, Kling 4.0 and Wan 3.0 allow up to 30s (Kling from 3s, Wan from
+  // 2s); the other video models cap at 15s.
   const durInput = document.getElementById("duration");
-  durInput.min = kling ? 3 : 4;
-  durInput.max = frames || kling ? 30 : 15;
+  durInput.min = wan ? 2 : kling ? 3 : 4;
+  durInput.max = frames || kling || wan ? 30 : 15;
   if (Number(durInput.value) > Number(durInput.max))
     durInput.value = durInput.max;
   updatePromptCount(); // the cap depends on the selected model
@@ -3987,6 +4202,276 @@ function makeComfyAutoTagsControl(file) {
   };
 }
 
+// Your notes on each LoRA — display name, description, url, trigger phrases — kept
+// server-side (settings/loras.json) and keyed by the LoRA's filename. Fetched once and
+// cached; the ⓘ button on a row opens them for whichever file that row has selected.
+let loraInfoMap = null;
+let loraInfoLoading = null;
+const loraInfoKey = (name) => String(name ?? "").trim().replace(/\\/g, "/");
+function loadLoraInfo() {
+  if (loraInfoMap) return Promise.resolve(loraInfoMap);
+  loraInfoLoading ||= fetch("/api/lora-info")
+    .then((r) => r.json())
+    .then((r) => (loraInfoMap = r.data || {}))
+    .catch(() => ({}))
+    .finally(() => (loraInfoLoading = null));
+  return loraInfoLoading;
+}
+
+const LORA_INFO_ICON =
+  `<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">` +
+  `<circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.4"/>` +
+  `<rect x="7.25" y="7" width="1.5" height="4.5" rx=".5" fill="currentColor"/>` +
+  `<circle cx="8" cy="4.9" r=".95" fill="currentColor"/></svg>`;
+
+// The ⓘ button for a LoRA row: lit when the selected file has notes saved, and the
+// tooltip shows its display name.
+function makeLoraInfoButton(sel) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "x lora-info";
+  btn.innerHTML = LORA_INFO_ICON;
+  const sync = () => {
+    const e = loraInfoMap?.[loraInfoKey(sel.value)];
+    btn.classList.toggle("has-info", !!e);
+    btn.title =
+      e?.displayName ? `${e.displayName} — LoRA info`
+      : e ? "LoRA info"
+      : "LoRA info (none saved yet)";
+    btn.disabled = !sel.value;
+  };
+  btn._syncLoraInfo = sync;
+  sync();
+  loadLoraInfo().then(sync);
+  sel.addEventListener("change", sync);
+  btn.addEventListener("click", () => sel.value && openLoraInfo(sel.value));
+  return btn;
+}
+
+const loraInfoModal = document.getElementById("loraInfoModal");
+const loraInfoFields = {
+  displayName: document.getElementById("loraInfoName"),
+  modelType: document.getElementById("loraInfoType"),
+  description: document.getElementById("loraInfoDesc"),
+  url: document.getElementById("loraInfoUrl"),
+  triggers: document.getElementById("loraInfoTriggers"),
+};
+const loraInfoOpen = document.getElementById("loraInfoOpen");
+let loraInfoEditing = null; // the LoRA filename open in the modal
+
+function syncLoraInfoLink() {
+  const url = loraInfoFields.url.value.trim();
+  const ok = /^https?:\/\//i.test(url);
+  loraInfoOpen.setAttribute("aria-disabled", String(!ok));
+  loraInfoOpen.title = ok ? `Open ${url}` : "No URL to open";
+  if (ok) loraInfoOpen.href = url;
+  else loraInfoOpen.removeAttribute("href");
+}
+loraInfoFields.url.addEventListener("input", syncLoraInfoLink);
+
+async function openLoraInfo(name) {
+  loraInfoEditing = loraInfoKey(name);
+  document.getElementById("loraInfoFile").textContent = loraInfoEditing;
+  const e = (await loadLoraInfo())[loraInfoEditing] || {};
+  for (const [k, el] of Object.entries(loraInfoFields)) el.value = e[k] || "";
+  // A LoRA with no notes yet is most likely for the model you're using it with.
+  if (!loraInfoMap?.[loraInfoEditing])
+    loraInfoFields.modelType.value = currentModelType();
+  syncLoraInfoLink();
+  show(loraInfoModal);
+  loraInfoFields.displayName.focus();
+}
+
+function closeLoraInfo() {
+  loraInfoEditing = null;
+  hide(loraInfoModal);
+}
+
+async function saveLoraInfo() {
+  if (!loraInfoEditing) return;
+  const body = {};
+  for (const [k, el] of Object.entries(loraInfoFields)) body[k] = el.value;
+  const known = modelTypes.types.find((t) => sameModelType(t, body.modelType));
+  if (known) body.modelType = known; // one spelling per type
+  try {
+    const res = await fetch(
+      `/api/lora-info?name=${encodeURIComponent(loraInfoEditing)}`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      },
+    );
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.msg || "Save failed");
+    loraInfoMap ||= {};
+    if (data.data) loraInfoMap[loraInfoEditing] = data.data;
+    else delete loraInfoMap[loraInfoEditing];
+    for (const b of document.querySelectorAll(".lora-info"))
+      b._syncLoraInfo?.();
+    loadModelTypes(); // a new type joins the suggestions
+    closeLoraInfo();
+    if (!loraBrowserModal.classList.contains("hidden")) renderLoraBrowser();
+  } catch (err) {
+    alert(err.message || String(err));
+  }
+}
+
+document
+  .getElementById("loraInfoCancel")
+  .addEventListener("click", closeLoraInfo);
+document.getElementById("loraInfoSave").addEventListener("click", saveLoraInfo);
+loraInfoModal.addEventListener("click", (e) => {
+  if (e.target === loraInfoModal) closeLoraInfo();
+});
+loraInfoModal.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closeLoraInfo();
+  if (e.key === "Enter" && (e.ctrlKey || e.target.tagName === "INPUT")) {
+    e.preventDefault();
+    saveLoraInfo();
+  }
+});
+
+// The LoRA browser: the installed LoRAs whose notes give the selected model's type,
+// listed by display name with their description and triggers; Add puts one in the
+// loadout. "All installed LoRAs" widens it to every file (those without notes too).
+const loraBrowserModal = document.getElementById("loraBrowserModal");
+const loraBrowserList = document.getElementById("loraBrowserList");
+const loraBrowserSearch = document.getElementById("loraBrowserSearch");
+const loraBrowserAll = document.getElementById("loraBrowserAll");
+
+async function openLoraBrowser() {
+  if (!comfyLoraControl) return;
+  await loadLoraInfo();
+  loraBrowserSearch.value = "";
+  loraBrowserAll.checked = !currentModelType(); // nothing to match on → show all
+  renderLoraBrowser();
+  show(loraBrowserModal);
+  loraBrowserSearch.focus();
+}
+
+function renderLoraBrowser() {
+  const type = currentModelType();
+  const all = loraBrowserAll.checked;
+  document.getElementById("loraBrowserScope").textContent =
+    all ? "Every installed LoRA."
+    : `LoRAs marked for “${type}” — this model's type.`;
+  const q = loraBrowserSearch.value.trim().toLowerCase();
+  const inLoadout = new Set(comfyLoraControl.getLoras().map((l) => l.name));
+  const items = comfyLoraControl.options
+    .map((file) => ({ file, info: loraInfoMap?.[loraInfoKey(file)] || null }))
+    .filter(({ info }) => all || sameModelType(type, info?.modelType))
+    .filter(
+      ({ file, info }) =>
+        !q ||
+        [file, info?.displayName, info?.description, info?.triggers]
+          .join("\n")
+          .toLowerCase()
+          .includes(q),
+    )
+    .sort((a, b) =>
+      (a.info?.displayName || a.file).localeCompare(
+        b.info?.displayName || b.file,
+        undefined,
+        { sensitivity: "base" },
+      ),
+    );
+
+  if (!items.length) {
+    const p = document.createElement("p");
+    p.className = "muted lora-browser-empty";
+    p.textContent =
+      q ? "Nothing matches that filter."
+      : !type ?
+        "This model has no type yet — set one under the Model picker, then mark LoRAs with it in their ⓘ info."
+      : `No LoRAs are marked “${type}” yet — open a LoRA's ⓘ info and pick that model type, or tick “All installed LoRAs”.`;
+    loraBrowserList.replaceChildren(p);
+    return;
+  }
+
+  loraBrowserList.replaceChildren(
+    ...items.map(({ file, info }) => {
+      const card = document.createElement("div");
+      card.className = "lora-card";
+      const head = document.createElement("div");
+      head.className = "lora-card-head";
+      const title = document.createElement("div");
+      title.className = "lora-card-title";
+      const name = document.createElement("strong");
+      name.textContent = info?.displayName || file;
+      title.appendChild(name);
+      if (info?.modelType) {
+        const chip = document.createElement("span");
+        chip.className = "lora-from";
+        chip.textContent = info.modelType;
+        title.appendChild(chip);
+      }
+      const actions = document.createElement("div");
+      actions.className = "lora-card-actions";
+      if (info?.url && /^https?:\/\//i.test(info.url)) {
+        const a = document.createElement("a");
+        a.href = info.url;
+        a.target = "_blank";
+        a.rel = "noopener noreferrer";
+        a.textContent = "open ↗";
+        actions.appendChild(a);
+      }
+      const edit = document.createElement("button");
+      edit.type = "button";
+      edit.className = "btn-secondary";
+      edit.textContent = "Edit info";
+      edit.addEventListener("click", () => openLoraInfo(file));
+      const add = document.createElement("button");
+      add.type = "button";
+      const added = inLoadout.has(file);
+      add.textContent = added ? "✓ Added" : "+ Add";
+      add.disabled = added;
+      add.addEventListener("click", () => {
+        comfyLoraControl.addLora(file);
+        add.textContent = "✓ Added";
+        add.disabled = true;
+      });
+      actions.append(edit, add);
+      head.append(title, actions);
+      card.appendChild(head);
+      if (info?.displayName) {
+        const f = document.createElement("div");
+        f.className = "muted lora-card-file";
+        f.textContent = file;
+        card.appendChild(f);
+      }
+      if (info?.description) {
+        const d = document.createElement("div");
+        d.className = "lora-card-desc";
+        d.textContent = info.description;
+        card.appendChild(d);
+      }
+      if (info?.triggers) {
+        const t = document.createElement("div");
+        t.className = "lora-card-triggers";
+        t.textContent = `Triggers: ${info.triggers.split(/\r?\n/).map((s) => s.trim()).filter(Boolean).join(" · ")}`;
+        card.appendChild(t);
+      }
+      return card;
+    }),
+  );
+}
+
+function closeLoraBrowser() {
+  hide(loraBrowserModal);
+}
+loraBrowserSearch.addEventListener("input", renderLoraBrowser);
+loraBrowserAll.addEventListener("change", renderLoraBrowser);
+document
+  .getElementById("loraBrowserClose")
+  .addEventListener("click", closeLoraBrowser);
+loraBrowserModal.addEventListener("click", (e) => {
+  if (e.target === loraBrowserModal) closeLoraBrowser();
+});
+loraBrowserModal.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closeLoraBrowser();
+});
+
 function makeComfyLoraControl(loraOptions, offline, workflowLoras = []) {
   const field = document.createElement("div");
   field.className = "field comfy-loras";
@@ -4003,7 +4488,16 @@ function makeComfyLoraControl(loraOptions, offline, workflowLoras = []) {
   addBtn.type = "button";
   addBtn.className = "btn-secondary lora-add";
   addBtn.textContent = "+ Add LoRA";
-  field.appendChild(addBtn);
+  const browseBtn = document.createElement("button");
+  browseBtn.type = "button";
+  browseBtn.className = "btn-secondary lora-add";
+  browseBtn.textContent = "📚 Browse LoRAs";
+  browseBtn.title = "Pick from the LoRAs marked with this model's type";
+  browseBtn.addEventListener("click", openLoraBrowser);
+  const btns = document.createElement("div");
+  btns.className = "lora-buttons";
+  btns.append(addBtn, browseBtn);
+  field.appendChild(btns);
 
   if (offline) {
     const n = document.createElement("p");
@@ -4011,6 +4505,7 @@ function makeComfyLoraControl(loraOptions, offline, workflowLoras = []) {
     n.textContent = "Start ComfyUI to add LoRAs.";
     field.appendChild(n);
     addBtn.disabled = true;
+    browseBtn.disabled = true;
   }
 
   // `from` set = one of the workflow's own LoRA nodes: tagged, and kept in the list
@@ -4062,6 +4557,7 @@ function makeComfyLoraControl(loraOptions, offline, workflowLoras = []) {
       rm.title = "Remove LoRA";
       rm.addEventListener("click", () => row.remove());
     }
+    const info = makeLoraInfoButton(sel);
     const syncDim = () => row.classList.toggle("lora-off", !chk.checked);
     chk.addEventListener("change", syncDim);
     syncDim();
@@ -4082,13 +4578,15 @@ function makeComfyLoraControl(loraOptions, offline, workflowLoras = []) {
       sel.addEventListener("change", syncTag);
       row.appendChild(tag);
     }
-    row.appendChild(rm);
+    row.append(info, rm);
     rowsEl.appendChild(row);
   };
   addBtn.addEventListener("click", () => addRow(loraOptions[0] || "", 1, true));
 
   return {
     el: field,
+    options: loraOptions, // installed LoRA files
+    addLora: (name) => addRow(name, 1, true),
     // All rows (incl. disabled) with their on/off state — for saving the loadout.
     getLoras: () =>
       [...rowsEl.querySelectorAll(".lora-row")]
@@ -5079,7 +5577,10 @@ updatePromptCount();
 // workflow's main prompt get the tabs; one shared cards panel moves into whichever is
 // on screen. Saving and importing go through snapshotCarry()/applyCarry(), so a saved
 // prompt means the same thing to a kie.ai model and a ComfyUI workflow.
-let savedPrompts = []; // the active project's, newest first
+let savedPrompts = []; // the active project's, by weight, then other projects' global ones
+// A global prompt from another project: listed here, stored (and ordered) there.
+const isForeignPrompt = (p) => !!p.projectId && p.projectId !== activeProjectId;
+const ownSavedCount = () => savedPrompts.filter((p) => !isForeignPrompt(p)).length;
 let savedPromptsSeq = 0; // the latest load; a slower earlier one doesn't overwrite it
 // "prompt" | "saved" | "wildcards" | "variables", shared by every prompt field;
 // remembered per browser across reloads. `promptSource` is the last of "prompt"/"saved"
@@ -5187,6 +5688,7 @@ const MM_REF_LABEL = { image: "Picture", video: "Video", audio: "Audio" };
 // compileMinimax writes (and parseMinimax reads), [bracketed] notes to write over.
 const MM_R2V_TEMPLATE = `subject_definitions:
 <subject_1> is [who or what it is], seen in <Picture 1>.
+<Audio 1> is the conversation between them: [whose voices, language].
 
 summary:
 [reference generation] The target video shows <subject_1> [what happens].
@@ -5197,7 +5699,8 @@ retention_analysis:
 detailed_description:
 [Style: look, lighting, camera and lens.]
 [Shot 1] [Opening shot: framing, action, dialogue.]
-[Shot 2] At 00:03.000, [The next cut.]
+[Shot 2] At 00:03.000, the shot cuts to [the next framing and subject]. <subject_1> (S1) says, <d>[English] [the line, word for word]</d>
+[Shot 3] At 00:06.000, the shot cuts to [the next framing and subject].
 
 overall_soundscape:
 [Ambient sound and effects.]
@@ -5616,6 +6119,21 @@ function appearsText(r) {
     : "not in any shot yet";
 }
 
+// A cut's text after "At MM:SS.mmm, ": MiniMax follows cuts more reliably when each
+// one says "the shot cuts to …" (the guide's wording), so it's added unless the text
+// already says it (parseMinimax strips it back off, so the form keeps just the shot).
+const MM_CUT_RE = /^(?:the (?:shot|camera)\s+)?cuts?\s+to\b/i;
+const MM_CUT_STRIP = /^(?:the shot cuts|cut)\s+to\s+/i;
+function cutText(text) {
+  if (!text || MM_CUT_RE.test(text)) return text;
+  // "A man walks" → "the shot cuts to a man walks"; names ("Sarah") and "AI" keep their capital.
+  const lead = text.replace(
+    /^(A|An|The|This|That|Her|His|Their|Its|Our|My|She|He|They|It|We)\b/,
+    (w) => w.toLowerCase(),
+  );
+  return `the shot cuts to ${lead}`;
+}
+
 function compileMinimax(mmIn, refsIn) {
   const mm = normalizeMinimax(mmIn);
   const refs = withSceneRefs(mm, refsIn);
@@ -5627,7 +6145,7 @@ function compileMinimax(mmIn, refsIn) {
     const text = tok(s.text);
     return i === 0 ?
         `[Shot 1] ${text}`
-      : `[Shot ${i + 1}] At ${fmtShotTime(starts[i])}, ${text}`;
+      : `[Shot ${i + 1}] At ${fmtShotTime(starts[i])}, ${cutText(text)}`;
   });
   const section = (name, body) =>
     `${name}:\n${String(body || "").trim() || "N/A"}`;
@@ -5666,7 +6184,7 @@ function compileMinimaxT2V(mmIn) {
   const shots = mm.shots.map((s, i) =>
     i === 0 ?
       ["[Shot 1]", t(mm.style), t(s.text)].filter(Boolean).join(" ")
-    : `[Shot ${i + 1}] At ${fmtShotTime(starts[i])}, ${t(s.text)}`,
+    : `[Shot ${i + 1}] At ${fmtShotTime(starts[i])}, ${cutText(t(s.text))}`,
   );
   const field = (name, body) => `${name}: ${t(body) || "N/A"}`;
   return [
@@ -5751,6 +6269,7 @@ function parseMinimax(text, refs = []) {
         at = parseShotTime(tm[1]);
         body = body.slice(tm[0].length);
       }
+      if (i > 0) body = body.replace(MM_CUT_STRIP, ""); // compileMinimax re-adds it
       return { at: i === 0 ? null : (at ?? 0), text: body.trim() };
     });
   } else {
@@ -5767,7 +6286,7 @@ function parseMinimax(text, refs = []) {
       if (tm) {
         mm.shots.push({
           at: parseShotTime(tm[1]),
-          text: para.slice(tm[0].length).trim(),
+          text: para.slice(tm[0].length).replace(MM_CUT_STRIP, "").trim(),
         });
       } else {
         const cur = mm.shots[mm.shots.length - 1];
@@ -7410,10 +7929,9 @@ function makeHistoryPromptLink(entry, onLinked = () => {}) {
         historyId: entry.id,
         promptId: sel.value || null,
       });
-      projectPromptsCache.delete(projectId);
-      if (projectId === activeProjectId)
-        await loadSavedPrompts(); // refreshes the dropdowns too
-      else refreshHistoryPromptLinks();
+      // A global prompt lives in another project's list, so any cached list may be stale.
+      projectPromptsCache.clear();
+      await loadSavedPrompts(); // refreshes the dropdowns too
     } catch (err) {
       alert(err.message || String(err));
       sel.refill();
@@ -7764,8 +8282,8 @@ const SP_REORDER_TYPE = "application/x-genie-saved-prompt";
 
 async function moveSavedPrompt(id, toIndex) {
   const from = savedPrompts.findIndex((p) => p.id === id);
-  if (from < 0) return;
-  toIndex = Math.max(0, Math.min(savedPrompts.length - 1, toIndex));
+  if (from < 0 || isForeignPrompt(savedPrompts[from])) return;
+  toIndex = Math.max(0, Math.min(ownSavedCount() - 1, toIndex));
   if (from === toIndex) return;
   const [moved] = savedPrompts.splice(from, 1);
   savedPrompts.splice(toIndex, 0, moved);
@@ -7775,7 +8293,8 @@ async function moveSavedPrompt(id, toIndex) {
 // The list's current order as the weights 0, 1, 2…, drawn at once and saved in the
 // background. `focus`: a selector to focus afterwards.
 async function saveSavedOrder(focus = null) {
-  savedPrompts.forEach((p, i) => {
+  const own = savedPrompts.filter((p) => !isForeignPrompt(p));
+  own.forEach((p, i) => {
     p.weight = i;
   });
   renderSavedPrompts();
@@ -7783,7 +8302,7 @@ async function saveSavedOrder(focus = null) {
   try {
     await promptsApi("/api/prompts/reorder", "POST", {
       projectId: activeProjectId,
-      ids: savedPrompts.map((p) => p.id),
+      ids: own.map((p) => p.id),
     });
   } catch (err) {
     alert(`Couldn't save the new order: ${err.message || err}`);
@@ -7830,7 +8349,7 @@ function wireCardReorder(card, p) {
     e.preventDefault();
     card.classList.remove("drop-before", "drop-after");
     const id = e.dataTransfer.getData(SP_REORDER_TYPE);
-    if (id === p.id) return;
+    if (id === p.id || isForeignPrompt(p)) return;
     const from = savedPrompts.findIndex((x) => x.id === id);
     let to =
       savedPrompts.findIndex((x) => x.id === p.id) + (lowerHalf(e) ? 1 : 0);
@@ -7842,7 +8361,7 @@ function wireCardReorder(card, p) {
 // ▲ ▼ / Alt+↑↓ on a card: one place up or down.
 function stepSavedCard(p, delta) {
   const j = savedPrompts.indexOf(p) + delta;
-  if (j < 0 || j >= savedPrompts.length) return;
+  if (j < 0 || j >= ownSavedCount()) return;
   moveSavedPrompt(p.id, j);
 }
 
@@ -7851,7 +8370,7 @@ function makeCardMoveButtons(p) {
   const wrap = document.createElement("span");
   wrap.className = "sp-move";
   const i = savedPrompts.indexOf(p);
-  const n = savedPrompts.length;
+  const n = ownSavedCount();
   for (const [text, delta, title] of [
     ["▲", -1, "Move up (Alt+↑)"],
     ["▼", 1, "Move down (Alt+↓)"],
@@ -7894,10 +8413,12 @@ function makeSavedPromptCard(p) {
   title.textContent = p.title;
   const meta = document.createElement("span");
   meta.className = "sp-meta";
+  const foreign = isForeignPrompt(p);
   meta.textContent = [
+    foreign ? `from ${p.projectName || projectName(p.projectId)}` : null,
     p.duration ? `${p.duration}s` : null,
     refSummary(refs) || null,
-    `weight ${p.weight ?? 0}`,
+    foreign ? null : `weight ${p.weight ?? 0}`,
     new Date(p.updatedAt || p.createdAt).toLocaleDateString(),
   ]
     .filter(Boolean)
@@ -7949,8 +8470,18 @@ function makeSavedPromptCard(p) {
       : "MiniMax H3 format — compiled into its six sections when used";
     title.prepend(badge);
   }
+  if (p.global) {
+    const badge = document.createElement("span");
+    badge.className = "sp-type sp-global";
+    badge.textContent = "🌐 Global";
+    badge.title =
+      foreign ?
+        `Global prompt from ${p.projectName || projectName(p.projectId)} — listed in every project; edits change it everywhere`
+      : "Global — listed in every project";
+    title.prepend(badge);
+  }
   head.append(title, meta);
-  if (!savedPromptsFilter) {
+  if (!savedPromptsFilter && !foreign) {
     // Manual order (off while filtering, when neighbours on screen aren't real neighbours).
     wireCardReorder(card, p);
     head.appendChild(makeCardMoveButtons(p));
@@ -8064,6 +8595,7 @@ const peTitle = document.getElementById("peTitle");
 const pePrompt = document.getElementById("pePrompt");
 const peDuration = document.getElementById("peDuration");
 const peWeight = document.getElementById("peWeight");
+const peGlobal = document.getElementById("peGlobal");
 const peRefs = document.getElementById("peRefs");
 const peRefsEmpty = document.getElementById("peRefsEmpty");
 const peMeta = document.getElementById("peMeta");
@@ -8099,11 +8631,12 @@ const subjectChanged = (s) =>
   s.key !== s.origKey || s.definition !== s.origDefinition;
 
 // `projectId`: the project the prompt belongs to — the active one from the Saved
-// Prompts tab, or a History card's (which may be another project's).
+// Prompts tab, or a History card's (which may be another project's). A listed prompt
+// names its own (a global one's home project), which wins.
 function openPromptEditor(p, projectId = activeProjectId) {
   editing = {
     p,
-    projectId,
+    projectId: p.projectId || projectId,
     type: p.type || "default",
     mm: normalizeMinimax(structuredClone(p.minimax || null)), // the MiniMax fields being edited
     refs: (p.refs || []).map((r) => ({ ...r })),
@@ -8115,7 +8648,11 @@ function openPromptEditor(p, projectId = activeProjectId) {
   pePrompt.value = p.prompt || "";
   peDuration.value = p.duration || "";
   peWeight.value = p.weight ?? 0;
+  peGlobal.checked = !!p.global;
   peMeta.textContent =
+    (isForeignPrompt(p) ?
+      `Global prompt from ${p.projectName || projectName(p.projectId)} · `
+    : "") +
     `Saved ${new Date(p.createdAt).toLocaleString()}` +
     (p.updatedAt && p.updatedAt !== p.createdAt ?
       ` · edited ${new Date(p.updatedAt).toLocaleString()}`
@@ -8169,6 +8706,7 @@ function editorValues() {
       : null,
     weight:
       peWeight.value.trim() !== "" && Number.isFinite(w) ? Math.round(w) : 0,
+    global: peGlobal.checked,
     historyId: editing.historyId,
     refs: editorLiveRefs(), // with unsaved key/definition edits, for Import's compile
   };
@@ -8188,6 +8726,7 @@ function editorDirty() {
     // (a MiniMax prompt's duration follows its shots, which are compared above)
     (!isMmType(v.type) && v.duration !== (p.duration || null)) ||
     v.weight !== (p.weight ?? 0) ||
+    v.global !== !!p.global ||
     v.historyId !== (p.historyId || null) ||
     v.refs.map((r) => r.id).join() !== (p.refs || []).map((r) => r.id).join() ||
     [...editing.subjects.values()].some(subjectChanged)
@@ -9758,6 +10297,26 @@ function collectInput(resolved, prompt = promptEl.value) {
     }
     return input;
   }
+  // Wan 3.0: Seedance's reference/frame fields, but `audio` for the soundtrack switch
+  // and no web_search. `resolved` is already mode-gated, so frames and references
+  // never travel together.
+  if (isWan()) {
+    const input = {
+      model: modelSelect.value,
+      prompt,
+      reference_image_urls: resolved.image,
+      reference_video_urls: resolved.video,
+      reference_audio_urls: resolved.audio,
+      audio: document.getElementById("generate_audio").checked,
+      resolution: resolutionSelect.value,
+      aspect_ratio: aspectSelect.value,
+      duration: Number(durEl.value),
+      nsfw_checker: document.getElementById("nsfw_checker").checked,
+    };
+    if (resolved.firstFrame?.[0]) input.first_frame_url = resolved.firstFrame[0];
+    if (resolved.lastFrame?.[0]) input.last_frame_url = resolved.lastFrame[0];
+    return input;
+  }
   const input = {
     model: modelSelect.value,
     prompt,
@@ -9890,10 +10449,25 @@ async function submitKieRuns(fromSaved, plan) {
         "Kling 4.0 takes at most 15 references in total (images, videos and voices).",
       );
   }
-  if (is25() && usesFrames() && ready("lastFrame") && !ready("firstFrame"))
-    return fail("Seedance 2.5 can't take a last frame on its own — add a first frame too.");
+  if (
+    framesExcludeAllRefs() &&
+    usesFrames() &&
+    ready("lastFrame") &&
+    !ready("firstFrame")
+  )
+    return fail(
+      `${videoModelLabel(modelSelect.value)} can't take a last frame on its own — add a first frame too.`,
+    );
+  // Wan 3.0 caps reference video + output at 30s combined.
+  if (isWan() && usesRefMedia()) {
+    const secs = Number(document.getElementById("duration").value) || 0;
+    if (secs > 0 && refVideoSeconds() + secs > 30)
+      return fail(
+        `Wan 3.0 caps reference video + output at 30s — ${Math.round(refVideoSeconds())}s of video leaves at most ${Math.max(0, Math.floor(30 - refVideoSeconds()))}s of output.`,
+      );
+  }
   // Too many references, or too much reference video, is rejected by the API.
-  if (isSeedanceVideo() || isH3Ref() || isKling()) {
+  if (isSeedanceVideo() || isH3Ref() || isKling() || isWan()) {
     const lim = refLimits();
     const count = (kind) =>
       lists[kind].items.filter((i) => i.status === "ready").length;
@@ -10486,9 +11060,10 @@ const isUnfinished = (e) =>
 
 // The history entries the current filter keeps, in display order — shared by
 // the rendered list and the lightbox's ‹ › navigation so they stay in sync.
-// Entries carrying any tag checked in the "Hide:" controls are dropped. The
-// "cancelled" checkbox isn't a card tag — it drops failed/cancelled runs (both
-// land on status "failed"), so it's handled here rather than via entryTags.
+// Then the "Filter:" chips: no "out" tag may be on a card, and every "in" tag must
+// be — except Video/Image, where "in" on both means either. "cancelled" isn't a
+// card tag — it matches failed/cancelled runs (both land on status "failed"), so
+// it's added here rather than in entryTags.
 // Runs still generating or queued stay in view whatever project is picked, so a
 // switch of project doesn't hide what's in flight.
 const inOtherProject = (e) => {
@@ -10499,10 +11074,18 @@ function filterHistory(entries) {
   const byProject = entries.filter(
     (e) => e.status === "pending" || !inOtherProject(e),
   );
-  if (!hiddenTags.size) return byProject;
+  const chips = Object.entries(histTagFilter).map(([t, s]) => [t.toLowerCase(), s]);
+  if (!chips.length) return byProject;
+  const kindsIn = chips.filter(([t, s]) => s === "in" && (t === "video" || t === "image"));
   return byProject.filter((e) => {
-    if (hiddenTags.has("cancelled") && e.status === "failed") return false;
-    return !entryTags(e).some((t) => hiddenTags.has(t));
+    const tags = new Set(entryTags(e).map((t) => t.toLowerCase()));
+    if (e.status === "failed") tags.add("cancelled");
+    if (kindsIn.length && !kindsIn.some(([t]) => tags.has(t))) return false;
+    return chips.every(
+      ([t, s]) =>
+        s === "out" ? !tags.has(t)
+        : t === "video" || t === "image" || tags.has(t),
+    );
   });
 }
 
@@ -10606,6 +11189,8 @@ function creditCategory(model) {
     return m.includes("5-pro") ? "Seedream Pro" : "Seedream Lite";
   if (m.startsWith("minimax-h3/")) return "MiniMax H3";
   if (m.startsWith("kling-4.0/")) return "Kling 4.0";
+  if (m === "wan/3-0-video") return "Wan 3.0";
+  if (m === "wan/3-0-video-prime") return "Wan 3.0 Prime";
   if (m === "bytedance/seedance-2-5" || m === DRAFT_FINAL_MODEL)
     return "Seedance 2.5";
   if (m === "bytedance/seedance-2-fast") return "Seedance 2 Fast";
@@ -10887,10 +11472,13 @@ function addRefToPictureField(r) {
 // the field. H3 image-to-video takes the first only, as its first frame; text-to-video
 // takes none. `apply` false works out the same text without touching the form (for the
 // diff). Returns { text, added, left } — left: images that didn't fit.
-function placeRevisePictures(items, text, apply) {
+// With kind "audio" it does the same for the reference audio clips and <Audio k>.
+function placeRevisePictures(items, text, apply, kind = "image") {
   const ready = (l) => l.items.filter((i) => i.status === "ready");
   let target = null;
-  if (isComfy()) {
+  if (kind === "audio") {
+    target = placeReviseAudioTarget(ready);
+  } else if (isComfy()) {
     const f = comfyFields.find((x) => x.mediaKind === "image" && typeof x.addMedia === "function");
     if (f)
       target = {
@@ -10928,12 +11516,39 @@ function placeRevisePictures(items, text, apply) {
     map.set(k + 1, target.ids.length);
     added++;
   });
+  const word = kind === "audio" ? "Audio" : "Picture";
   return {
-    text: String(text || "").replace(/<Picture (\d+)>/g, (m, k) =>
-      map.has(+k) ? `<Picture ${map.get(+k)}>` : m,
+    text: String(text || "").replace(new RegExp(`<${word} (\\d+)>`, "g"), (m, k) =>
+      map.has(+k) ? `<${word} ${map.get(+k)}>` : m,
     ),
     added,
     left,
+  };
+}
+
+// Where a revise's audio clips go: the workflow's audio field in ComfyUI mode, else
+// the Reference audio list when the model and mode send it; null when nothing takes audio.
+function placeReviseAudioTarget(ready) {
+  if (isComfy()) {
+    const f = comfyFields.find((x) => x.mediaKind === "audio" && typeof x.addMedia === "function");
+    return f ?
+        {
+          ids: f.peekMedia().map((m) => m.id),
+          room: f.capacity,
+          add: (g) => f.addMedia({ id: g.id, url: g.localUrl, name: g.name }),
+        }
+      : null;
+  }
+  if (!usesRefMedia()) return null;
+  const n = () => ready(lists.audio).length;
+  return {
+    ids: ready(lists.audio).map((i) => i.localId || null),
+    room: Infinity,
+    add: (g) => {
+      const before = n();
+      lists.audio.addFromGallery(g);
+      return n() > before;
+    },
   };
 }
 
@@ -11150,6 +11765,7 @@ function swapHistoryMedia(el, src) {
 function renderHistory(entries) {
   renderProjectCredits();
   renderHistoryBulk();
+  renderHistTagChips();
   const anchor = captureHistoryAnchor();
   // Keep the thumbnails' media elements: a new <video> would load its file again
   // (a visible hitch on every delete or update). Moved into the new cards in this
@@ -11777,7 +12393,7 @@ async function applyEntry(entry) {
   if (input.duration > 0)
     document.getElementById("duration").value = input.duration;
   document.getElementById("generate_audio").checked =
-    input.generate_audio !== false;
+    (input.generate_audio ?? input.audio) !== false;
   document.getElementById("web_search").checked = !!input.web_search;
   document.getElementById("nsfw_checker").checked = !!input.nsfw_checker;
   document.getElementById("return_last_frame").checked =

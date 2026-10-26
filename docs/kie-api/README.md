@@ -1,4 +1,4 @@
-# kie.ai API reference (Seedance / Seedream / MiniMax H3 / Kling 4.0)
+# kie.ai API reference (Seedance / Seedream / MiniMax H3 / Kling 4.0 / Wan 3.0)
 
 Local copies of the kie.ai model API docs this tool talks to, so we don't have to
 re-check the web. One file per model family:
@@ -10,6 +10,7 @@ re-check the web. One file per model family:
   `minimax-h3/image-to-video`, `minimax-h3/reference-to-video`
 - [kling-4-0.md](kling-4-0.md) — `kling-4.0/reference-to-video`,
   `kling-4.0/keyframe-to-video`
+- [wan-3-0.md](wan-3-0.md) — `wan/3-0-video`, `wan/3-0-video-prime`
 
 Seedream (image) models are used by the tool too but aren't documented here yet.
 
@@ -19,6 +20,7 @@ Seedream (image) models are used by the tool too but aren't documented here yet.
 | --- | --- | --- |
 | Seedance 2.5 / 2.0 / Fast / Mini | Official OpenAPI specs under <https://docs.kie.ai/market/bytedance/> (retrieved 2026-10-01; re-checked 2026-10-22: 2.5 gained `draft` + the `seedance-2-5-draft` model, its prompt cap is 20,480; Mini is still listed and not deprecated) | High — full schemas with types/enums/defaults |
 | Kling 4.0 | Official OpenAPI specs under <https://docs.kie.ai/market/kling/> (`v4-reference-to-video`, `v4-keyframe-to-video`; retrieved 2026-10-22) | High — full schemas with types/enums/defaults |
+| Wan 3.0 / Prime | Official OpenAPI specs under <https://docs.kie.ai/market/wan/> (`3-0-video`, `3-0-video-prime`; retrieved 2026-10-26) | High — full schemas with types/enums/defaults |
 | MiniMax H3 | Official OpenAPI specs under <https://docs.kie.ai/market/minimax-h3/> (retrieved 2026-09-17; re-checked 2026-10-01, unchanged) | High — full schemas with types/enums/defaults |
 
 The index of every doc page is <https://docs.kie.ai/llms.txt>; append `.md` to a

@@ -1910,6 +1910,194 @@ img.zoomable {
   color: var(--error);
   border-color: var(--error);
 }
+/* ⓘ notes button: same box as ×, accent instead of red, lit when notes exist. */
+.lora-row .x.lora-info {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+.lora-row .x.lora-info:hover:not(:disabled),
+.lora-row .x.lora-info.has-info {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.modal-box.lora-info-box {
+  width: min(520px, 92vw);
+  max-height: 92vh;
+  overflow-y: auto;
+}
+/* Desktop: room to write — a wide box with tall text areas. */
+@media (min-width: 900px) {
+  .modal-box.lora-info-box {
+    width: min(960px, 90vw);
+  }
+  .lora-info-box #loraInfoTriggers {
+    min-height: 8rem;
+  }
+}
+.lora-info-box label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin-bottom: 0.7rem;
+}
+.lora-info-box input,
+.lora-info-box textarea {
+  width: 100%;
+  box-sizing: border-box;
+  font-weight: 400;
+}
+.lora-info-box textarea {
+  resize: vertical;
+  min-height: 4.5rem;
+}
+/* Opened from inside the LoRA browser, so it sits above it. */
+#loraInfoModal {
+  z-index: 101;
+}
+.lora-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.model-type-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+.modal-box.lora-browser-box {
+  width: min(560px, 94vw);
+  max-height: 92vh;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+@media (min-width: 900px) {
+  .modal-box.lora-browser-box {
+    width: min(960px, 90vw);
+  }
+}
+.lora-browser-box > p {
+  margin: 0;
+}
+.lora-browser-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  align-items: center;
+}
+.lora-browser-bar input[type="search"] {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+.lora-browser-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.lora-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.6rem 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+.lora-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.75rem;
+  align-items: center;
+  justify-content: space-between;
+}
+.lora-card-title {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: center;
+  min-width: 0;
+  word-break: break-word;
+}
+.lora-card-actions {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+.lora-card-actions button {
+  font-size: 0.8rem;
+  padding: 0.3rem 0.65rem;
+}
+.lora-card-file {
+  font-size: 0.75rem;
+  word-break: break-all;
+}
+.lora-card-desc {
+  font-size: 0.85rem;
+  white-space: pre-wrap;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.lora-card-triggers {
+  font-size: 0.8rem;
+  color: var(--accent);
+  word-break: break-word;
+}
+.lora-info-file {
+  margin: 0 0 0.8rem;
+  word-break: break-all;
+}
+/* URL | ↗ | model type: stacked on a phone, one row once there's room. */
+.lora-info-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0 0.5rem;
+}
+.lora-info-row .lora-info-url {
+  flex: 1 1 calc(100% - 3rem); /* fills the line, leaving room for ↗ beside it */
+  min-width: 0;
+}
+.lora-info-row .lora-info-type {
+  flex: 1 1 100%;
+  min-width: 0;
+}
+.lora-info-link {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.4rem;
+  height: 2.4rem;
+  margin-bottom: 0.7rem; /* line up with the inputs (labels carry this margin) */
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  color: var(--accent);
+  text-decoration: none;
+  font-size: 1.05rem;
+  box-sizing: border-box;
+}
+.lora-info-link:hover {
+  background: var(--accent);
+  color: #fff;
+}
+.lora-info-link[aria-disabled="true"] {
+  border-color: var(--border);
+  color: var(--muted);
+  opacity: 0.5;
+  pointer-events: none;
+}
+@media (min-width: 640px) {
+  .lora-info-row .lora-info-url,
+  .lora-info-row .lora-info-type {
+    flex: 1 1 0;
+  }
+}
 .lora-add {
   font-size: 0.85rem;
 }
@@ -2095,11 +2283,11 @@ img.zoomable {
   font-size: 0.8rem;
   gap: 0.3rem;
 }
-/* "Hide:" label preceding the tag-filter checkboxes. */
+/* "Filter:" label preceding the tag-filter chips. */
 .hist-toggle-label {
   font-size: 0.8rem;
   color: var(--muted);
-  margin-right: -0.5rem; /* pull the first checkbox closer than the 1rem flex gap */
+  margin-right: -0.5rem; /* pull the chips closer than the 1rem flex gap */
 }
 .hist-toggle select,
 .hist-toggle input[type="number"] {
@@ -3993,6 +4181,10 @@ textarea.wc-hl-on {
   position: relative; /* the cards' offsetTop, for keeping the active one in view */
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(124px, 1fr));
+  /* Full-height rows that scroll; Safari otherwise squeezes them into max-height,
+     cutting off each card's bar. */
+  grid-auto-rows: max-content;
+  align-content: start;
   gap: 0.4rem;
   max-height: 260px;
   overflow-y: auto;
@@ -4053,23 +4245,45 @@ textarea.wc-hl-on {
 .ve-clip-dur {
   right: 0.25rem;
 }
+/* Touch: the name on its own line and a row of finger-sized buttons under it. */
 .ve-clip-bar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 0.15rem;
   padding: 0.2rem 0.35rem;
 }
 .ve-clip-name {
-  flex: 1;
+  flex: 1 1 100%;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .ve-clip .link-btn {
-  flex: none;
-  padding: 0 0.1rem;
-  font-size: 0.75rem;
+  flex: 1;
+  min-height: 2rem;
+  padding: 0;
+  border-radius: 6px;
+  font-size: 0.9rem;
+}
+.ve-clip .link-btn:active:not(:disabled) {
+  background: var(--border);
+}
+/* A mouse can hit small targets: keep the bar to one line. */
+@media (hover: hover) and (pointer: fine) {
+  .ve-clip-bar {
+    flex-wrap: nowrap;
+  }
+  .ve-clip-name {
+    flex: 1;
+  }
+  .ve-clip .link-btn {
+    flex: none;
+    min-height: 0;
+    padding: 0 0.1rem;
+    font-size: 0.75rem;
+  }
 }
 .ve-clip .link-btn:disabled {
   opacity: 0.3;
@@ -5009,6 +5223,10 @@ textarea.hidden + .llm-qrev {
 }
 .llm-qrev-guide {
   max-width: 100%;
+  margin-left: 0.3rem;
+}
+.llm-qrev-len {
+  width: 4.5rem;
   margin-left: 0.3rem;
 }
 /* Its reference images: a slim drop zone with small thumbs. */

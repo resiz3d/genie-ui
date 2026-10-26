@@ -12,6 +12,25 @@ heading for that version with the date, commit, then tag the commit `vX.Y.Z`.
 
 ### Added
 
+- **LoRA info.** Each LoRA row has an ⓘ button (between the strength and ×) that opens
+  your notes on that LoRA file: display name, description, URL (with an open link) and
+  trigger phrases. Saved server-side in `settings/loras.json`, keyed by filename, so
+  every workflow and device shares them; the button lights up when a file has notes.
+- **Model types and a LoRA browser.** A **Model type** field under the Model picker
+  labels any model — ComfyUI workflow or API model — e.g. "MiniMax H3" (saved per model
+  in `settings/model-types.json`); a LoRA's ⓘ info takes the same label, suggested from
+  the types already in use. **📚 Browse LoRAs** in the LoRAs section lists the installed
+  LoRAs marked with the selected model's type by display name, with description and
+  triggers, and adds one to the loadout in a click (tick "All installed LoRAs" to see
+  every file).
+- **Global saved prompts.** Tick **🌐 Global** in the saved-prompt editor and the prompt
+  is listed in every project's Saved Prompts, after that project's own (marked
+  "from <project>"). It stays stored in its home project, so edits, deletes and History
+  links made from anywhere change the one prompt; only its home project reorders it.
+- **✨ Revise with AI: Length, and a blank box applies the guide.** The prompt box's
+  Revise panel has a **Length** (seconds) field the LLM paces the action to. With
+  nothing typed, ✨ Revise reworks the prompt to fit the selected guide and/or length,
+  keeping its content.
 - **Seedance 2.5 prompting.** A guide in [docs/SEEDANCE-PROMPTING.md](docs/SEEDANCE-PROMPTING.md)
   (from Runway's Seedance 2.5 prompt guide, using kie.ai's `@Image1` / `@Video1` /
   `@Audio1` names). **＋ Seedance template** on the prompt box inserts a blank prompt
@@ -92,6 +111,14 @@ heading for that version with the date, commit, then tag the commit `vX.Y.Z`.
     (from Kuaishou's Kling 4 user guide, using kie.ai's `@image_1` / `@first_frame`
     names). **＋ Kling template** on the prompt box inserts a blank prompt for the
     selected mode, and **✨ Revise with AI** has a **Kling 4.0 guide**.
+- **Wan 3.0 and Wan 3.0 Prime (kie.ai)** — two new entries in the model dropdown
+  (`wan/3-0-video`, and the faster, pricier `wan/3-0-video-prime`; same parameters).
+  The Image source toggle works as on Seedance 2.5: up to 10 reference images, 5
+  videos and 5 audio clips (each kind ≤ 15s total; mention them as `Image1`, `Video1`,
+  `Audio1`), or a first frame with an optional last frame and no references. 2–30s
+  (reference video + output ≤ 30s), 480p / 720p / 1080p, aspect ratio adaptive / 16:9
+  / 4:3 / 1:1 / 3:4 / 9:16, Generate audio and NSFW checker; no web search. API notes
+  in [docs/kie-api/wan-3-0.md](docs/kie-api/wan-3-0.md).
 - **Seedance 2.5 drafts.** A **Draft (480p preview)** checkbox sends `draft: true` — a
   cheap 480p preview (the resolution is pinned, Return last frame is off). A finished
   draft's History card gets **⇪ Finalize 1080p** for 7 days, which renders it at
@@ -115,6 +142,13 @@ heading for that version with the date, commit, then tag the commit `vX.Y.Z`.
   builds still use them.
 
 ### Changed
+
+- **History's Hide: checkboxes are now Filter: chips.** Click a chip to show only
+  those cards (**+**), again to show everything but them (**−**), again to clear it;
+  right-click goes straight to **−**. Besides Video, Image, Draft, Favorite and
+  Cancelled there's a chip for every workflow auto-tag on the project's cards.
+  Chips combine: every **+** tag must be on a card (Video and Image: either one),
+  no **−** tag may be. Your old hidden tags carry over as **−** chips.
 
 - **✨ Revise shows its model.** A line under the ✨ Revise button names the model and
   server it will use, and whether that's a local server or an API.

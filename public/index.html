@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>GENie</title>
-    <link rel="stylesheet" href="style.css" />
+    <link rel="stylesheet" href="style.css?v=2" />
   </head>
   <body>
     <div id="offline" class="offline-banner hidden">
@@ -64,8 +64,17 @@
               <option value="minimax-h3/reference-to-video">MiniMax H3 (reference-to-video)</option>
               <option value="kling-4.0/reference-to-video">Kling 4.0 (reference-to-video)</option>
               <option value="kling-4.0/keyframe-to-video">Kling 4.0 (keyframe-to-video)</option>
+              <option value="wan/3-0-video">Wan 3.0</option>
+              <option value="wan/3-0-video-prime">Wan 3.0 Prime (faster)</option>
             </optgroup>
           </select>
+        </label>
+        <!-- Your label for the selected model; LoRAs carry the same label so the LoRA
+             browser can offer only the ones made for it. Saved per model, server-side. -->
+        <label class="model-type-field">
+          <span>Model type <span class="hint" id="modelTypeStatus" aria-live="polite"></span></span>
+          <input type="text" id="modelType" maxlength="60" autocomplete="off"
+            placeholder="e.g. MiniMax H3 — pick one or type a new one" />
         </label>
 
         <!-- ComfyUI: controls generated from the selected workflow's {{tokens}} -->
@@ -279,12 +288,8 @@
           </div>
         </div>
         <div class="hist-head-toggles">
-          <span class="hist-toggle-label" id="histHideLabel">Hide:</span>
-          <label class="inline hist-toggle" title="Hide video results"><input type="checkbox" class="hist-hide-tag" value="video" /> Video</label>
-          <label class="inline hist-toggle" title="Hide image results"><input type="checkbox" class="hist-hide-tag" value="image" /> Image</label>
-          <label class="inline hist-toggle" title="Hide cards tagged draft"><input type="checkbox" class="hist-hide-tag" value="draft" /> Draft</label>
-          <label class="inline hist-toggle" title="Hide cards tagged favorite"><input type="checkbox" class="hist-hide-tag" value="favorite" /> Favorite</label>
-          <label class="inline hist-toggle" title="Hide cancelled / failed runs"><input type="checkbox" class="hist-hide-tag" value="cancelled" /> Cancelled</label>
+          <span class="hist-toggle-label">Filter:</span>
+          <span id="histTagChips" class="ve-lib-chips hist-tag-chips"></span>
           <label class="inline hist-toggle" title="Auto-tag a finished generation as draft when its output is at or below this many megapixels (0 = off)">
             Auto-draft ≤
             <input type="number" id="autoDraftMax" min="0" step="0.1" value="0" />
@@ -411,6 +416,62 @@
       </div>
     </div>
 
+    <!-- Opened from a LoRA row's ⓘ button; filled by openLoraInfo(). -->
+    <div id="loraInfoModal" class="modal hidden">
+      <div class="modal-box lora-info-box" role="dialog" aria-labelledby="loraInfoHeading">
+        <h3 id="loraInfoHeading">LoRA info</h3>
+        <p class="muted lora-info-file" id="loraInfoFile"></p>
+        <label>
+          Display name
+          <input type="text" id="loraInfoName" maxlength="200" autocomplete="off"
+            placeholder="A friendly name for this LoRA" />
+        </label>
+        <!-- URL | open link | model type, one row on a wide screen. -->
+        <div class="lora-info-row">
+          <label class="lora-info-url">
+            URL
+            <input type="text" inputmode="url" id="loraInfoUrl" maxlength="2000" autocomplete="off"
+              placeholder="https://civitai.com/models/…" />
+          </label>
+          <a id="loraInfoOpen" class="lora-info-link" target="_blank" rel="noopener noreferrer"
+            aria-disabled="true" title="Open the URL">↗</a>
+          <label class="lora-info-type">
+            Model type
+            <input type="text" id="loraInfoType" maxlength="60" autocomplete="off"
+              placeholder="e.g. MiniMax H3" />
+          </label>
+        </div>
+        <label>
+          Description
+          <textarea id="loraInfoDesc" rows="10" placeholder="What it does, recommended strength, notes…"></textarea>
+        </label>
+        <label>
+          Trigger phrases
+          <textarea id="loraInfoTriggers" rows="3" placeholder="One per line"></textarea>
+        </label>
+        <div class="modal-actions">
+          <button type="button" id="loraInfoCancel" class="btn-secondary">Cancel</button>
+          <button type="button" id="loraInfoSave">💾 Save</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Opened from the LoRAs section's Browse button; filled by openLoraBrowser(). -->
+    <div id="loraBrowserModal" class="modal hidden">
+      <div class="modal-box lora-browser-box" role="dialog" aria-labelledby="loraBrowserHeading">
+        <h3 id="loraBrowserHeading">Browse LoRAs</h3>
+        <p class="muted" id="loraBrowserScope"></p>
+        <div class="lora-browser-bar">
+          <input type="search" id="loraBrowserSearch" placeholder="Filter by name, description, trigger…" autocomplete="off" />
+          <label class="inline"><input type="checkbox" id="loraBrowserAll" /> All installed LoRAs</label>
+        </div>
+        <div class="lora-browser-list" id="loraBrowserList"></div>
+        <div class="modal-actions">
+          <button type="button" id="loraBrowserClose" class="btn-secondary">Done</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Opened from the Wildcards tab; filled by openWildcardEditor(). -->
     <div id="wildcardModal" class="modal hidden">
       <div class="modal-box wc-box" role="dialog" aria-labelledby="wcHeading">
@@ -474,6 +535,9 @@
             <input type="number" id="peWeight" step="1" placeholder="0" />
           </label>
         </div>
+        <label class="inline" title="List this prompt in every project, not just the one it's saved in. It stays stored here; edits change it everywhere.">
+          <input type="checkbox" id="peGlobal" /> 🌐 Global — show in every project
+        </label>
         <div class="pe-refs-head">Output <span class="hint">(the linked History card's result — the card's thumbnail)</span></div>
         <div class="pe-output" id="peOutput"></div>
         <!-- References live here for a Default prompt; a MiniMax prompt moves this block
