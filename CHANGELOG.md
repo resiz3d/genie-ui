@@ -31,6 +31,10 @@ heading for that version with the date, commit, then tag the commit `vX.Y.Z`.
   Revise panel has a **Length** (seconds) field the LLM paces the action to. With
   nothing typed, ✨ Revise reworks the prompt to fit the selected guide and/or length,
   keeping its content.
+- **Qwen Image 2.1 Edit prompting.** A guide in
+  [docs/QWEN-EDIT-PROMPTING.md](docs/QWEN-EDIT-PROMPTING.md) (from PixelDojo's Qwen
+  Image 2.1 prompting guide, using the workflow's `<image1>` names), and **✨ Revise
+  with AI** has a **Qwen Image 2.1 Edit guide**.
 - **Seedance 2.5 prompting.** A guide in [docs/SEEDANCE-PROMPTING.md](docs/SEEDANCE-PROMPTING.md)
   (from Runway's Seedance 2.5 prompt guide, using kie.ai's `@Image1` / `@Video1` /
   `@Audio1` names). **＋ Seedance template** on the prompt box inserts a blank prompt

@@ -142,7 +142,7 @@ export const PLAIN_REVISE_INSTRUCTIONS =
 const PLAIN_REVISE_REPLY =
   "Reply with ONLY the complete revised text: no preamble, no explanation, no quotes, no code fences, no markers around it.";
 // The guides a quick revise can follow (see guideFor in createLlm).
-export const PLAIN_REVISE_GUIDES = new Set(["", "default", "minimax", "minimax_t2v", "kling", "seedance"]);
+export const PLAIN_REVISE_GUIDES = new Set(["", "default", "minimax", "minimax_t2v", "kling", "seedance", "qwen_edit"]);
 
 export const BUILD_FORMATS = new Set(["default", "minimax", "minimax_t2v"]);
 
@@ -275,6 +275,22 @@ export const SEEDANCE_INSTRUCTIONS = [
   "Dialogue: plain labelled lines, e.g. Dialogue (Mara): \"…\" — and name the language when it isn't English or Chinese. Spell out the sound for each beat: effects, whether there is music, and how they sit together (effects under the voiceover).",
   "Describe what should be seen positively; broad negative exclusions cause mistakes. Use negatives only for subtitles and audio, e.g. \"No subtitles. No background music, environmental sounds only.\"",
   "Be concrete: say what makes a look (materials, light, colours, lens, film stock, depth of field) instead of words like cinematic or premium. Stay within 20,000 characters.",
+].join("\n\n");
+
+// Qwen Image 2.1 Edit (the default ComfyUI workflow) — a guide for ✨ Revise with AI
+// only; the prompt is plain text. Distilled from PixelDojo's Qwen Image 2.1 prompting
+// guide; see docs/QWEN-EDIT-PROMPTING.md.
+export const QWEN_EDIT_INSTRUCTIONS = [
+  "You write prompts for Qwen Image 2.1 Edit, an AI image model. With no images loaded it makes a picture from the text; with images loaded the prompt is an instruction about those images. It renders text inside the picture well.",
+  "With two or more images loaded, they are named <image1>, <image2> … in the order they are loaded: refer to them exactly that way — never image 1, @Image1, <Picture 1>, the first image or any other form — and don't invent names for images that aren't there. With one image, use no tag: call it the image. When the user attaches pictures to look at, describe what they show in words instead.",
+  "Give every loaded image one job and say what is taken from it: which one is the canvas whose composition survives, and which supply the subject, the product, the face, the setting or the style, e.g. \"the woman from <image1>\", \"the room in <image2>\". To keep a person's likeness, point at their image rather than describing their face in words.",
+  "An edit names the change first, then says plainly what must stay the same — the room, the lighting, the camera angle, the face, the label — e.g. \"Change her jacket to red leather. Keep her face, pose, the room, the lighting and the camera angle the same.\" For a major rewrite, describe the new picture in full rather than as a small edit.",
+  "Combining images: say what to take from which image and where it goes, e.g. \"Place the bottle from <image1> on the marble counter from <image2>\", then add the lighting and the backdrop. Keeping a person or product: say it is the same person or product from <imageN>, name the features to keep (face, hair, logo, label), and describe the new scene in full as if writing it from scratch. Restyling: \"Redraw <image1> in the style of <image2>.\"",
+  "Otherwise build the prompt in this order, each part only when it matters: (1) the piece — what is being made, in a few words (a concert poster, a product hero shot, an editorial portrait); (2) the subject, specific enough to picture; (3) the setting and the action; (4) the words — all text in the picture; (5) the finish — light, lens, palette, texture.",
+  "Text in the picture: put every word in double quotes and say where it goes (across the top, small at the bottom, on the label), keep lines short — capitals set most cleanly — and name a type style (bold condensed, classic serif, hand-lettered, clean sans serif). To change the words on a sign or product, quote the new words exactly.",
+  "Be concrete: one named light source and its quality (soft window light from the left, raking late-afternoon sun), a lens (85mm), depth of field, a palette, texture or grain, and materials (pale oak, linen, walnut, ceramic) instead of words like premium or cinematic. For scale, pair something huge with something tiny.",
+  "With a LoRA, write its trigger word where the subject goes and describe only the scene, not the features the LoRA already carries.",
+  "Write one detailed run of comma-separated specifics, or a few short sentences for an edit — not a list or headings. Describe what should be seen rather than what shouldn't.",
 ].join("\n\n");
 
 // Step 1 of a build — the shot list alone.
@@ -2131,6 +2147,7 @@ export function createLlm(deps) {
       : name === "minimax_t2v" ? MINIMAX_T2V_TEXT_GUIDE
       : name === "kling" ? KLING_INSTRUCTIONS
       : name === "seedance" ? SEEDANCE_INSTRUCTIONS
+      : name === "qwen_edit" ? QWEN_EDIT_INSTRUCTIONS
       : name === "default" ? readSettings().options.instructions || DEFAULT_INSTRUCTIONS
       : "";
     const cut = whole.indexOf("Reply with only");
@@ -2147,7 +2164,7 @@ export function createLlm(deps) {
       audioNames.length &&
         "REFERENCE AUDIO — the video model also receives audio clips, labelled <Audio 1>, <Audio 2> … You can't hear them: go by their file names and what the user says about them. Where the prompt's format refers to its references (a MiniMax prompt defines each one in subject_definitions, e.g. \"<Audio 1> is the voice reference for <ana> (S1)\"), refer to each clip by exactly its label, and don't invent labels for clips that aren't listed.",
       guide &&
-        "PROMPTING GUIDE — the text is a prompt for an AI video model; follow this guide where it bears on the changes. " +
+        `PROMPTING GUIDE — the text is a prompt for an AI ${job.guide === "qwen_edit" ? "image" : "video"} model; follow this guide where it bears on the changes. ` +
           "Where it describes the prompt as JSON fields, those are the text's labelled sections: keep the text's own layout and write plain text, not JSON.\n\n" +
           guide,
       job.rules && "RULES — the user's own rules. Follow every one of them:\n" + job.rules,

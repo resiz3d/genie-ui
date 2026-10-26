@@ -1651,6 +1651,7 @@
               <option value="minimax_t2v">MiniMax H3 Text2Video guide</option>
               <option value="kling">Kling 4.0 guide</option>
               <option value="seedance">Seedance 2.5 guide</option>
+              <option value="qwen_edit">Qwen Image 2.1 Edit guide</option>
             </select></label>
           <label class="inline" title="The clip's length, for the LLM to pace the action to. Blank: leave the pacing as it is.">Length
             <input type="number" class="llm-qrev-len" min="1" max="120" step="1" placeholder="—" /> s</label>
