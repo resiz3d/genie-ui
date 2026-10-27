@@ -4723,8 +4723,12 @@ function makeSearchableSelect(
     } else if (e.key === "Enter") {
       if (isOpen()) {
         e.preventDefault();
-        const o = matches[highlight] || matches[0];
+        // The top match only once you've typed a filter — Enter on a freshly opened
+        // (unfiltered) list keeps the current pick rather than taking the first entry.
+        const typed = input.value.trim() && input.value !== labelFor(current);
+        const o = matches[highlight] || (typed ? matches[0] : null);
         if (o) pick(o.value);
+        else close();
       }
     } else if (e.key === "Escape") {
       if (isOpen()) {
@@ -4956,6 +4960,30 @@ function renderScalarControl(token, type, container = comfyControlsEl) {
   }
   const readValue = () =>
     type === "number" || numericSelect ? Number(input.value) : input.value;
+  // A saved model pick ComfyUI doesn't list right now (file moved or renamed, or the
+  // list read mid-restart) is kept as-is and flagged, never swapped for the first
+  // installed entry — that swap would be saved and quietly break every later run.
+  const isListed = (v) =>
+    input.tagName === "SELECT" ?
+      [...input.options].some((o) => !o.dataset.missing && o.value === String(v))
+    : parsedOptions.some((o) => o.value === String(v));
+  let missingNote = null;
+  const flagMissing = () => {
+    const v = String(input.value ?? "");
+    const missing = token.combo && v !== "" && !isListed(v);
+    field.classList.toggle("value-missing", missing);
+    if (missing && !missingNote) {
+      missingNote = document.createElement("div");
+      missingNote.className = "field-missing-note";
+      field.appendChild(missingNote);
+    }
+    if (missingNote) {
+      missingNote.textContent =
+        missing ? "Not in ComfyUI's list — refresh, or pick another" : "";
+      missingNote.hidden = !missing;
+    }
+  };
+  if (type === "select" && token.combo) input.addEventListener("change", flagMissing);
   const resetTo = comfyResetValue(token, type, parsedOptions);
   const ctrl = {
     name: token.name,
@@ -4963,7 +4991,16 @@ function renderScalarControl(token, type, container = comfyControlsEl) {
     getValue: async () => readValue(),
     peek: readValue, // sync read, for saving last-used defaults
     set: (v) => {
+      if (type === "select" && token.combo && input.tagName === "SELECT") {
+        input.querySelector("option[data-missing]")?.remove();
+        if (v != null && v !== "" && !isListed(v)) {
+          const o = new Option(`⚠ ${v}`, String(v));
+          o.dataset.missing = "1";
+          input.prepend(o);
+        }
+      }
       input.value = v;
+      if (type === "select") flagMissing();
     },
     // Declared "; pin": must not drift between a run and its continuation, so the
     // form locks it while one is armed.
@@ -4979,6 +5016,7 @@ function renderScalarControl(token, type, container = comfyControlsEl) {
       resetTo === undefined ? null : (
         () => {
           input.value = type === "select" ? String(resetTo) : resetTo;
+          if (type === "select") flagMissing();
         }
       ),
     // True when Reset would blank a typed multi-line text (a prompt), so it asks first.

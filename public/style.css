@@ -573,6 +573,17 @@ img.zoomable {
   font-weight: 500;
 }
 
+/* A saved model pick ComfyUI doesn't currently list (kept, not swapped out). */
+.field.value-missing select,
+.field.value-missing .combo-search-input {
+  border-color: var(--warn, #ffcf7a);
+}
+.field-missing-note {
+  font-size: 0.75rem;
+  font-weight: 400;
+  color: var(--warn, #ffcf7a);
+}
+
 .field-head {
   display: flex;
   justify-content: space-between;
