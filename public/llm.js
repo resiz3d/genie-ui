@@ -1448,16 +1448,73 @@
   }
   const resultText = (res) => (res.minimax ? mmText(mergedMm(res.minimax)) : res.prompt || "");
 
-  // Word-level diff (LCS) → HTML with <ins>/<del>. Falls back to plain text when huge.
+  // Myers diff of two token lists → [type, token] ops ("=", "del", "ins"), or null when
+  // more than maxD edits apart. Cost grows with the edits, not the length, so long
+  // prompts revised a few times over still diff.
+  function diffOps(a, b, maxD) {
+    let s = 0;
+    while (s < a.length && s < b.length && a[s] === b[s]) s++;
+    let ea = a.length, eb = b.length;
+    while (ea > s && eb > s && a[ea - 1] === b[eb - 1]) ea--, eb--;
+    const A = a.slice(s, ea), B = b.slice(s, eb);
+    const n = A.length, m = B.length, max = n + m, off = max + 1;
+    const v = new Int32Array(2 * max + 3);
+    const trace = [];
+    let D = -1;
+    for (let d = 0; d <= Math.min(max, maxD) && D < 0; d++) {
+      trace.push(v.slice(off - d - 1, off + d + 2)); // k in [-d-1, d+1] at k + d + 1
+      for (let k = -d; k <= d; k += 2) {
+        let x = k === -d || (k !== d && v[off + k - 1] < v[off + k + 1]) ? v[off + k + 1] : v[off + k - 1] + 1;
+        let y = x - k;
+        while (x < n && y < m && A[x] === B[y]) x++, y++;
+        v[off + k] = x;
+        if (x >= n && y >= m) {
+          D = d;
+          break;
+        }
+      }
+    }
+    if (D < 0) return null;
+    const ops = [];
+    let x = n, y = m;
+    for (let d = D; d > 0; d--) {
+      const vs = trace[d], get = (k) => vs[k + d + 1];
+      const k = x - y;
+      const down = k === -d || (k !== d && get(k - 1) < get(k + 1));
+      const px = get(down ? k + 1 : k - 1), py = px - (down ? k + 1 : k - 1);
+      while (x > px && y > py) ops.push(["=", A[--x]]), y--;
+      if (down) ops.push(["ins", B[--y]]);
+      else ops.push(["del", A[--x]]);
+    }
+    while (x > 0) ops.push(["=", A[--x]]);
+    ops.reverse();
+    return [
+      ...a.slice(0, s).map((t) => ["=", t]),
+      ...ops,
+      ...a.slice(ea).map((t) => ["=", t]),
+    ];
+  }
+
+  // Word-level diff → HTML with <ins>/<del>. Too many edits for one pass (a long prompt
+  // reworked throughout): match lines first, then diff the words inside each changed stretch.
   function diffHtml(a, b) {
-    const ta = a.split(/(\s+)/), tb = b.split(/(\s+)/);
-    if (ta.length * tb.length > 6e6) return `<span>${h(b)}</span>`;
-    const n = ta.length, m = tb.length;
-    const L = Array.from({ length: n + 1 }, () => new Uint32Array(m + 1));
-    for (let i = n - 1; i >= 0; i--)
-      for (let j = m - 1; j >= 0; j--)
-        L[i][j] = ta[i] === tb[j] ? L[i + 1][j + 1] + 1 : Math.max(L[i + 1][j], L[i][j + 1]);
-    let i = 0, j = 0, html = "";
+    const words = (x, y) => diffOps(x.split(/(\s+)/), y.split(/(\s+)/), 2000);
+    let ops = words(a, b);
+    if (!ops) {
+      ops = [];
+      let del = "", ins = "";
+      const settle = () => {
+        if (del || ins) for (const op of words(del, ins) || [["del", del], ["ins", ins]]) ops.push(op);
+        del = ins = "";
+      };
+      for (const [t, s] of diffOps(a.split(/(\n)/), b.split(/(\n)/), Infinity)) {
+        if (t === "del") del += s;
+        else if (t === "ins") ins += s;
+        else settle(), ops.push([t, s]);
+      }
+      settle();
+    }
+    let html = "";
     const run = { t: null, s: "" };
     const flush = () => {
       if (!run.s) return;
@@ -1469,13 +1526,7 @@
       run.t = t;
       run.s += s;
     };
-    while (i < n && j < m) {
-      if (ta[i] === tb[j]) push("=", ta[i++]), j++;
-      else if (L[i + 1][j] >= L[i][j + 1]) push("del", ta[i++]);
-      else push("ins", tb[j++]);
-    }
-    while (i < n) push("del", ta[i++]);
-    while (j < m) push("ins", tb[j++]);
+    for (const [t, s] of ops) push(t, s);
     flush();
     return html;
   }
