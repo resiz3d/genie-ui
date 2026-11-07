@@ -381,7 +381,55 @@ export function recognizeWorkflow(workflow, nodeTypes) {
         // Where the value is written at submit — the traced editable location.
         targets: leaves.map((l) => ({ id: l.id, input: l.input, type: l.type })),
         via, // the nodes the value passes through on its way to this input
+        // On a node with a `swap` entry, these controls belong to its own class and
+        // are set aside when the swap's toggle switches it to the other loader.
+        swap: entry.swap?.class_type ? { node: String(nodeId), side: "base" } : undefined,
       });
+    }
+
+    // `swap`: an interchangeable loader class (UNETLoader ↔ UnetLoaderGGUF — same
+    // MODEL output, different file format). The section gets a toggle, plus the other
+    // class's own controls; at generate time a checked toggle rewrites the node's
+    // class_type and keeps only the swap's inputs (see applySwaps).
+    const sw = entry.swap;
+    if (sw?.class_type && controls.some((c) => c.swap?.node === String(nodeId))) {
+      const uniq = (base) => {
+        const count = usedNames.get(base) || 0;
+        usedNames.set(base, count + 1);
+        return count === 0 ? base : `${base}_${count + 1}`;
+      };
+      const t = sw.toggle || {};
+      controls.push({
+        name: uniq(t.name || "use_alternate_loader"),
+        label: t.label || `Use ${sw.class_type}`,
+        default: "false",
+        control: "toggle",
+        options: [],
+        width: "full",
+        order: Number.isFinite(t.order) ? t.order : null,
+        recommended: false,
+        group,
+        owner: null, // no node input of its own — nothing to enrich from /object_info
+        targets: [], // applyRecognizedValues writes nothing for it
+        swap: { node: String(nodeId), side: "toggle", to: sw.class_type, package: sw.package || null },
+      });
+      for (const [inputKey, spec] of Object.entries(sw.expose || {})) {
+        controls.push({
+          name: uniq(spec.name || inputKey),
+          label: spec.label || null,
+          default: "",
+          control: spec.control || null,
+          options: Array.isArray(spec.options) ? spec.options : [],
+          width: spec.width || null,
+          order: Number.isFinite(spec.order) ? spec.order : null,
+          recommended: spec.recommended,
+          group,
+          // /object_info describes this input under the *other* class (its file list).
+          owner: { id: String(nodeId), classType: sw.class_type, input: inputKey },
+          targets: [{ id: String(nodeId), input: inputKey, type: "string" }],
+          swap: { node: String(nodeId), side: "alt" },
+        });
+      }
     }
   }
 
@@ -605,6 +653,34 @@ function coerce(value, type) {
 // controls the caller actually supplied a value for are applied; the rest keep
 // the literals already in the JSON. Mirrors substituteWorkflow for the token
 // path, but patches typed node inputs directly instead of string placeholders.
+// Loader swaps (an entry's `swap`, e.g. Load Diffusion Model → Unet Loader GGUF).
+// Returns the controls whose values should be written: a node's own-class controls
+// when its toggle is off, the swap's controls when it's on. A switched node gets its
+// new class_type and only the swap's inputs (the GGUF loader has no weight_dtype).
+// Call before applyRecognizedValues, with its result in place of the controls.
+export function applySwaps(workflow, controls, values) {
+  const on = new Map(); // node id → class it switches to
+  for (const c of controls || []) {
+    if (c.swap?.side !== "toggle") continue;
+    const v = values && c.name in values ? values[c.name] : c.default;
+    if (coerce(v, "boolean")) on.set(c.swap.node, c.swap.to);
+  }
+  for (const [id, to] of on) {
+    const node = workflow[id];
+    if (!node) continue;
+    const keep = new Set(
+      (controls || []).filter((c) => c.swap?.node === id && c.swap.side === "alt").map((c) => c.owner.input),
+    );
+    node.class_type = to;
+    node.inputs = Object.fromEntries(Object.entries(node.inputs || {}).filter(([k]) => keep.has(k)));
+  }
+  const kept = (controls || []).filter((c) => {
+    if (!c.swap || c.swap.side === "toggle") return true;
+    return (c.swap.side === "alt") === on.has(c.swap.node);
+  });
+  return { controls: kept, swapped: on };
+}
+
 export function applyRecognizedValues(workflow, controls, values) {
   if (!controls?.length || !values) return workflow;
   for (const ctrl of controls) {

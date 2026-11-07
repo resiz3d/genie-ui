@@ -9,6 +9,7 @@ import {
   loadNodeTypes,
   recognizeWorkflow,
   applyRecognizedValues,
+  applySwaps,
   applyReferenceCollections,
   progressPasses,
 } from "./comfy-recognize.js";
@@ -777,6 +778,7 @@ function controlModel(workflow, text) {
       multiline: c.multiline || undefined,
       recommended: c.recommended,
       group: c.group || null,
+      swap: c.swap || undefined, // loader swap: base / alt control, or its toggle
       recognized: true,
     });
     if (!nodeMap.has(c.name) && c.owner) {
@@ -1045,9 +1047,20 @@ app.get("/api/comfy/workflow-meta", async (req, res) => {
       },
     });
   }
-  const enriched = withKeys.map((t) =>
-    enrichToken(t, nodeMap, objectInfo, workflow),
-  );
+  // Loader swaps (Load Diffusion Model ↔ Unet Loader GGUF) need the other class
+  // installed in ComfyUI. When it isn't, the toggle is shown disabled with the custom
+  // node to install, and the swap's own pickers (which would be empty) are left out.
+  const missingSwap = new Set();
+  for (const t of withKeys)
+    if (t.swap?.side === "toggle" && !objectInfo?.[t.swap.to])
+      missingSwap.add(t.swap.node);
+  const enriched = withKeys
+    .filter((t) => !(t.swap?.side === "alt" && missingSwap.has(t.swap.node)))
+    .map((t) =>
+      t.swap?.side === "toggle" ?
+        { ...t, swap: { ...t.swap, available: !missingSwap.has(t.swap.node) } }
+      : enrichToken(t, nodeMap, objectInfo, workflow),
+    );
   res.json({
     code: 200,
     msg: "success",
@@ -2442,7 +2455,35 @@ app.post("/api/comfy/generate", async (req, res) => {
     // applyRecognizedValues below, never by substitution. A raw export with no
     // continuation tokens leaves this an inert deep-clone.
     workflow = substituteWorkflow(workflow, continuationValues || {});
-    applyRecognizedValues(workflow, recognizedControls, runValues); // patch recognized node inputs
+    // Loader swaps first: a switched node takes its new class, and only the controls
+    // for the class it ends up as get written.
+    const { controls: activeControls, swapped } = applySwaps(
+      workflow,
+      recognizedControls,
+      runValues,
+    );
+    if (swapped.size) {
+      let info = null;
+      try {
+        info = await getObjectInfo();
+      } catch {
+        /* ComfyUI unreachable — queueing will report that itself */
+      }
+      for (const to of new Set(swapped.values())) {
+        if (info && !info[to]) {
+          const pkg = recognizedControls.find(
+            (c) => c.swap?.side === "toggle" && c.swap.to === to,
+          )?.swap.package;
+          throw new Error(
+            `${to} isn't installed in ComfyUI${pkg ? ` — install the ${pkg} custom node` : ""}, or turn the GGUF toggle off.`,
+          );
+        }
+      }
+      for (const c of activeControls)
+        if (c.swap?.side === "alt" && !String(runValues[c.name] ?? "").trim())
+          throw new Error(`Pick a ${c.label || c.name} — none is selected.`);
+    }
+    applyRecognizedValues(workflow, activeControls, runValues); // patch recognized node inputs
     applyReferenceCollections(workflow, recognizedRefs, providedRefs); // inject dynamic ref media loaders
     tailResult = await applyTails(workflow, tokenNodes, tails); // trim references to their last N seconds
     const bypassIds = (Array.isArray(bypass) ? bypass : []).map(String);

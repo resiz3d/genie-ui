@@ -3,6 +3,14 @@
   "nodes": {
     "UNETLoader": {
       "display_name": "Load Diffusion Model",
+      "swap": {
+        "class_type": "UnetLoaderGGUF",
+        "package": "ComfyUI-GGUF",
+        "toggle": { "name": "use_gguf", "label": "Use GGUF loader (Unet Loader GGUF)", "order": 29 },
+        "expose": {
+          "unet_name": { "name": "gguf_unet_name", "label": "GGUF model", "control": "combo", "width": "full", "order": 30 }
+        }
+      },
       "recognize": {
         "variants": [
           {
@@ -12,6 +20,21 @@
             "expose": {
               "unet_name":    { "name": "unet_name",    "label": "Diffusion model", "control": "combo", "width": "full", "order": 30 },
               "weight_dtype": { "name": "weight_dtype", "label": "Weight dtype",    "control": "combo", "width": "1/2",  "order": 31 }
+            }
+          }
+        ]
+      }
+    },
+    "UnetLoaderGGUF": {
+      "display_name": "Unet Loader (GGUF)",
+      "recognize": {
+        "variants": [
+          {
+            "match": [{ "when": "any" }],
+            "group": "Diffusion Model",
+            "collapsed": true,
+            "expose": {
+              "unet_name": { "name": "unet_name", "label": "GGUF model", "control": "combo", "width": "full", "order": 30 }
             }
           }
         ]

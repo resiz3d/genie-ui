@@ -3758,7 +3758,27 @@ async function renderComfyControls() {
     (meta.bypassable || []).length ?
       makeComfyBypassControl(meta.bypassable)
     : null;
+  // Loader swaps (Load Diffusion Model ↔ Unet Loader GGUF): each side's controls get
+  // their own slot in the section, and the section's toggle shows one or the other.
+  const swapSlots = new Map(); // `${node}:${side}` → slot element
   const mainContainer = (token) => {
+    const side = token.swap?.side;
+    if (side === "base" || side === "alt") {
+      const k = `${token.swap.node}:${side}`;
+      let slot = swapSlots.get(k);
+      if (!slot) {
+        slot = document.createElement("div");
+        slot.className = "comfy-swap-slot comfy-grid";
+        slot.style.gridColumn = "span 12";
+        slot.classList.toggle("hidden", side === "alt"); // the workflow's own loader until the toggle says otherwise
+        mainContainerOf(token).appendChild(slot);
+        swapSlots.set(k, slot);
+      }
+      return slot;
+    }
+    return mainContainerOf(token);
+  };
+  const mainContainerOf = (token) => {
     if (!grouped || !token.group) return comfyControlsEl;
     let body = groupBodies.get(token.group.key);
     if (!body) {
@@ -3846,6 +3866,33 @@ async function renderComfyControls() {
       // numbers, text, inline-option selects, and non-file object_info combos (sampler)
       renderScalarControl(it.token, it.type, mainContainer(it.token));
     }
+  }
+  // Wire each loader-swap toggle to the two slots it chooses between. When ComfyUI
+  // doesn't have the other loader installed, the toggle stays off and disabled, and
+  // says which custom node would add it.
+  for (const t of tokens) {
+    if (t.swap?.side !== "toggle") continue;
+    const ctrl = comfyFields.find((f) => f.name === t.name);
+    if (!ctrl?.input) continue;
+    const base = swapSlots.get(`${t.swap.node}:base`);
+    const alt = swapSlots.get(`${t.swap.node}:alt`);
+    const missing = t.swap.available === false;
+    if (missing) {
+      ctrl.input.disabled = true;
+      const note = document.createElement("div");
+      note.className = "field-missing-note";
+      note.textContent =
+        `Not installed in ComfyUI` +
+        (t.swap.package ? ` — add the ${t.swap.package} custom node to use it` : "");
+      ctrl.el.appendChild(note);
+    }
+    ctrl.onChange = () => {
+      if (missing) ctrl.input.checked = false;
+      const on = ctrl.input.checked;
+      base?.classList.toggle("hidden", on);
+      alt?.classList.toggle("hidden", !on);
+    };
+    ctrl.onChange();
   }
   // A section with nothing to reset (only media, or numbers with no known default)
   // keeps a plain header.
@@ -4846,10 +4893,14 @@ function renderScalarControl(token, type, container = comfyControlsEl) {
     const resetTo = comfyResetValue(token, type, []);
     const toggleCtrl = {
       name: token.name,
+      el: field,
+      input,
+      onChange: null, // set by whoever needs to follow it (a loader swap's sections)
       getValue: async () => input.checked,
       peek: () => input.checked,
       set: (v) => {
         input.checked = asBool(v);
+        toggleCtrl.onChange?.();
       },
       pin: !!token.pin,
       lock: (on) => {
@@ -4862,9 +4913,11 @@ function renderScalarControl(token, type, container = comfyControlsEl) {
         resetTo === undefined ? null : (
           () => {
             input.checked = asBool(resetTo);
+            toggleCtrl.onChange?.();
           }
         ),
     };
+    input.addEventListener("change", () => toggleCtrl.onChange?.());
     comfyFields.push(toggleCtrl);
     return;
   }
