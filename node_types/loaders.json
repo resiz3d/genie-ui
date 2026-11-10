@@ -56,10 +56,10 @@
           },
           {
             "match": [{ "when": "any" }],
-            "group": "CLIP",
+            "group": "Text Encoder",
             "collapsed": true,
             "expose": {
-              "clip_name": { "name": "clip_name", "label": "CLIP model", "control": "combo", "width": "full", "order": 40 },
+              "clip_name": { "name": "clip_name", "label": "Text encoder", "control": "combo", "width": "full", "order": 40 },
               "type":      { "name": "clip_type", "label": "Type",       "control": "combo", "width": "1/2",  "order": 41 },
               "device":    { "name": "clip_device", "label": "Device",   "control": "combo", "width": "1/2",  "order": 42 }
             }

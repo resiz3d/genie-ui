@@ -2149,6 +2149,49 @@ let comfyWsConnecting = false;
 let comfyCurrentPrompt = null;
 const comfyProgress = new Map(); // promptId -> { value, max, updatedAt }
 
+// When ComfyUI actually began executing each prompt (epoch ms) — distinct from the
+// History entry's createdAt, which is when it was submitted and may have sat in the
+// queue behind earlier runs. Kept here for live polls and written onto the pending
+// History entry as `execStartedAt`. `exact` marks ComfyUI's own timestamp; a guess
+// (first seen running after a server restart) is replaced by the exact one later.
+const comfyExecStart = new Map(); // promptId -> { at, exact }
+function recordComfyExecStart(promptId, at, exact = true) {
+  if (!promptId || !Number.isFinite(at)) return;
+  const prev = comfyExecStart.get(promptId);
+  if (prev && (prev.exact || !exact)) return;
+  if (comfyExecStart.size > 500) comfyExecStart.clear(); // bounded; history keeps the value
+  comfyExecStart.set(promptId, { at, exact });
+  try {
+    const entries = readJson(HISTORY_FILE);
+    const entry = entries.find((e) => e.taskId === promptId);
+    if (!entry || entry.status !== "pending") return;
+    if (entry.execStartedAt && !(exact && !entry.execStartedAtExact)) return;
+    entry.execStartedAt = at;
+    if (exact) delete entry.execStartedAtExact;
+    else entry.execStartedAtExact = false;
+    writeJson(HISTORY_FILE, entries);
+  } catch {
+    /* unreadable history — the in-memory value still drives live polls */
+  }
+}
+function comfyExecStartFor(promptId) {
+  const known = comfyExecStart.get(promptId);
+  if (known) return known.at;
+  try {
+    const e = readJson(HISTORY_FILE).find((x) => x.taskId === promptId);
+    if (Number.isFinite(e?.execStartedAt)) {
+      comfyExecStart.set(promptId, {
+        at: e.execStartedAt,
+        exact: e.execStartedAtExact !== false,
+      });
+      return e.execStartedAt;
+    }
+  } catch {
+    /* unreadable history */
+  }
+  return null;
+}
+
 // Latent preview frames. ComfyUI's binary frame is [4B big-endian event type]
 // [4B big-endian image type][image bytes] and names no prompt — but the JSON
 // `progress` message naming one is broadcast immediately before it, and ComfyUI
@@ -2306,6 +2349,13 @@ function ensureComfyWs() {
     llm.onComfyEvent(type); // a run started elsewhere takes the GPU back from the LLM
     if (type === "execution_start" || type === "executing") {
       if (data?.prompt_id) comfyCurrentPrompt = data.prompt_id;
+      if (type === "execution_start" && data?.prompt_id) {
+        const ts = Number(data.timestamp);
+        recordComfyExecStart(
+          data.prompt_id,
+          Number.isFinite(ts) && ts > 0 ? ts : Date.now(),
+        );
+      }
     } else if (type === "VHS_latentpreview") {
       // Names no prompt, like the frames that follow it.
       if (comfyCurrentPrompt) beginPreviewAnim(comfyCurrentPrompt, data);
@@ -2751,13 +2801,29 @@ function comfyExecRuntime(entry) {
   return start != null && end != null && end >= start ? end - start : null;
 }
 
-// Is a prompt still queued/running on ComfyUI? true/false, or null if unknown
-// (ComfyUI unreachable).
-async function comfyPromptQueued(promptId) {
+// When ComfyUI began executing a finished prompt (epoch ms), from the same
+// `status.messages` timestamps, or null.
+function comfyExecStartTs(entry) {
+  const messages = entry?.status?.messages;
+  if (!Array.isArray(messages)) return null;
+  let start = null;
+  for (const [type, data] of messages.map((m) => m || [])) {
+    const ts = Number(data?.timestamp);
+    if (type === "execution_start" && Number.isFinite(ts))
+      start = start == null ? ts : Math.min(start, ts);
+  }
+  return start;
+}
+
+// Where a prompt is on ComfyUI: "running", "pending" (waiting behind others), false
+// (in neither list), or null if unknown (ComfyUI unreachable).
+async function comfyPromptQueueState(promptId) {
   try {
     const q = await fetch(`${COMFYUI_URL}/queue`).then((r) => r.json());
     const inList = (list) => (list || []).some((it) => it[1] === promptId);
-    return inList(q.queue_running) || inList(q.queue_pending);
+    if (inList(q.queue_running)) return "running";
+    if (inList(q.queue_pending)) return "pending";
+    return false;
   } catch {
     return null;
   }
@@ -2785,12 +2851,29 @@ app.get("/api/comfy/status", async (req, res) => {
       // Not in history. Still queued/running → keep waiting; otherwise ComfyUI has
       // no record of it (usually it was restarted) → "lost", so the UI can stop
       // polling forever instead of spinning on "Generating…".
-      const queued = await comfyPromptQueued(promptId);
-      const state = queued === false ? "lost" : "waiting";
+      const where = await comfyPromptQueueState(promptId);
+      const state = where === false ? "lost" : "waiting";
       if (state === "lost") comfyProgress.delete(promptId);
-      return res.json({ code: 200, msg: "success", data: { state, progress } });
+      // Running but its execution_start went unheard (server restarted mid-run, or
+      // the socket was down): stamp it now as a best guess until the exact time is
+      // read from ComfyUI's history when it finishes.
+      if (where === "running" && comfyExecStartFor(promptId) == null)
+        recordComfyExecStart(promptId, Date.now(), false);
+      return res.json({
+        code: 200,
+        msg: "success",
+        data: {
+          state,
+          progress,
+          queued: where === "pending",
+          execStartedAt: comfyExecStartFor(promptId),
+        },
+      });
     }
 
+    // ComfyUI's own start stamp — written to the pending entry before the client
+    // posts the result, so the finished (or failed) card keeps it.
+    recordComfyExecStart(promptId, comfyExecStartTs(entry));
     if (entry.status?.status_str === "error") {
       comfyProgress.delete(promptId);
       return res.json({
@@ -2805,7 +2888,11 @@ app.get("/api/comfy/status", async (req, res) => {
       return res.json({
         code: 200,
         msg: "success",
-        data: { state: "waiting", progress },
+        data: {
+          state: "waiting",
+          progress,
+          execStartedAt: comfyExecStartFor(promptId),
+        },
       });
     res.json({
       code: 200,
@@ -2898,7 +2985,7 @@ let comfyWatchBusy = false;
 // history so it no-ops if the browser already finished the same entry.
 async function finalizePendingComfy(
   id,
-  { resultUrls, resultUrl, fail, runtimeMs, enhancedPrompt },
+  { resultUrls, resultUrl, fail, runtimeMs, enhancedPrompt, execStartedAt },
 ) {
   const entries = readJson(HISTORY_FILE);
   const entry = entries.find((e) => e.id === id);
@@ -2912,6 +2999,10 @@ async function finalizePendingComfy(
     entry.status = "done";
     applyAutoTags(entry);
     if (typeof enhancedPrompt === "string") entry.enhancedPrompt = enhancedPrompt;
+    if (Number.isFinite(execStartedAt)) {
+      entry.execStartedAt = execStartedAt;
+      delete entry.execStartedAtExact;
+    }
     // Prefer ComfyUI's own per-prompt execution time; fall back to since-created only
     // when it's unavailable (older ComfyUI / missing timestamps).
     entry.runtimeMs =
@@ -2965,6 +3056,7 @@ async function sweepPendingComfy() {
               resultUrls: urls,
               runtimeMs: comfyExecRuntime(h),
               enhancedPrompt: comfyEnhancedPrompt(h, entry),
+              execStartedAt: comfyExecStartTs(h),
             });
           // in history but no outputs yet → still running; leave pending
         }
@@ -5432,15 +5524,9 @@ app.post("/api/history/:id/tags", (req, res) => {
 });
 
 // --- delete a history entry (and its saved output file) -------------------
-app.delete("/api/history/:id", (req, res) => {
-  const entries = readJson(HISTORY_FILE);
-  const idx = entries.findIndex((e) => e.id === req.params.id);
-  if (idx < 0)
-    return res.status(404).json({ code: 404, msg: "history entry not found" });
-
-  const entry = entries[idx];
-  // Best-effort removal of the saved output files — every one of a batch or of the
-  // video editor's additions (input gallery media is shared, so it's left alone).
+// Best-effort removal of an entry's saved output files — every one of a batch or of
+// the video editor's additions (input gallery media is shared, so it's left alone).
+function deleteHistoryFiles(entry) {
   const files = new Set(
     [entry.localVideo, ...(entry.outputs || []).map((o) => o.localVideo)].filter((u) =>
       u?.startsWith("/output/"),
@@ -5454,9 +5540,35 @@ app.delete("/api/history/:id", (req, res) => {
         console.error("Failed to delete output file:", err.message);
     }
   }
+}
+
+app.delete("/api/history/:id", (req, res) => {
+  const entries = readJson(HISTORY_FILE);
+  const idx = entries.findIndex((e) => e.id === req.params.id);
+  if (idx < 0)
+    return res.status(404).json({ code: 404, msg: "history entry not found" });
+
+  deleteHistoryFiles(entries[idx]);
   entries.splice(idx, 1);
   writeJson(HISTORY_FILE, entries);
   res.json({ code: 200, msg: "deleted" });
+});
+
+// Delete many at once (History's ☑ Select bar): one write, however many are picked.
+app.post("/api/history/delete", (req, res) => {
+  const { ids } = req.body || {};
+  if (!Array.isArray(ids) || !ids.length)
+    return res.status(400).json({ code: 400, msg: "ids is required" });
+  const want = new Set(ids.map(String));
+  const entries = readJson(HISTORY_FILE);
+  const keep = entries.filter((e) => !want.has(e.id));
+  for (const entry of entries) if (want.has(entry.id)) deleteHistoryFiles(entry);
+  writeJson(HISTORY_FILE, keep);
+  res.json({
+    code: 200,
+    msg: "deleted",
+    data: { deleted: entries.length - keep.length },
+  });
 });
 
 // extension → mime for adding a generated output into the gallery
@@ -5555,6 +5667,7 @@ const llm = createLlm({
   kieApiKey: API_KEY,
   builderFile: (proj) =>
     path.join(PROJECT_DATA_DIR, proj.slug, "llm-builder.json"),
+  chatsDir: path.join(path.dirname(APP_SETTINGS_FILE), "chats"),
 });
 
 const llmFail = (res, err, code = 400) =>
@@ -5659,6 +5772,52 @@ app.post("/api/llm/build", (req, res) => {
   } catch (err) {
     llmFail(res, err);
   }
+});
+
+// 💬 Chat with the LLM chosen in ⚙ LLM settings. Chats live on the server (so every
+// device sees them); POST …/send adds the message and starts the reply, which is
+// polled like any job (GET /api/llm/jobs/:id → data.partial while it streams).
+app.get("/api/llm/chats", (req, res) => {
+  res.json({ code: 200, msg: "success", data: llm.listChats() });
+});
+app.post("/api/llm/chats/send", (req, res) => {
+  try {
+    res.json({ code: 200, msg: "queued", data: llm.sendChat(req.body || {}) });
+  } catch (err) {
+    llmFail(res, err);
+  }
+});
+app.get("/api/llm/chats/:id", (req, res) => {
+  try {
+    res.json({ code: 200, msg: "success", data: llm.getChat(req.params.id) });
+  } catch (err) {
+    llmFail(res, err, 404);
+  }
+});
+app.put("/api/llm/chats/:id", (req, res) => {
+  try {
+    res.json({ code: 200, msg: "saved", data: llm.updateChat(req.params.id, req.body || {}) });
+  } catch (err) {
+    llmFail(res, err);
+  }
+});
+app.delete("/api/llm/chats/:id", (req, res) => {
+  try {
+    llm.deleteChat(req.params.id);
+    res.json({ code: 200, msg: "deleted" });
+  } catch (err) {
+    llmFail(res, err, 404);
+  }
+});
+app.get("/api/llm/chats/:id/media/:file", (req, res) => {
+  let file = null;
+  try {
+    file = llm.chatMediaFile(req.params.id, req.params.file);
+  } catch {
+    /* unknown chat */
+  }
+  if (!file) return res.status(404).end();
+  res.sendFile(file, { maxAge: "30d", immutable: true });
 });
 
 app.get("/api/llm/jobs/:id", (req, res) => {

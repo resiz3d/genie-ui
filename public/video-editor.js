@@ -77,6 +77,7 @@
           <button type="button" class="link-btn ve-fclear hidden">Clear</button>
           <span class="ve-frames-actions">
             <button type="button" class="btn-secondary ve-fdownload" disabled title="Download the picked frames as PNG files">⬇ Download</button>
+            <button type="button" class="btn-secondary ve-fsaveas" disabled title="Choose where on this device to save the picked frames as PNG files">💾 Save as…</button>
             <button type="button" class="btn-secondary ve-fsave" disabled title="Save the picked frames to the project's gallery as images">Save to gallery</button>
           </span>
         </div>
@@ -179,7 +180,7 @@
     "name", "drop", "file", "editor", "clips", "prepend", "append", "work", "scrub",
     "track", "pos", "result", "play", "start", "end", "in", "out", "cut", "count",
     "restore", "cuts", "mix", "size", "fit", "msg", "err", "reset", "cancel", "save",
-    "saveas", "import", "pick", "lastframe", "fcount", "fclear", "fdownload", "fsave",
+    "saveas", "import", "pick", "lastframe", "fcount", "fclear", "fdownload", "fsaveas", "fsave",
     "fstrip", "target", "overwrite", "thint", "proj", "popen", "psave", "exports", "split",
     "fx", "plugin-actions",
   ])
@@ -1213,6 +1214,7 @@
       !c ? "No frames picked." : `${plural(c, "frame")} picked${c - todo ? ` · ${c - todo} saved` : ""}`;
     el.fclear.classList.toggle("hidden", !c);
     el.fdownload.disabled = !c;
+    el.fsaveas.disabled = !c;
     if (!savingFrames) {
       el.fsave.disabled = !todo;
       el.fsave.textContent =
@@ -1294,6 +1296,69 @@
       a.remove();
       setTimeout(() => URL.revokeObjectURL(a.href), 10000);
       await sleep(250); // browsers drop rapid-fire downloads
+    }
+  }
+
+  // Ask where to save first, while the click still counts as a user gesture: a file
+  // dialog for one frame, a folder for several. Only Chromium offers these, and only to
+  // localhost / https pages; elsewhere (phones, Firefox) the frames go through the
+  // browser's normal downloads instead.
+  async function saveFramesAs() {
+    const list = [...picks];
+    if (!list.length) return;
+    showErr("");
+    const one = list.length === 1;
+    if (one ? !window.showSaveFilePicker : !window.showDirectoryPicker) {
+      await downloadFrames();
+      return showStatus(
+        `Sent ${one ? frameFile(list[0]) : plural(list.length, "frame")} to this browser's downloads.`,
+      );
+    }
+    let fileHandle = null;
+    let dir = null;
+    try {
+      if (one)
+        fileHandle = await window.showSaveFilePicker({
+          suggestedName: frameFile(list[0]),
+          types: [{ description: "PNG image", accept: { "image/png": [".png"] } }],
+        });
+      else dir = await window.showDirectoryPicker({ id: "genie-frames", mode: "readwrite" });
+    } catch (err) {
+      if (err.name === "AbortError") return; // they closed the dialog
+      showErr(`Couldn't open the save dialog (${err.message || err}) — downloading instead.`);
+      return downloadFrames();
+    }
+    const write = async (handle, blob) => {
+      const w = await handle.createWritable();
+      await w.write(blob);
+      await w.close();
+    };
+    try {
+      if (fileHandle) {
+        await write(fileHandle, list[0].blob);
+        return showStatus(`Saved as ${fileHandle.name}.`);
+      }
+      // Never overwrite a file already in the folder: add -2, -3… to the name.
+      const free = async (name) => {
+        const [stem, ext] = [name.replace(/\.png$/, ""), ".png"];
+        for (let i = 1; ; i++) {
+          const n = i === 1 ? name : `${stem}-${i}${ext}`;
+          try {
+            await dir.getFileHandle(n);
+          } catch {
+            return n; // NotFoundError: the name is free
+          }
+        }
+      };
+      for (let i = 0; i < list.length; i++) {
+        showStatus(`Saving ${i + 1} of ${list.length}…`);
+        const name = await free(frameFile(list[i]));
+        await write(await dir.getFileHandle(name, { create: true }), list[i].blob);
+      }
+      showStatus(`Saved ${plural(list.length, "frame")} to the ${dir.name} folder.`);
+    } catch (err) {
+      showStatus("");
+      showErr(`Saving failed: ${err.message || err}`);
     }
   }
 
@@ -1966,6 +2031,7 @@
   el.lastframe.addEventListener("click", () => pickFrame(true));
   el.fsave.addEventListener("click", saveFrames);
   el.fdownload.addEventListener("click", downloadFrames);
+  el.fsaveas.addEventListener("click", saveFramesAs);
   el.fclear.addEventListener("click", () => {
     if (picks.length && confirm("Unpick all frames?")) {
       picks = [];

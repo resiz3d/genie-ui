@@ -436,6 +436,7 @@ const MAX_SHOTS = 60; // in one shot list
 const MAX_RULES = 12000;
 const MAX_RECENT = 20;
 const JOB_KEEP = 30; // finished jobs remembered (in memory) for the UI
+const ACTIVE_STATES = new Set(["queued", "waiting", "loading", "generating"]);
 
 export function createLlm(deps) {
   const {
@@ -451,6 +452,7 @@ export function createLlm(deps) {
     withRefDetails,
     gpuMemory, // async () => { freeMiB, totalMiB } | null
     builderFile = null, // (project) => path of its projects/<slug>/llm-builder.json
+    chatsDir = null, // where 💬 chats are kept (one JSON file each, plus their pictures)
     ensureComfyWs = () => {},
     spawn = spawnProcess, // (file, args, options) => ChildProcess — the tests' way in
     llamaStartMs = 10 * 60 * 1000, // how long a llama-server may take to load its model
@@ -1274,7 +1276,10 @@ export function createLlm(deps) {
   function listJobs() {
     return [...jobs.values()]
       .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))
-      .map(publicJob);
+      .map((j) => {
+        const { partial, ...rest } = publicJob(j); // a chat's reply so far: only from its own job
+        return rest;
+      });
   }
 
   function status() {
@@ -1729,6 +1734,338 @@ export function createLlm(deps) {
     });
   }
 
+  // ------------------------------------------------------------- 💬 chat
+  // A back-and-forth conversation with the LLM chosen in ⚙ LLM settings. Each chat
+  // is a file on the server (chats/<id>.json) so the phone and the desktop see the
+  // same conversations; attached pictures (scaled down in the browser, and a video's
+  // frames) are files beside it (chats/media/<id>/). A reply runs as a "chat" job
+  // through the same queue and GPU turn-taking as a build; its text builds up on the
+  // job (job.partial) while it streams and is added to the chat when it's done.
+  const CHAT_ID = /^[a-f0-9-]{36}$/;
+  const CHAT_FILE_NAME = /^[a-f0-9-]{36}\.(jpg|png|webp)$/;
+  const CHAT_MAX_IMAGES = MAX_IMAGES; // pictures sent per reply: the most recent ones
+  const CHAT_MAX_TEXT = 200000; // an attached text file's characters
+  const CHAT_DEFAULT_SYSTEM =
+    "You are a helpful assistant inside GENie, an app for making AI images and videos. " +
+    "Answer clearly and directly. When the user attaches pictures or video frames, look at them closely. " +
+    "When asked for a prompt for an image or video model, write the prompt itself, ready to paste.";
+  const chatPath = (id) => {
+    if (!chatsDir || !CHAT_ID.test(String(id))) throw new Error("unknown chat");
+    return path.join(chatsDir, `${id}.json`);
+  };
+  const chatMediaDir = (id) => path.join(chatsDir, "media", id);
+
+  function chatRead(id) {
+    try {
+      return JSON.parse(fs.readFileSync(chatPath(id), "utf8"));
+    } catch (err) {
+      if (err.message === "unknown chat") throw err;
+      throw new Error("That chat no longer exists.");
+    }
+  }
+  function chatWrite(chat) {
+    chat.updatedAt = new Date().toISOString();
+    fs.mkdirSync(chatsDir, { recursive: true });
+    const file = chatPath(chat.id);
+    fs.writeFileSync(file + ".tmp", JSON.stringify(chat, null, 1));
+    fs.renameSync(file + ".tmp", file);
+  }
+  // The chat as the browser gets it: with its reply job, if one is under way.
+  function chatPublic(chat) {
+    const j = chat.jobId ? jobs.get(chat.jobId) : null;
+    const job = j && ACTIVE_STATES.has(j.status) ? publicJob(j) : null;
+    const out = { ...chat, job };
+    // A reply that was under way when the server stopped.
+    if (chat.jobId && !j) out.lastError = { message: "The reply was interrupted (the server restarted).", at: chat.updatedAt };
+    return out;
+  }
+
+  function listChats() {
+    if (!chatsDir) return [];
+    let names = [];
+    try {
+      names = fs.readdirSync(chatsDir).filter((n) => /^[a-f0-9-]{36}\.json$/.test(n));
+    } catch {
+      return [];
+    }
+    const out = [];
+    for (const n of names) {
+      try {
+        const c = JSON.parse(fs.readFileSync(path.join(chatsDir, n), "utf8"));
+        const last = c.messages?.[c.messages.length - 1];
+        out.push({
+          id: c.id,
+          title: c.title || "New chat",
+          updatedAt: c.updatedAt,
+          count: c.messages?.length || 0,
+          preview: String(last?.text || "").slice(0, 120),
+          busy: !!(c.jobId && ACTIVE_STATES.has(jobs.get(c.jobId)?.status)),
+        });
+      } catch {
+        /* a broken file: skip it */
+      }
+    }
+    return out.sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
+  }
+
+  function updateChat(id, body = {}) {
+    const chat = chatRead(id);
+    if (body.title !== undefined) chat.title = String(body.title).trim().slice(0, 120) || chat.title;
+    if (body.system !== undefined) chat.system = String(body.system).slice(0, MAX_RULES);
+    chatWrite(chat);
+    return chatPublic(chat);
+  }
+
+  function deleteChat(id) {
+    const chat = chatRead(id);
+    if (chat.jobId) cancelJob(chat.jobId);
+    fs.rmSync(chatPath(id), { force: true });
+    fs.rmSync(chatMediaDir(id), { recursive: true, force: true });
+    return true;
+  }
+
+  // A picture from the browser (a data: URL) → a file in the chat's media folder.
+  function chatSaveImage(chatId, url) {
+    const m = /^data:image\/(jpeg|png|webp);base64,([A-Za-z0-9+/=]+)$/.exec(String(url || ""));
+    if (!m) throw new Error("An attached picture couldn't be read (JPEG, PNG or WebP only).");
+    if (m[2].length > 16 * MiB) throw new Error("An attached picture is too big.");
+    const dir = chatMediaDir(chatId);
+    fs.mkdirSync(dir, { recursive: true });
+    const name = `${randomUUID()}.${m[1] === "jpeg" ? "jpg" : m[1]}`;
+    fs.writeFileSync(path.join(dir, name), Buffer.from(m[2], "base64"));
+    return name;
+  }
+
+  function chatMediaFile(chatId, name) {
+    chatPath(chatId);
+    if (!CHAT_FILE_NAME.test(String(name))) return null;
+    const file = path.join(chatMediaDir(chatId), name);
+    return fs.existsSync(file) ? file : null;
+  }
+
+  // The user's attachments → what the chat keeps: pictures and video frames as files,
+  // text files inline. [{ kind: "image", name, url } | { kind: "video", name,
+  // frames: [{ url, t }] } | { kind: "text", name, text }]
+  function chatAttachments(chatId, list) {
+    const out = [];
+    let pictures = 0;
+    for (const a of (Array.isArray(list) ? list : []).slice(0, 20)) {
+      const name = String(a?.name || "").slice(0, 200);
+      if (a?.kind === "image") {
+        if (++pictures > CHAT_MAX_IMAGES) throw new Error(`Up to ${CHAT_MAX_IMAGES} pictures a message.`);
+        out.push({ kind: "image", name: name || "image", file: chatSaveImage(chatId, a.url) });
+      } else if (a?.kind === "video") {
+        const frames = (Array.isArray(a.frames) ? a.frames : []).slice(0, 12);
+        if (!frames.length) throw new Error(`No frames came through from "${name}".`);
+        const d = Number(a.duration);
+        out.push({
+          kind: "video",
+          name: name || "video",
+          duration: Number.isFinite(d) && d > 0 ? Math.round(d * 10) / 10 : null,
+          frames: frames.map((f) => {
+            const t = Number(f?.t);
+            return { file: chatSaveImage(chatId, f?.url), t: Number.isFinite(t) ? Math.round(t * 10) / 10 : null };
+          }),
+        });
+      } else if (a?.kind === "text") {
+        const text = String(a.text || "");
+        if (text.length > CHAT_MAX_TEXT)
+          throw new Error(`"${name}" is too long (${CHAT_MAX_TEXT.toLocaleString()} characters at most).`);
+        out.push({ kind: "text", name: name || "file.txt", text });
+      }
+    }
+    return out;
+  }
+
+  // Send a message (or, with `retry`, ask again for the reply to the last one; with
+  // `regenerate`, replace the last reply). Starts the reply job. A new chat is made
+  // when there's no `chatId`.
+  function sendChat(body = {}) {
+    const settings = readSettings();
+    const src = getSource(body.sourceId, settings);
+    if (!src) throw new Error("No LLM server is set up — open ⚙ LLM settings.");
+    const model = String(body.model || src.model || "").trim();
+    if (!model && src.kind !== "openai") throw new Error(`Pick a model for ${src.name} in ⚙ LLM settings.`);
+    if (!chatsDir) throw new Error("Chats aren't set up on this server.");
+
+    const now = new Date().toISOString();
+    let chat;
+    if (body.chatId) chat = chatRead(body.chatId);
+    else {
+      chat = { id: randomUUID(), title: "", system: String(body.system || "").slice(0, MAX_RULES), createdAt: now, messages: [] };
+    }
+    const running = chat.jobId && jobs.get(chat.jobId);
+    if (running && ACTIVE_STATES.has(running.status)) throw new Error("The LLM is still replying — wait, or stop it first.");
+    delete chat.lastError;
+
+    if (body.regenerate) {
+      if (chat.messages[chat.messages.length - 1]?.role === "assistant") chat.messages.pop();
+    } else if (!body.retry) {
+      const text = String(body.text || "").trim().slice(0, CHAT_MAX_TEXT);
+      const attachments = chatAttachments(chat.id, body.attachments);
+      if (!text && !attachments.length) throw new Error("Type a message or attach something.");
+      chat.messages.push({ id: randomUUID(), role: "user", text, attachments, at: now });
+      if (!chat.title)
+        chat.title =
+          (text || attachments.map((a) => a.name).join(", ")).replace(/\s+/g, " ").slice(0, 60) || "New chat";
+    }
+    if (chat.messages[chat.messages.length - 1]?.role !== "user")
+      throw new Error("There's no message waiting for a reply.");
+
+    const hasImages = chat.messages.some((m) => m.attachments?.some((a) => a.kind !== "text"));
+    const last = chat.messages[chat.messages.length - 1];
+    const job = {
+      id: randomUUID(),
+      kind: "chat",
+      chatId: chat.id,
+      chatTitle: chat.title,
+      projectId: null,
+      sourceId: src.id,
+      sourceName: src.name,
+      model,
+      format: "default",
+      imageIds: [],
+      images: [],
+      hasImages,
+      description: String(last.text || "(attachments)").slice(0, 200), // what the job list shows
+      theme: "",
+      rules: "",
+      titlePrefix: "",
+      count: 1,
+      done: 0,
+      created: [],
+      result: null,
+      partial: "",
+      status: "queued",
+      message: "Queued",
+      error: null,
+      cancelled: false,
+      createdAt: now,
+      updatedAt: now,
+    };
+    chat.jobId = job.id;
+    chatWrite(chat);
+    enqueue(job);
+    return chatPublic(chat);
+  }
+
+  // The conversation as chat messages, pictures and all. Only the newest
+  // CHAT_MAX_IMAGES pictures go along (older ones are named, not resent), so a long
+  // chat doesn't swamp a local model's context.
+  function buildChatMessages(chat) {
+    const out = [{ role: "system", content: (chat.system || "").trim() || CHAT_DEFAULT_SYSTEM }];
+    let budget = CHAT_MAX_IMAGES;
+    const turns = [];
+    for (let i = chat.messages.length - 1; i >= 0; i--) {
+      const m = chat.messages[i];
+      if (m.role === "assistant") {
+        turns.unshift({ role: "assistant", content: m.text || "" });
+        continue;
+      }
+      const parts = [];
+      const texts = [];
+      for (const a of m.attachments || []) {
+        if (a.kind === "text") {
+          texts.push(`[Attached file "${a.name}"]\n\`\`\`\n${a.text}\n\`\`\``);
+          continue;
+        }
+        const files = a.kind === "video" ? a.frames : [{ file: a.file }];
+        const label =
+          a.kind === "video" ?
+            `[Video "${a.name}"${a.duration ? `, ${a.duration}s long` : ""} — ${files.length} frames, in order${
+              files.some((f) => f.t != null) ? ` (at ${files.map((f) => `${f.t}s`).join(", ")})` : ""
+            }]`
+          : `[Picture "${a.name}"]`;
+        if (budget < files.length) {
+          parts.push({ type: "text", text: `${label} — sent earlier, not shown again.` });
+          continue;
+        }
+        budget -= files.length;
+        parts.push({ type: "text", text: label });
+        for (const f of files) {
+          const file = chatMediaFile(chat.id, f.file);
+          if (!file) {
+            parts.push({ type: "text", text: "(this picture's file is missing)" });
+            continue;
+          }
+          const ext = path.extname(file).slice(1).toLowerCase();
+          const mime = ext === "jpg" ? "image/jpeg" : `image/${ext}`;
+          parts.push({ type: "image_url", image_url: { url: `data:${mime};base64,${fs.readFileSync(file).toString("base64")}` } });
+        }
+      }
+      const text = [m.text, ...texts].filter(Boolean).join("\n\n");
+      turns.unshift({
+        role: "user",
+        content: parts.length ? [{ type: "text", text: text || "(see the attachments)" }, ...parts] : text,
+      });
+    }
+    // Two turns in a row from the same side (a message sent after a failed reply) are
+    // joined: some servers insist the roles alternate.
+    for (const t of turns) {
+      const prev = out[out.length - 1];
+      if (prev.role !== t.role || prev.role === "system") {
+        out.push(t);
+        continue;
+      }
+      const asParts = (c) => (typeof c === "string" ? [{ type: "text", text: c }] : c);
+      prev.content =
+        typeof prev.content === "string" && typeof t.content === "string" ?
+          `${prev.content}\n\n${t.content}`
+        : [...asParts(prev.content), ...asParts(t.content)];
+    }
+    return out;
+  }
+
+  // One reply: streamed into job.partial, then added to the chat.
+  async function writeChatReply(job, src, signal) {
+    const chat = chatRead(job.chatId);
+    const raw = await complete(
+      job,
+      src,
+      buildChatMessages(chat),
+      readSettings().options.temperature,
+      job.hasImages,
+      signal,
+      (chars, fix, text) => {
+        if (text !== undefined) job.partial = text;
+        setJob(job, undefined, /<think>(?![\s\S]*<\/think>)/i.test(job.partial) ? "Thinking…" : `Replying… (${chars} characters)`);
+      },
+    );
+    const text = stripThinking(raw);
+    if (!text) throw new Error("The LLM returned an empty reply.");
+    return { text, thinking: chatThinking(raw) };
+  }
+  const chatThinking = (raw) => {
+    const m = /<think>([\s\S]*?)(<\/think>|$)/i.exec(raw) || /^([\s\S]*?)<\/think>/i.exec(raw);
+    return m ? m[1].trim() : "";
+  };
+
+  // The reply (or what came of it) goes into the chat.
+  function chatFinished(job, reply, err) {
+    let chat;
+    try {
+      chat = chatRead(job.chatId);
+    } catch {
+      return; // the chat was deleted meanwhile
+    }
+    if (chat.jobId !== job.id) return;
+    delete chat.jobId;
+    if (reply) {
+      chat.messages.push({
+        id: randomUUID(),
+        role: "assistant",
+        text: reply.text,
+        ...(reply.thinking ? { thinking: reply.thinking } : {}),
+        ...(reply.stopped ? { stopped: true } : {}),
+        model: job.model,
+        sourceName: job.sourceName,
+        at: new Date().toISOString(),
+      });
+    }
+    if (err) chat.lastError = { message: err, at: new Date().toISOString() };
+    chatWrite(chat);
+  }
+
   function cancelJob(id) {
     const job = jobs.get(id);
     if (!job) return null;
@@ -1749,6 +2086,11 @@ export function createLlm(deps) {
       cpu.loading?.abort(e);
     }
     setJob(job, "cancelled", `Cancelled after ${job.done} of ${job.count}.`);
+    // A reply stopped part-way keeps what it had written.
+    if (job.kind === "chat") {
+      const text = stripThinking(job.partial);
+      chatFinished(job, text ? { text, thinking: chatThinking(job.partial), stopped: true } : null, null);
+    }
     return publicJob(job);
   }
 
@@ -1762,6 +2104,7 @@ export function createLlm(deps) {
   const jobFailed = (job) => (err) => {
     if (job.cancelled) return;
     job.error = err.message || String(err);
+    if (job.kind === "chat") chatFinished(job, null, job.error);
     setJob(job, "failed", job.error);
     log.error?.("LLM build failed:", job.error);
   };
@@ -1790,7 +2133,8 @@ export function createLlm(deps) {
         runner = null;
         if (!queue.length) {
           const s = readSettings();
-          if (s.options.unloadWhenDone && state.inUse) {
+          // Not after a chat reply: the next message would wait for the model to load again.
+          if (s.options.unloadWhenDone && state.inUse && job.kind !== "chat") {
             const t = state.inUse;
             state.inUse = null;
             const src = getSource(t.sourceId, s);
@@ -2005,7 +2349,8 @@ export function createLlm(deps) {
         const parts =
           subject ? imageParts.filter((p) => subject.imageIds.includes(p.g.id)) : imageParts;
         const doing =
-          job.kind === "revise" ? "Revising"
+          job.kind === "chat" ? "Replying"
+          : job.kind === "revise" ? "Revising"
           : subject ?
             `Looking at <${subject.key}>${job.count > 1 ? ` (${n} of ${job.count})` : ""}`
           : job.kind === "shots" ?
@@ -2017,7 +2362,8 @@ export function createLlm(deps) {
         lane.request = controller;
         let result;
         try {
-          result = await writePrompt(job, src, parts, controller.signal, (chars, fix) =>
+          if (job.kind === "chat") result = await writeChatReply(job, src, controller.signal);
+          else result = await writePrompt(job, src, parts, controller.signal, (chars, fix) =>
             setJob(
               job,
               undefined,
@@ -2046,6 +2392,12 @@ export function createLlm(deps) {
           job.done++;
           continue;
         }
+        if (job.kind === "chat") {
+          chatFinished(job, result, null);
+          job.result = { ok: true };
+          job.done = 1;
+          break;
+        }
         if (job.kind === "revise") {
           job.result = result; // the editor shows it; nothing is saved here
           job.done = 1;
@@ -2068,6 +2420,10 @@ export function createLlm(deps) {
         job.created.push({ id: saved.id, title: saved.title });
         job.clipsDone.push(result);
         job.done++;
+      }
+      if (job.kind === "chat") {
+        setJob(job, "done", "Replied.");
+        return;
       }
       if (job.kind === "revise") {
         setJob(
@@ -2674,7 +3030,7 @@ export function createLlm(deps) {
                 : j.choices?.[0]?.delta?.content;
               if (piece) {
                 text += piece;
-                onProgress?.(text.length);
+                onProgress?.(text.length, undefined, text);
               }
             } catch (err) {
               if (err instanceof SyntaxError) continue;
@@ -2774,6 +3130,12 @@ export function createLlm(deps) {
     startBuild,
     startRevise,
     startAnalyze,
+    listChats,
+    getChat: (id) => chatPublic(chatRead(id)),
+    updateChat,
+    deleteChat,
+    sendChat,
+    chatMediaFile,
     readBuilder: (projectId) => {
       const proj = findProject(projectId);
       if (!proj) throw new Error("unknown projectId");

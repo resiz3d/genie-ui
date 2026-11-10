@@ -36,6 +36,7 @@
   async function loadCfg() {
     cfg = await api("/api/llm/settings");
     showRevModel();
+    document.dispatchEvent(new CustomEvent("genie:llm-cfg", { detail: cfg })); // 💬 Chat's model line
     return cfg;
   }
   const activeSource = () =>
@@ -531,6 +532,7 @@
   b.source.addEventListener("change", async () => {
     try {
       cfg = await api("/api/llm/settings", "PUT", { activeSourceId: b.source.value });
+      document.dispatchEvent(new CustomEvent("genie:llm-cfg", { detail: cfg }));
       refreshModels();
     } catch (err) {
       showErr(b.err, err.message);
@@ -581,6 +583,8 @@
   openBtn.addEventListener("click", openBuilder);
   buildModal.querySelectorAll(".llm-close").forEach((x) => x.addEventListener("click", closeBuilder));
   $(".llm-open-settings", buildModal).addEventListener("click", openSettings);
+  window.GENie = window.GENie || {};
+  window.GENie.openLlmSettings = openSettings; // 💬 Chat's ⚙ button
   buildModal.addEventListener("click", (e) => {
     if (e.target === buildModal) closeBuilder();
   });
@@ -855,7 +859,8 @@
     row.className = `llm-job ${j.status}`;
     const active = ACTIVE.includes(j.status);
     const what =
-      j.kind === "revise" ? `✏️ Revise “${j.title || "prompt"}”: ${j.instruction}`
+      j.kind === "chat" ? `💬 Chat “${j.chatTitle || "chat"}”: ${j.description}`
+      : j.kind === "revise" ? `✏️ Revise “${j.title || "prompt"}”: ${j.instruction}`
       : j.kind === "analyze" ? `🔎 Analyze images: ${j.description}`
       : j.kind === "shots" ? `🎬 Shot list: ${[j.description, j.theme].filter(Boolean).join(" · ") || "(images only)"}`
       : [j.description, j.theme].filter(Boolean).join(" · ") || "(images only)";
@@ -1318,6 +1323,7 @@
         },
       });
       showRevModel();
+      document.dispatchEvent(new CustomEvent("genie:llm-cfg", { detail: cfg }));
       closeSettings();
       if (!buildModal.classList.contains("hidden")) {
         fillSourceSelect(b.source, cfg.activeSourceId);

@@ -4963,7 +4963,8 @@ function renderScalarControl(token, type, container = comfyControlsEl) {
     }
   } else if (type === "textarea") {
     input = document.createElement("textarea");
-    input.rows = /prompt/i.test(token.name) ? 15 : 4; // prompts get room to write in
+    // Prompts get room to write in; negative prompts are usually short.
+    input.rows = /prompt/i.test(token.name) && !/negative/i.test(token.name) ? 15 : 4;
     input.value = token.default || "";
   } else {
     input = document.createElement("input");
@@ -5644,6 +5645,10 @@ async function pollComfyJob(job) {
   }
   // Still running — surface live step progress (drives the elapsed/ETA clock).
   const prog = data.data?.progress;
+  if (live) {
+    live.setQueued(!!data.data?.queued);
+    live.setExecStart(data.data?.execStartedAt);
+  }
   if (live && prog && prog.max > 0)
     live.setProgress(prog.value, prog.max, prog.passes);
   setTimeout(() => pollComfyJob(job), POLL_INTERVAL_MS);
@@ -6481,19 +6486,23 @@ savedFilterEl.addEventListener("input", () => {
 // the prompt keeps its tokens and History records both the picks and the template.
 // %category:key:1% also remembers its pick for the rest of that run: a later
 // %category:key% reuses it (":0", the default, picks afresh every time — never a value
-// that list already gave in the run, until they've all been used).
+// that list already gave in the run, until they've all been used). Array wildcards
+// (wildcardArrayRows) read that third part as :all or an item index instead.
 // Managed on the prompt field's third tab.
 let wildcards = [];
 let wildcardsFilter = "";
 const WILDCARD_RE =
-  /%([\p{L}\p{N}_-]+):([\p{L}\p{N}_-]+)(?::(1|0|true|false))?%/gu;
+  /%([\p{L}\p{N}_-]+):([\p{L}\p{N}_-]+)(?::(true|false|all|\d{1,3}))?%/gu;
 // A token whose category and/or key is itself a token — %%genre:name:1%:clothing% —
 // resolved to a plain token first (resolveDynamicNames), so with :1 on the inner one
 // every token naming it follows the same pick.
 const WILDCARD_DYNAMIC_RE = (() => {
   const name = String.raw`[\p{L}\p{N}_-]+`;
-  const part = `(%${name}:${name}(?::(?:1|0|true|false))?%|${name})`;
-  return new RegExp(`%${part}:${part}(?::(1|0|true|false))?%`, "gu");
+  // The third part: :1/:0 (keep the pick, or not) on a plain list; :all or an index
+  // on an array wildcard (resolveArrayToken).
+  const flag = String.raw`true|false|all|\d{1,3}`;
+  const part = `(%${name}:${name}(?::(?:${flag}))?%|${name})`;
+  return new RegExp(`%${part}:${part}(?::(${flag}))?%`, "gu");
 })();
 const isDynamicWildcard = (c, k) => c.startsWith("%") || k.startsWith("%");
 const wildcardToken = (w) => `%${w.category}:${w.key}%`;
@@ -6539,6 +6548,109 @@ function wildcardPick(w, id, memo) {
   return v;
 }
 
+// An array wildcard: every value is a JSON array of strings, one per line —
+//   ["indoor", "indoors-modifier", "8 ft"]
+//   ["outdoor", "outdoors-modifier", "25 ft"]
+// Its first use in a run picks one row at random; that run then stays on the row, and
+// each use gives the row's next element, in the order the tokens sit in the text
+// (after the last element it starts over). Returns the rows, or null for a plain list.
+const wcArrayRows = new WeakMap(); // wildcard → parsed rows | null (values never mutate in place)
+function wildcardArrayRows(w) {
+  if (wcArrayRows.has(w)) return wcArrayRows.get(w);
+  let rows = null;
+  const vals = w?.values || [];
+  if (vals.length && vals.every((v) => /^\s*\[/.test(v))) {
+    try {
+      rows = vals.map((v) => {
+        const a = JSON.parse(v);
+        if (!Array.isArray(a) || !a.length) throw new Error();
+        return a.map((x) => String(x ?? ""));
+      });
+    } catch {
+      rows = null;
+    }
+  }
+  if (w) wcArrayRows.set(w, rows);
+  return rows;
+}
+const wildcardArrayLineError = (v) => {
+  try {
+    const a = JSON.parse(v);
+    return Array.isArray(a) && a.length ? "" : "isn't a non-empty array";
+  } catch {
+    return "isn't valid JSON";
+  }
+};
+
+// This run's row of an array wildcard ({ row, i }), picked at random on first use.
+const wcArrayState = new WeakMap(); // memo → Map(id → { row, i })
+function wildcardArrayState(w, rows, memo) {
+  if (!wcArrayState.has(memo)) wcArrayState.set(memo, new Map());
+  const state = wcArrayState.get(memo);
+  const id = `${w.category}:${w.key}`;
+  if (!state.has(id)) state.set(id, { row: rows[Math.floor(Math.random() * rows.length)], i: 0 });
+  return state.get(id);
+}
+
+// Whether a token's third part is an array selector (:all or an index) rather than :1/:0.
+const isArraySelector = (flag) => flag === "all" || /^\d+$/.test(flag || "");
+
+// One array-token's value, its own tokens resolved like any list value's. The third
+// part of the token picks what it gives:
+//   %c:k%      the row's next element (the only form that moves the counter)
+//   %c:k:all%  every element, comma separated
+//   %c:k:2%    element 2, counting from 0
+function resolveArrayToken(w, rows, m, memo, parent, flag) {
+  if (parent && wildcardNests(w)) {
+    throw new Error(
+      `${parent} uses ${m}, which holds wildcards of its own — wildcards can only be nested one level deep.`,
+    );
+  }
+  const s = wildcardArrayState(w, rows, memo);
+  const fill = (raw) => (parent ? raw : resolveWildcards(raw, memo, wildcardToken(w)));
+  if (flag === "all") return s.row.map(fill).join(", ");
+  if (/^\d+$/.test(flag || "")) {
+    const i = Number(flag);
+    if (i >= s.row.length) {
+      throw new Error(
+        `${m}: this run's row of ${wildcardToken(w)} has ${s.row.length} item${s.row.length === 1 ? "" : "s"} (0–${s.row.length - 1}), so there's no item ${i}.`,
+      );
+    }
+    return fill(s.row[i]);
+  }
+  const raw = s.row[s.i % s.row.length];
+  s.i++;
+  return fill(raw);
+}
+
+// Array tokens, left to right, before anything else — so a use inside a dynamic name
+// (%%genre:name:1%:%setting:scale%%) counts in its place in the text, not ahead of the
+// plain tokens before it.
+function resolveArrayTokens(s, memo, parent) {
+  if (!s.includes("%")) return s;
+  // WILDCARD_DYNAMIC_RE matches plain tokens too, so one left-to-right pass sees both.
+  return s.replace(WILDCARD_DYNAMIC_RE, (m, c, k, flag) => {
+    if (!isDynamicWildcard(c, k)) {
+      const w = findWildcard(c, k);
+      const rows = wildcardArrayRows(w);
+      return rows ? resolveArrayToken(w, rows, m, memo, parent, flag) : m;
+    }
+    // An array inside a dynamic name gives that name; other inner tokens wait for
+    // resolveDynamicNames.
+    const name = (part) => {
+      const [, ic, ik, iflag] = part.match(/^%([^:%]+):([^:%]+)(?::([^:%]+))?%$/) || [];
+      const w = ic ? findWildcard(ic, ik) : null;
+      const rows = wildcardArrayRows(w);
+      if (!rows) return part;
+      const v = resolveArrayToken(w, rows, part, memo, m, iflag);
+      const n = wildcardName(v);
+      if (!n) throw new Error(`${m}: ${part} gave “${v}”, which isn't a wildcard name.`);
+      return n;
+    };
+    return `%${name(c)}:${name(k)}${flag ? `:${flag}` : ""}%`;
+  });
+}
+
 // Swap every %category:key% for a random value from that list. `memo` holds the picks
 // a :1 token asked to keep — share one Map across everything in a single run (every
 // text field of a workflow). Values may hold tokens of their own, one level deep: a
@@ -6547,7 +6659,8 @@ function wildcardPick(w, id, memo) {
 // nested too deep, so a run never sends a literal %…% to the model. $variables are
 // filled in first (expandVariables), so this is the one call that readies a prompt.
 function resolveWildcards(text, memo = new Map(), parent = null) {
-  const s = resolveDynamicNames(expandVariables(text), memo); // $variables first: their text may hold wildcards
+  // $variables first: their text may hold wildcards. Then array tokens, in text order.
+  const s = resolveDynamicNames(resolveArrayTokens(expandVariables(text), memo, parent), memo);
   if (!s.includes("%")) return s;
   const missing = new Set();
   const out = s.replace(WILDCARD_RE, (m, c, k, flag) => {
@@ -6555,6 +6668,12 @@ function resolveWildcards(text, memo = new Map(), parent = null) {
     if (!w || !w.values?.length) {
       missing.add(m);
       return m;
+    }
+    // An array token only reaches here when its name came from a dynamic one.
+    const rows = wildcardArrayRows(w);
+    if (rows) return resolveArrayToken(w, rows, m, memo, parent, flag);
+    if (isArraySelector(flag) && flag !== "0" && flag !== "1") {
+      throw new Error(`${m}: :${flag} only works on array wildcards, and ${wildcardToken(w)} is a plain list.`);
     }
     // Every value checked, not just the pick, so the error doesn't come and go at random.
     if (parent && wildcardNests(w)) {
@@ -6817,7 +6936,9 @@ function openWildcardEditor(w, category = "") {
 function syncWildcardPreview() {
   const c = wildcardName(wcCategory.value) || "category";
   const k = wildcardName(wcKey.value) || "key";
-  wcTokenPreview.innerHTML = `<code>%${escapeHtmlJs(c)}:${escapeHtmlJs(k)}%</code> · ${plural(wcLines().length, "value")}`;
+  const lines = wcLines();
+  const isArray = !!wildcardArrayRows({ values: lines });
+  wcTokenPreview.innerHTML = `<code>%${escapeHtmlJs(c)}:${escapeHtmlJs(k)}%</code> · ${plural(lines.length, isArray ? "array" : "value")}`;
 }
 [wcCategory, wcKey, wcValues].forEach((el) =>
   el.addEventListener("input", syncWildcardPreview),
@@ -6867,7 +6988,15 @@ async function saveWildcard() {
     key: wcKey.value,
     values: wcLines(),
   };
-  const problem = wildcardNestProblem(
+  // A list that's meant to be arrays (its first line is one) needs every line to be one.
+  const badLine =
+    /^\s*\[/.test(body.values[0] || "") ?
+      body.values.findIndex((v) => wildcardArrayLineError(v))
+    : -1;
+  const problem =
+    badLine >= 0 ?
+      `Line ${badLine + 1} ${wildcardArrayLineError(body.values[badLine])} — in an array wildcard every line is a JSON array like ["indoor", "8 ft"].`
+    : wildcardNestProblem(
     wildcardName(body.category),
     wildcardName(body.key),
     body.values,
@@ -6927,6 +7056,13 @@ document.getElementById("wcTry").addEventListener("click", () => {
   }
   try {
     const self = `%${wildcardName(wcCategory.value) || "category"}:${wildcardName(wcKey.value) || "key"}%`;
+    const rows = wildcardArrayRows({ values: lines });
+    if (rows) {
+      // An array's pick is the whole row; its uses walk through it in order.
+      const row = rows[Math.floor(Math.random() * rows.length)];
+      wcTryOut.textContent = `→ ${row.map((v, i) => `${i + 1}. ${resolveWildcards(v, new Map(), self)}`).join("  ·  ")}`;
+      return;
+    }
     wcTryOut.textContent = `→ ${resolveWildcards(lines[Math.floor(Math.random() * lines.length)], new Map(), self)}`;
   } catch (err) {
     wcTryOut.textContent = err.message;
@@ -7623,10 +7759,19 @@ function dynamicWildcardOk(c, k) {
   const names = (part) => {
     if (!part.startsWith("%")) return [part];
     const [, ic, ik] = part.match(/^%([^:%]+):([^:%]+)/) || [];
-    return (findWildcard(ic, ik)?.values || []).map(wildcardName);
+    const w = findWildcard(ic, ik);
+    // Which element an array gives depends on where it sits in the run, so any
+    // element that names a list counts.
+    const rows = wildcardArrayRows(w);
+    if (rows) return { any: rows.flat().map(wildcardName).filter(Boolean) };
+    return (w?.values || []).map(wildcardName);
   };
   const cs = names(c);
   const ks = names(k);
+  if (cs.any || ks.any) {
+    const list = (x) => (x.any ? x.any : x);
+    return list(cs).some((cn) => list(ks).some((kn) => findWildcard(cn, kn)?.values?.length));
+  }
   return (
     cs.length > 0 &&
     ks.length > 0 &&
@@ -7643,10 +7788,13 @@ function wcHlHtml(text) {
     ...[...text.matchAll(WILDCARD_DYNAMIC_RE)]
       .filter((m) => isDynamicWildcard(m[1], m[2]))
       .map((m) => ({ m, cls: dynamicWildcardOk(m[1], m[2]) ? "ok" : "bad" })),
-    ...[...text.matchAll(WILDCARD_RE)].map((m) => ({
-      m,
-      cls: findWildcard(m[1], m[2])?.values?.length ? "ok" : "bad",
-    })),
+    ...[...text.matchAll(WILDCARD_RE)].map((m) => {
+      const w = findWildcard(m[1], m[2]);
+      // :all / :2 only mean something on an array wildcard.
+      const badSelector =
+        isArraySelector(m[3]) && m[3] !== "0" && m[3] !== "1" && !wildcardArrayRows(w);
+      return { m, cls: w?.values?.length && !badSelector ? "ok" : "bad" };
+    }),
     ...[...text.matchAll(VARIABLE_RE)].map((m) => ({
       m,
       cls: findVariable(m[1]) ? "var ok" : "var bad",
@@ -10114,7 +10262,11 @@ function createLiveStatus(job) {
   };
   let baseStatus = "Generating…";
   let progInfo = null; // { value, max, pass, passes, perPass, stepInPass, anchorT, anchorValue }
-  const progStartedAt = job.startedAt || Date.now();
+  // The elapsed clock counts from when ComfyUI actually began this run (setExecStart),
+  // not from submission — a run queued behind others hasn't started yet. Until that
+  // is known it falls back to the job's own start.
+  let progStartedAt = job.execStartedAt || job.startedAt || Date.now();
+  let queuedInComfy = false;
   let progTicker = null;
   // A run whose sampler goes over the steps more than once (Spectrum's capture +
   // replay) reports one combined count, e.g. 8/50 for step 8 of 25 in pass 1. Split it
@@ -10134,7 +10286,8 @@ function createLiveStatus(job) {
   };
   const paint = () => {
     if (!progInfo) {
-      statusText.textContent = baseStatus;
+      statusText.textContent =
+        queuedInComfy ? "Waiting in the ComfyUI queue…" : baseStatus;
       return;
     }
     const { value, passes, perPass, pass, stepInPass, anchorT, anchorValue } =
@@ -10167,6 +10320,20 @@ function createLiveStatus(job) {
     setStatus(text) {
       baseStatus = text;
       paint();
+    },
+    // When ComfyUI began executing (epoch ms) and whether it's still waiting in its
+    // queue, from each status poll.
+    setExecStart(at) {
+      if (Number.isFinite(at) && at !== progStartedAt) {
+        progStartedAt = at;
+        paint();
+      }
+    },
+    setQueued(q) {
+      if (q !== queuedInComfy) {
+        queuedInComfy = q;
+        paint();
+      }
     },
     setProgress(value, max, passes = 1) {
       if (!max || max <= 0) return;
@@ -11048,11 +11215,11 @@ function historyOfProject(entries) {
     );
 }
 
-// --- History: select many cards and move them to another project --------------
+// --- History: select many cards to move to another project or delete -----------
 // ☑ Select puts a checkbox on each card; a tap anywhere on a card that isn't one of
 // its controls toggles it too (Shift-click for a range). The bar under the list
-// selects the page or everything the filter shows, and moves the lot. Runs still
-// generating can't be picked — their card is rewritten when they finish.
+// selects the page or everything the filter shows, and moves or deletes the lot. Runs
+// still generating can't be picked — their card is rewritten when they finish.
 let histSelecting = false;
 const histSelected = new Set();
 let histSelAnchor = null;
@@ -11062,6 +11229,7 @@ const histSelectToggle = document.getElementById("histSelectToggle");
 const histSelectBar = document.getElementById("histSelectBar");
 const histSelCount = document.getElementById("histSelCount");
 const histSelMove = document.getElementById("histSelMove");
+const histSelDelete = document.getElementById("histSelDelete");
 const histPickable = (e) => e.status !== "pending";
 
 // Called from renderHistory: drop picks the filter no longer shows, refresh the bar.
@@ -11096,6 +11264,8 @@ function updateHistSelBar() {
     label: (p) => `📁 ${p.name}`,
   });
   histSelMove.disabled = !n;
+  histSelDelete.textContent = n ? `🗑 Delete ${n}` : "🗑 Delete";
+  histSelDelete.disabled = !n;
 }
 
 // Reflect the picks on the cards already drawn (no full re-render).
@@ -11222,6 +11392,38 @@ async function moveHistSelection({ projectId, newProject }) {
   }
   await loadHistory();
 }
+
+// Same confirmation rules as a card's own 🗑: Ctrl (or ⌘) + click skips it, and so
+// does a selection of nothing but cancelled/failed cards (they have no files).
+histSelDelete.addEventListener("click", async (e) => {
+  const ids = [...histSelected];
+  if (!ids.length) return;
+  const picked = historyEntries.filter((x) => histSelected.has(x.id));
+  const skipConfirm = e.ctrlKey || e.metaKey || picked.every(isUnfinished);
+  const what = ids.length === 1 ? "this history item" : `these ${ids.length} history items`;
+  if (
+    !skipConfirm &&
+    !confirm(`Delete ${what}? This also removes their saved output files and can't be undone.`)
+  )
+    return;
+  histSelDelete.disabled = true;
+  histSelMove.disabled = true;
+  histSelCount.textContent = `Deleting ${ids.length}…`;
+  try {
+    const res = await fetch("/api/history/delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids }),
+    });
+    if (!res.ok)
+      throw new Error((await res.json().catch(() => ({}))).msg || "Delete failed");
+    histSelected.clear();
+    historySlideNext = true;
+  } catch (err) {
+    alert(err.message || String(err));
+  }
+  await loadHistory();
+});
 
 // A cancelled or failed run: no output, so nothing but the card goes on delete.
 const isUnfinished = (e) =>
@@ -11421,6 +11623,8 @@ function buildHistDetails(entry, input, comfyEntry, isImg) {
   };
   if (comfyEntry) {
     const v = input.values || {};
+    // The model file the workflow's loader ran (a UNET loader, or a checkpoint).
+    push("Diffusion model", v.unet_name || v.ckpt_name);
     push("Aspect ratio", v.aspect_ratio);
     push("Size (MP)", v.megapixels);
     push("Sampler", v.sampler);
@@ -11438,6 +11642,16 @@ function buildHistDetails(entry, input, comfyEntry, isImg) {
       push(
         "Continues from",
         chain.from ? `slot ${chain.from}` : "— chain start",
+      );
+    }
+    // When ComfyUI actually picked the run up, and how long it waited in the queue
+    // behind earlier runs (the card's own date is when it was submitted).
+    if (Number.isFinite(entry.execStartedAt)) {
+      const wait = entry.execStartedAt - new Date(entry.createdAt).getTime();
+      push(
+        "Started",
+        new Date(entry.execStartedAt).toLocaleString() +
+          (wait >= 1000 ? ` (queued ${fmtDuration(wait)})` : ""),
       );
     }
   } else if (isImg) {
@@ -12625,6 +12839,7 @@ function trackPendingEntry(entry) {
     projectId: entry.projectId || activeProjectId,
     refSecs: entry.refVideoSeconds || 0,
     startedAt: entry.startedAt || new Date(entry.createdAt).getTime(),
+    execStartedAt: entry.execStartedAt || null,
   };
   const live = createLiveStatus(job);
   live.setStatus("Resuming previous generation…");

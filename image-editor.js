@@ -11,6 +11,7 @@ import { pipeline } from "node:stream";
 
 const MAX_IMAGE = 200 * 1024 ** 2;
 const IMAGE_FILE = /\.(png|jpe?g|webp)$/i;
+const VIDEO_FILE = /\.(mp4|webm|mov|m4v)$/i;
 const SAVE_FOLDER = "edited_images"; // inside the project's output folder
 const TYPES = {
   "image/png": { ext: "png", mime: "image/png" },
@@ -44,8 +45,11 @@ export function registerImageEditor(
 
   // GENie's own images, newest first: History results, Gallery images and earlier
   // crops — of one project, or of all of them (projectId "all").
+  // `video=1` (💬 Chat's picker): videos too, each with its `kind`.
   app.get("/api/image-editor/library", (req, res) => {
     const all = req.query.projectId === "all";
+    const videos = req.query.video === "1";
+    const kindOf = (url) => (IMAGE_FILE.test(url) ? "image" : videos && VIDEO_FILE.test(url) ? "video" : null);
     const proj = resolveProject(req.query.projectId);
     const mine = (e) => all || (e.projectId || "default") === proj.id;
     const out = [];
@@ -53,8 +57,10 @@ export function registerImageEditor(
       if (!mine(e)) continue;
       const outs = e.outputs?.length ? e.outputs : [{ localVideo: e.localVideo }];
       outs.forEach((o, index) => {
-        if (!o.localVideo || !IMAGE_FILE.test(o.localVideo)) return;
+        const kind = o.localVideo && kindOf(o.localVideo);
+        if (!kind) return;
         out.push({
+          kind,
           url: o.localVideo,
           source: "History",
           name: path.basename(o.localVideo),
@@ -64,8 +70,9 @@ export function registerImageEditor(
       });
     }
     for (const g of gallery())
-      if (mine(g) && (g.kind || "image") === "image" && g.localUrl && IMAGE_FILE.test(g.localUrl))
+      if (mine(g) && ["image", videos && "video"].includes(g.kind || "image") && g.localUrl && kindOf(g.localUrl))
         out.push({
+          kind: kindOf(g.localUrl),
           url: g.localUrl,
           source: "Gallery",
           name: g.name || path.basename(g.localUrl),
@@ -80,6 +87,7 @@ export function registerImageEditor(
       } catch {}
       for (const name of names)
         out.push({
+          kind: "image",
           url: `/output/${p.slug}/${SAVE_FOLDER}/${encodeURIComponent(name)}`,
           source: "Edited",
           name,

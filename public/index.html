@@ -17,6 +17,7 @@
           <p class="sub" id="pageSub">Your wish, rendered — cloud &amp; local generation</p>
         </div>
         <div class="header-right">
+          <button type="button" id="openChat" class="tool-pill" title="Chat with the LLM chosen in ⚙ LLM settings — attach pictures, videos and files">💬 Chat</button>
           <button type="button" id="openVideoEditor" class="tool-pill" title="Trim video files, cut parts out and join clips together">✂ Video editor</button>
           <button type="button" id="openImageEditor" class="tool-pill" title="Crop an image to a common shape — 1:1, 16:9, 9:16 and more">🖼 Image editor</button>
           <div class="project-pill" title="Active project">
@@ -291,7 +292,7 @@
             <button type="button" id="openFolder" class="btn-secondary" title="Open the output folder in Explorer">📂 Open folder</button>
             <button type="button" id="exportHistory" class="btn-secondary" title="Export the shown history to a shareable, zippable folder">📦 Export</button>
             <select id="historyFilter" title="Filter history by project"></select>
-            <button type="button" id="histSelectToggle" class="btn-secondary" title="Pick several cards to move to another project">☑ Select</button>
+            <button type="button" id="histSelectToggle" class="btn-secondary" title="Pick several cards to move to another project or delete">☑ Select</button>
           </div>
         </div>
         <div class="hist-head-toggles">
@@ -315,6 +316,7 @@
           <button type="button" id="histSelAll" class="btn-secondary" title="Select every card the filter shows, on all pages">All</button>
           <button type="button" id="histSelNone" class="btn-secondary">None</button>
           <select id="histSelMove" title="Move the selected cards (and their saved files) to another project"></select>
+          <button type="button" id="histSelDelete" class="btn-secondary hist-delete" title="Delete the selected cards and their saved files (Ctrl+click to skip confirmation)">🗑 Delete</button>
           <button type="button" id="histSelDone" class="btn-secondary">Done</button>
         </div>
         <p id="historyEmpty" class="muted">No generations yet.</p>
@@ -496,7 +498,7 @@
         </div>
         <datalist id="wcCategoryList"></datalist>
         <label>
-          Values <span class="hint">— one per line</span>
+          Values <span class="hint">— one per line; or one JSON array per line, like ["indoor", "8 ft"], to make an array wildcard (each run picks one line, and each use gives its next item; :all gives every item, comma separated, and :2 gives item 2, counting from 0)</span>
           <textarea id="wcValues" rows="12" placeholder="crop top&#10;blouse&#10;long-sleeved shirt&#10;tank top"></textarea>
         </label>
         <p class="wc-try">
@@ -581,10 +583,11 @@
 
     <script src="settings.js"></script>
     <script src="app.js"></script>
-    <script src="llm.js?v=12"></script>
+    <script src="llm.js?v=13"></script>
     <script src="video-fx.js?v=1"></script>
     <script src="video-editor.js?v=7"></script>
     <script src="image-editor.js?v=7"></script>
+    <script src="chat.js?v=1"></script>
     <script src="paste.js?v=2"></script>
     <script src="plugins.js"></script>
   </body>
