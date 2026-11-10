@@ -13,6 +13,7 @@ import {
   applyReferenceCollections,
   progressPasses,
 } from "./comfy-recognize.js";
+import { graphToApi } from "./comfy-graph.js";
 import { createLlm } from "./llm.js";
 import { registerVideoEditor } from "./video-editor.js";
 import { loadPlugins } from "./plugins.js";
@@ -971,6 +972,156 @@ app.get("/api/workflows", (req, res) => {
     }
   });
   res.json({ code: 200, msg: "success", data: list });
+});
+
+// --- Importing workflows saved in ComfyUI --------------------------------------
+// ComfyUI keeps the workflows you save in its editor under its own user folder, in
+// the editor's graph format. These two routes list them and copy one into GENie:
+// the graph is fetched over ComfyUI's HTTP API, converted to API format
+// (comfy-graph.js) and written to workflows/comfyui/. It is strictly one-way and
+// read-only on ComfyUI's side — nothing is ever written back, and the copy doesn't
+// follow later edits made in ComfyUI (import again to refresh it).
+const COMFY_IMPORT_DIR = "comfyui";
+
+// A saved workflow's path inside ComfyUI's workflows folder → the GENie workflow id
+// and file it imports to, or null if the path isn't usable. Subfolders are kept.
+function comfyImportTarget(savedPath) {
+  if (typeof savedPath !== "string" || !savedPath.toLowerCase().endsWith(".json"))
+    return null;
+  const raw = savedPath.split(/[\\/]/);
+  if (raw.some((s) => !s || s === "." || s === "..")) return null;
+  // Names ComfyUI accepts can still hold characters a Windows filename can't.
+  const segs = raw.map((s) =>
+    s.replace(/[<>:"|?*\u0000-\u001f]/g, "_").replace(/[. ]+$/, "") || "_",
+  );
+  const file = [COMFY_IMPORT_DIR, ...segs].join("/");
+  if (!workflowIdSegments(file)) return null;
+  return {
+    file,
+    abs: path.join(WORKFLOWS_DIR, ...file.split("/")),
+    source: raw.join("/"),
+  };
+}
+
+async function comfyUserdata(query) {
+  const r = await fetch(`${COMFYUI_URL}/userdata${query}`);
+  if (!r.ok) {
+    const err = new Error(`ComfyUI answered ${r.status}`);
+    err.status = r.status;
+    throw err;
+  }
+  return r;
+}
+
+// The workflows saved in ComfyUI, each flagged with whether GENie already holds an
+// imported copy and whether ComfyUI's has been saved again since.
+app.get("/api/comfy/saved-workflows", async (req, res) => {
+  let entries;
+  try {
+    const r = await comfyUserdata("?dir=workflows&recurse=true&full_info=true");
+    entries = await r.json();
+  } catch (err) {
+    // ComfyUI answers 404 when nothing has ever been saved there.
+    if (err.status === 404) return res.json({ code: 200, msg: "success", data: [] });
+    return res.status(502).json({
+      code: 502,
+      offline: true,
+      msg: `Couldn't reach ComfyUI at ${COMFYUI_URL} — is it running?`,
+    });
+  }
+  const data = [];
+  for (const e of Array.isArray(entries) ? entries : []) {
+    const p = typeof e === "string" ? e : e?.path;
+    const target = comfyImportTarget(p);
+    if (!target) continue;
+    let importedAt = null;
+    try {
+      importedAt = fs.statSync(target.abs).mtimeMs;
+    } catch {
+      /* not imported */
+    }
+    const modified = Number(e?.modified) || null;
+    data.push({
+      path: target.source,
+      name: target.source.replace(/\.json$/i, ""),
+      modified,
+      imported: importedAt != null,
+      importedAt,
+      file: target.file,
+      // Saved again in ComfyUI after GENie took its copy.
+      changed: importedAt != null && modified != null && modified > importedAt,
+    });
+  }
+  data.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
+  res.json({ code: 200, msg: "success", data });
+});
+
+// Copy one saved workflow into GENie. Body: { path, overwrite? }. Refuses (422) when
+// the workflow can't be converted faithfully, and (409) rather than silently replace
+// an earlier import.
+app.post("/api/comfy/import-workflow", async (req, res) => {
+  const target = comfyImportTarget(req.body?.path);
+  if (!target)
+    return res.status(400).json({ code: 400, msg: "Not a workflow path" });
+  if (fs.existsSync(target.abs) && !req.body?.overwrite)
+    return res.status(409).json({
+      code: 409,
+      exists: true,
+      msg: "Already imported — import again to replace GENie's copy.",
+    });
+
+  let graph, objectInfo;
+  try {
+    const r = await comfyUserdata(`/${encodeURIComponent(`workflows/${target.source}`)}`);
+    graph = await r.json();
+    objectInfo = await getObjectInfo();
+  } catch (err) {
+    const gone = err.status === 404;
+    return res.status(gone ? 404 : 502).json({
+      code: gone ? 404 : 502,
+      msg: gone
+        ? "That workflow is no longer in ComfyUI."
+        : `Couldn't read the workflow from ComfyUI (${err.message}).`,
+    });
+  }
+
+  let result;
+  try {
+    result = graphToApi(graph, objectInfo);
+  } catch (err) {
+    console.error("Workflow import failed:", err);
+    result = { prompt: {}, warnings: [], errors: [`Couldn't convert it (${err.message}).`] };
+  }
+  if (result.errors.length)
+    return res.status(422).json({
+      code: 422,
+      msg: "This workflow can't be imported.",
+      errors: result.errors,
+      warnings: result.warnings,
+    });
+
+  try {
+    const dir = path.dirname(target.abs);
+    fs.mkdirSync(dir, { recursive: true });
+    // The folder must really be inside workflows/ (a symlinked comfyui/ could point out).
+    const rel = path.relative(fs.realpathSync(WORKFLOWS_DIR), fs.realpathSync(dir));
+    if (rel.startsWith("..") || path.isAbsolute(rel))
+      return res.status(400).json({ code: 400, msg: "Import folder is outside workflows/" });
+    fs.writeFileSync(target.abs, JSON.stringify(result.prompt, null, 2));
+  } catch (err) {
+    console.error("Failed to save imported workflow:", err);
+    return res.status(500).json({ code: 500, msg: "Couldn't save the imported workflow" });
+  }
+  res.json({
+    code: 200,
+    msg: "imported",
+    data: {
+      file: target.file,
+      name: target.file.replace(/\.json$/i, ""),
+      nodes: Object.keys(result.prompt).length,
+      warnings: result.warnings,
+    },
+  });
 });
 
 // Enriched token metadata for one workflow: combo tokens get their installed-file
@@ -2201,7 +2352,7 @@ const PREVIEW_EVENT_IMAGE = 1;
 const PREVIEW_MIME = { 1: "image/jpeg", 2: "image/png" };
 const PREVIEW_MAX_PROMPTS = 8; // ~30-80 KB each — a hard ceiling on this cache
 // promptId -> { buf, mime, seq, updatedAt, anim? }. `anim` exists only on an animated
-// run: { length, rate, every, frames: Map(index -> { buf, seq }) }.
+// run: { length, frames: Map(index -> { buf, seq }) }.
 const comfyPreview = new Map();
 let previewSeq = 0;
 
@@ -2211,16 +2362,12 @@ let previewSeq = 0;
 // out [4B type=1][4B 1][4B 1][4B frame index][16B node id][JPEG] (ComfyUI prepends
 // the event type to VHS's own two-word header). A plain ComfyUI frame has its JPEG
 // at byte 8, so the two are told apart by where the image starts.
+// Every frame is kept here; which of them a tab shows (every nth) and how fast it
+// loops them are that tab's own settings, so nothing about a run's preview is lost
+// when this server restarts mid-run.
 const VHS_FRAME_INDEX = 12;
 const VHS_FRAME_HEADER = 32;
 const PREVIEW_MAX_FRAMES = 512; // per prompt — far above any real latent frame count
-const PREVIEW_EVERY_MAX = 16;
-const comfyPreviewEvery = new Map(); // promptId -> keep every nth latent frame
-
-function previewEvery(v) {
-  const n = Math.floor(Number(v));
-  return Number.isFinite(n) && n > 0 ? Math.min(n, PREVIEW_EVERY_MAX) : 0;
-}
 
 // extra_data that switches VideoHelperSuite's animated previews on for one prompt. It
 // only reads these two keys; rate 0 = its own per-model default (real-time playback).
@@ -2237,12 +2384,7 @@ function previewAnim(pid) {
     comfyPreview.set(pid, entry);
     if (comfyPreview.size > PREVIEW_MAX_PROMPTS) pruneComfyPreview(true);
   }
-  entry.anim ||= {
-    length: 0,
-    rate: 8,
-    every: comfyPreviewEvery.get(pid) || 1,
-    frames: new Map(),
-  };
+  entry.anim ||= { length: 0, frames: new Map() };
   return entry;
 }
 
@@ -2251,9 +2393,7 @@ function previewAnim(pid) {
 function beginPreviewAnim(pid, data) {
   const { anim } = previewAnim(pid);
   const length = Math.floor(Number(data?.length));
-  const rate = Number(data?.rate);
   if (Number.isFinite(length) && length > 0) anim.length = length;
-  if (Number.isFinite(rate) && rate > 0) anim.rate = rate;
   for (const i of anim.frames.keys())
     if (anim.length && i >= anim.length) anim.frames.delete(i);
 }
@@ -2273,7 +2413,6 @@ function capturePreview(data) {
     if (index >= PREVIEW_MAX_FRAMES) return;
     const entry = previewAnim(pid);
     const { anim } = entry;
-    if (index % anim.every) return; // not one of the frames this run keeps
     const buf = Buffer.from(data, VHS_FRAME_HEADER);
     anim.frames.set(index, { buf, seq: ++previewSeq });
     // The newest frame doubles as the still, for a client that asks without an index.
@@ -2380,7 +2519,6 @@ function ensureComfyWs() {
       // or failed run drops one.
       if (data?.prompt_id && type !== "executed") {
         comfyPreview.delete(data.prompt_id);
-        comfyPreviewEvery.delete(data.prompt_id);
       }
     }
   });
@@ -2640,11 +2778,12 @@ app.post("/api/comfy/generate", async (req, res) => {
     llm.yieldForGeneration("a generation started").catch(() => {}),
     new Promise((r) => setTimeout(r, 30000)),
   ]);
-  // Animated preview: keep every nth latent frame (0 = the usual single frame). It
-  // always samples with latent2rgb — VideoHelperSuite decodes every frame on each
-  // step, and its TAESD path isn't written for ComfyUI's video TAEs.
+  // Animated preview: any `previewEvery` above 0 asks for one (0 = the usual single
+  // frame; which frames a tab shows is its own business). It always samples with
+  // latent2rgb — VideoHelperSuite decodes every frame on each step, and its TAESD
+  // path isn't written for ComfyUI's video TAEs.
   const method = comfyPreviewMethod(previewMethod);
-  const every = method === "none" ? 0 : previewEvery(previewEveryReq);
+  const every = method !== "none" && Number(previewEveryReq) > 0;
   try {
     const r = await fetch(`${COMFYUI_URL}/prompt`, {
       method: "POST",
@@ -2677,12 +2816,6 @@ app.post("/api/comfy/generate", async (req, res) => {
         .json({ code: r.status || 502, msg: formatComfyPromptError(body) });
     }
     comfyProgressPasses.set(body.prompt_id, passes);
-    if (every) {
-      comfyPreviewEvery.set(body.prompt_id, every);
-      // Bounded like the frame cache: a run cancelled while queued never reports back.
-      if (comfyPreviewEvery.size > 200)
-        comfyPreviewEvery.delete(comfyPreviewEvery.keys().next().value);
-    }
     // Create the pending History entry now, so the server-side sweep can finish the
     // run even if the client never makes a second call.
     let historyId = null;
@@ -3293,16 +3426,7 @@ const PREVIEW_CLIENT_MAX = 20; // a runaway tab/proxy can't grow this without bo
 function previewPing(promptId, seq, index) {
   const anim = index == null ? null : comfyPreview.get(promptId)?.anim;
   return `data: ${JSON.stringify(
-    anim ?
-      {
-        promptId,
-        seq,
-        index,
-        length: anim.length,
-        rate: anim.rate,
-        every: anim.every,
-      }
-    : { promptId, seq },
+    anim ? { promptId, seq, index, length: anim.length } : { promptId, seq },
   )}\n\n`;
 }
 

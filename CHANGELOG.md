@@ -12,6 +12,14 @@ heading for that version with the date, commit, then tag the commit `vX.Y.Z`.
 
 ### Added
 
+- **Import from ComfyUI.** *Import a workflow from ComfyUI…* under the Model picker lists
+  the workflows saved in ComfyUI's editor and copies a chosen one into
+  `workflows/comfyui/`, converting it from the editor's graph format to API format
+  (subgraphs, bypassed/muted nodes, Reroute and Get/Set nodes included) — no manual
+  *Export (API)*. It's a one-way copy: ComfyUI's workflow is never modified and the copy
+  doesn't follow later edits (the list flags one that changed; import again to refresh).
+  A workflow that can't be converted faithfully — a node pack that isn't installed, say —
+  is refused with the reason.
 - **LoRA info.** Each LoRA row has an ⓘ button (between the strength and ×) that opens
   your notes on that LoRA file: display name, description, URL (with an open link) and
   trigger phrases. Saved server-side in `settings/loras.json`, keyed by filename, so

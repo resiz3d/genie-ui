@@ -157,9 +157,16 @@ let histTagFilter = (() => {
 // preview stream entirely.
 const PREVIEW_KEY = "genie_preview_method";
 let previewMethod = getPref(PREVIEW_KEY) || "auto";
-// Animated preview for video runs: keep every nth latent frame; 0 = first frame only.
+// Animated preview for video runs: loop every nth preview frame (0 = first frame
+// only, 1 = all of them) at previewFps. Both apply in this tab as they change, mid-run
+// included; only whether a run is animated at all is fixed when it's queued.
+// "All" is not every frame of the finished video: the sampler works on a
+// time-compressed clip, about one frame per 4 of the video's (60 for a 240-frame
+// video), and the rest only exist once it's decoded at the end.
 const PREVIEW_EVERY_KEY = "genie_preview_every";
 let previewEvery = Number(getPref(PREVIEW_EVERY_KEY)) || 0;
+const PREVIEW_FPS_KEY = "genie_preview_fps";
+let previewFps = Number(getPref(PREVIEW_FPS_KEY)) || 6;
 
 const POLL_INTERVAL_MS = 5000;
 
@@ -1467,15 +1474,28 @@ previewMethodEl.addEventListener("change", () => {
   previewMethod = previewMethodEl.value;
   setPref(PREVIEW_KEY, previewMethod);
   if (previewMethod === "off") closePreviewStream();
-  previewEveryEl.disabled = previewMethod === "off";
+  syncPreviewAnimControls();
 });
 const previewEveryEl = document.getElementById("previewEvery");
+const previewFpsEl = document.getElementById("previewFps");
+function syncPreviewAnimControls() {
+  previewEveryEl.disabled = previewMethod === "off";
+  previewFpsEl.disabled = previewMethod === "off" || !previewEvery;
+}
 previewEveryEl.value = String(previewEvery);
-if (previewEveryEl.selectedIndex < 0) previewEveryEl.value = "0";
-previewEveryEl.disabled = previewMethod === "off";
+// A value from an earlier version of this selector: still animated, so all frames.
+if (previewEveryEl.selectedIndex < 0) previewEveryEl.value = String((previewEvery = 1));
+previewFpsEl.value = String(previewFps);
+if (previewFpsEl.selectedIndex < 0) previewFpsEl.value = String((previewFps = 6));
+syncPreviewAnimControls();
 previewEveryEl.addEventListener("change", () => {
   previewEvery = Number(previewEveryEl.value) || 0;
   setPref(PREVIEW_EVERY_KEY, previewEvery);
+  syncPreviewAnimControls();
+});
+previewFpsEl.addEventListener("change", () => {
+  previewFps = Number(previewFpsEl.value) || 6;
+  setPref(PREVIEW_FPS_KEY, previewFps);
 });
 
 // Above the cards: ⏹ Cancel all queued (the runs still waiting in ComfyUI's queue —
@@ -4529,6 +4549,225 @@ loraBrowserModal.addEventListener("click", (e) => {
 });
 loraBrowserModal.addEventListener("keydown", (e) => {
   if (e.key === "Escape") closeLoraBrowser();
+});
+
+// --- Import from ComfyUI -------------------------------------------------------
+// Lists the workflows saved in ComfyUI's own editor and copies a chosen one into
+// GENie (the server converts it — see /api/comfy/import-workflow). One-way: nothing
+// is written back to ComfyUI, and an imported copy doesn't track later edits there.
+const comfyImportModal = document.getElementById("comfyImportModal");
+const comfyImportList = document.getElementById("comfyImportList");
+const comfyImportSearch = document.getElementById("comfyImportSearch");
+let comfySavedWorkflows = [];
+// path → { ok, lines[] } from this session's import attempts, so a re-render (typing
+// in the filter) keeps each row's outcome on screen.
+const comfyImportResults = new Map();
+// Folder paths ("Adoptables/", "A/B/") the user has expanded in the tree.
+const comfyImportOpenFolders = new Set();
+
+function comfyImportMessage(text, isError = false) {
+  const p = document.createElement("p");
+  p.className = isError ? "comfy-import-empty comfy-import-error" : "muted comfy-import-empty";
+  p.textContent = text;
+  comfyImportList.replaceChildren(p);
+}
+
+async function openComfyImport() {
+  comfyImportSearch.value = "";
+  comfyImportResults.clear();
+  comfyImportMessage("Asking ComfyUI for its saved workflows…");
+  show(comfyImportModal);
+  comfyImportSearch.focus();
+  await loadComfySavedWorkflows();
+}
+
+async function loadComfySavedWorkflows() {
+  try {
+    const res = await fetch("/api/comfy/saved-workflows");
+    const json = await res.json();
+    if (!res.ok) return comfyImportMessage(json.msg || "Couldn't list ComfyUI's workflows.", true);
+    comfySavedWorkflows = json.data || [];
+  } catch {
+    return comfyImportMessage("Couldn't reach the GENie server.", true);
+  }
+  renderComfyImport();
+}
+
+function renderComfyImport() {
+  if (!comfySavedWorkflows.length)
+    return comfyImportMessage(
+      "ComfyUI has no saved workflows yet — save one in its editor and it will show up here.",
+    );
+  const q = comfyImportSearch.value.trim().toLowerCase();
+  const items = comfySavedWorkflows.filter((w) => !q || w.name.toLowerCase().includes(q));
+  if (!items.length) return comfyImportMessage("Nothing matches that filter.");
+
+  const makeCard = (w) => {
+      const card = document.createElement("div");
+      card.className = "lora-card";
+      const head = document.createElement("div");
+      head.className = "lora-card-head";
+      const title = document.createElement("div");
+      title.className = "lora-card-title";
+      const name = document.createElement("strong");
+      name.textContent = w.name.split("/").pop(); // its folder is the tree above it
+      title.appendChild(name);
+      if (w.imported) {
+        const chip = document.createElement("span");
+        chip.className = w.changed ? "lora-from lora-overridden" : "lora-from";
+        chip.textContent = w.changed ? "Changed in ComfyUI since import" : "Imported";
+        title.appendChild(chip);
+      }
+      const actions = document.createElement("div");
+      actions.className = "lora-card-actions";
+      if (w.imported) {
+        const use = document.createElement("button");
+        use.type = "button";
+        use.className = "btn-secondary";
+        use.textContent = "Use";
+        use.title = "Select GENie's copy in the Model picker";
+        use.addEventListener("click", () => useImportedWorkflow(w.file));
+        actions.appendChild(use);
+      }
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.textContent = w.imported ? "Import again" : "Import";
+      btn.addEventListener("click", () => importComfyWorkflow(w, btn));
+      actions.appendChild(btn);
+      head.append(title, actions);
+      card.appendChild(head);
+
+      const result = comfyImportResults.get(w.path);
+      if (result) {
+        const box = document.createElement("div");
+        box.className = result.ok ? "comfy-import-result" : "comfy-import-result comfy-import-error";
+        const lead = document.createElement("div");
+        lead.textContent = result.lead;
+        box.appendChild(lead);
+        if (result.lines.length) {
+          const ul = document.createElement("ul");
+          for (const line of result.lines) {
+            const li = document.createElement("li");
+            li.textContent = line;
+            ul.appendChild(li);
+          }
+          box.appendChild(ul);
+        }
+        card.appendChild(box);
+      }
+      return card;
+  };
+
+  // Lay the list out as ComfyUI's own Workflows panel does: folders first, each
+  // collapsible with a count of what's inside, then the loose workflows.
+  const root = { path: "", dirs: new Map(), files: [] };
+  for (const w of items) {
+    let node = root;
+    for (const seg of w.name.split("/").slice(0, -1)) {
+      if (!node.dirs.has(seg))
+        node.dirs.set(seg, { path: `${node.path}${seg}/`, dirs: new Map(), files: [] });
+      node = node.dirs.get(seg);
+    }
+    node.files.push(w);
+  }
+  const countIn = (node) =>
+    node.files.length + [...node.dirs.values()].reduce((n, d) => n + countIn(d), 0);
+  const byName = (a, b) => a.localeCompare(b, undefined, { sensitivity: "base", numeric: true });
+  const renderNode = (node) => [
+    ...[...node.dirs.entries()]
+      .sort((a, b) => byName(a[0], b[0]))
+      .map(([name, dir]) => {
+        const folder = document.createElement("details");
+        folder.className = "comfy-import-folder";
+        // A filter shows its matches wherever they are; otherwise folders stay as
+        // the user left them.
+        folder.open = !!q || comfyImportOpenFolders.has(dir.path);
+        const summary = document.createElement("summary");
+        const label = document.createElement("span");
+        label.className = "comfy-import-folder-name";
+        label.textContent = name;
+        const count = document.createElement("span");
+        count.className = "lora-from";
+        count.textContent = countIn(dir);
+        summary.append(label, count);
+        const children = document.createElement("div");
+        children.className = "comfy-import-children";
+        children.append(...renderNode(dir));
+        folder.append(summary, children);
+        folder.addEventListener("toggle", () => {
+          if (comfyImportSearch.value.trim()) return; // opened by the filter, not the user
+          if (folder.open) comfyImportOpenFolders.add(dir.path);
+          else comfyImportOpenFolders.delete(dir.path);
+        });
+        return folder;
+      }),
+    ...node.files
+      .sort((a, b) => byName(a.name, b.name))
+      .map(makeCard),
+  ];
+  comfyImportList.replaceChildren(...renderNode(root));
+}
+
+async function importComfyWorkflow(w, btn) {
+  if (
+    w.imported &&
+    !confirm(
+      `Replace GENie's copy of “${w.name}” with the version saved in ComfyUI now?\n\n` +
+        "Your ComfyUI workflow isn't touched. Settings you've already picked for it in GENie are kept.",
+    )
+  )
+    return;
+  btn.disabled = true;
+  btn.textContent = "Importing…";
+  let result;
+  try {
+    const res = await fetch("/api/comfy/import-workflow", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: w.path, overwrite: !!w.imported }),
+    });
+    const json = await res.json();
+    if (res.ok) {
+      const warnings = json.data.warnings || [];
+      result = {
+        ok: true,
+        lead:
+          `Imported as “${json.data.name}” (${json.data.nodes} nodes).` +
+          (warnings.length ? " Worth checking before you run it:" : ""),
+        lines: warnings,
+      };
+      w.imported = true;
+      w.changed = false;
+      w.file = json.data.file;
+    } else {
+      result = { ok: false, lead: json.msg || "Import failed.", lines: json.errors || [] };
+    }
+  } catch {
+    result = { ok: false, lead: "Couldn't reach the GENie server.", lines: [] };
+  }
+  comfyImportResults.set(w.path, result);
+  if (result.ok) await loadWorkflows(); // the copy is now a pickable model
+  renderComfyImport();
+}
+
+function useImportedWorkflow(file) {
+  const value = `comfy:${file}`;
+  if (![...modelSelect.options].some((o) => o.value === value && !o.disabled)) return;
+  modelSelect.value = value;
+  modelSelect.dispatchEvent(new Event("change", { bubbles: true }));
+  hide(comfyImportModal);
+}
+
+document.getElementById("comfyImportOpen").addEventListener("click", openComfyImport);
+comfyImportSearch.addEventListener("input", renderComfyImport);
+document
+  .getElementById("comfyImportClose")
+  .addEventListener("click", () => hide(comfyImportModal));
+comfyImportModal.addEventListener("click", (e) => {
+  if (e.target === comfyImportModal) hide(comfyImportModal);
+});
+comfyImportModal.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") hide(comfyImportModal);
 });
 
 function makeComfyLoraControl(loraOptions, offline, workflowLoras = []) {
@@ -10247,6 +10486,11 @@ function createLiveStatus(job) {
     for (const f of animFrames.values()) URL.revokeObjectURL(f.img.src);
     animFrames.clear();
   };
+  const animStart = () => {
+    clearInterval(animTimer);
+    animFps = previewFps;
+    animTimer = setInterval(animTick, 1000 / animFps);
+  };
   const animTick = () => {
     // The card is re-parented on every History refresh, so only a card that stays
     // off the page (the run finished and was re-rendered) ends the loop.
@@ -10255,7 +10499,13 @@ function createLiveStatus(job) {
       return;
     }
     animGone = 0;
-    const order = [...animFrames.keys()].sort((a, b) => a - b);
+    if (animFps !== previewFps) animStart(); // the fps selector moved
+    // Every nth frame, by the selector as it stands now. A run queued as animated
+    // while the selector has since gone back to "First frame" shows them all.
+    const every = Math.max(1, previewEvery);
+    const order = [...animFrames.keys()]
+      .filter((i) => i % every === 0)
+      .sort((a, b) => a - b);
     if (!order.length) return;
     animAt = order.find((i) => i > animAt) ?? order[0];
     previewImg.src = animFrames.get(animAt).img.src;
@@ -10361,8 +10611,8 @@ function createLiveStatus(job) {
     // renderHistory's re-parenting keeps it on screen across refreshes.
     // One frame of an animated preview (a video run). Frames are held as blobs — the
     // loop shows each many times, and /api/comfy/preview is no-store — and refreshed
-    // in place as later sampler steps resend them. `fps` is the clip's real-time rate.
-    async setPreviewFrame(index, seq, url, fps) {
+    // in place as later sampler steps resend them.
+    async setPreviewFrame(index, seq, url) {
       if (animFrames.get(index)?.seq > seq) return;
       let blobUrl;
       try {
@@ -10381,12 +10631,7 @@ function createLiveStatus(job) {
         // The frame on screen keeps its pixels after its URL is revoked.
         if (old) URL.revokeObjectURL(old.img.src);
         if (!previewImg) this.setPreview(blobUrl);
-        fps = Math.min(30, Math.max(1, fps || 8));
-        if (!animTimer || fps !== animFps) {
-          clearInterval(animTimer);
-          animFps = fps;
-          animTimer = setInterval(animTick, 1000 / fps);
-        }
+        if (!animTimer) animStart();
       };
       img.src = blobUrl;
     },
@@ -10534,15 +10779,10 @@ function ensurePreviewStream() {
     );
     if (!live) return;
     const url = `/api/comfy/preview?promptId=${encodeURIComponent(d.promptId)}&seq=${d.seq}`;
-    // An animated run pings once per latent frame; keeping every nth frame plays at
-    // 1/n the rate, so the loop still runs in real time.
+    // An animated run pings once per preview frame. Every frame is fetched, so
+    // moving the nth-frame selector mid-run has them all to choose from.
     if (Number.isInteger(d.index))
-      live.setPreviewFrame(
-        d.index,
-        d.seq,
-        `${url}&index=${d.index}`,
-        (d.rate || 8) / (d.every || 1),
-      );
+      live.setPreviewFrame(d.index, d.seq, `${url}&index=${d.index}`);
     else live.setPreview(url);
   });
   es.addEventListener("error", () => {

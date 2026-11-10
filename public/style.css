@@ -2271,6 +2271,12 @@ img.zoomable {
   font-size: 0.9rem;
   font-weight: 400;
 }
+/* Three selects in a row: on a narrow phone they wrap rather than run off the edge. */
+#previewMethodField,
+.quick-generate .queue-count:has(select) {
+  flex-wrap: wrap;
+  min-width: 0;
+}
 .queue-count input {
   width: 3.4rem;
   padding: 0.4rem 0.5rem;
@@ -5921,4 +5927,65 @@ textarea.hidden + .llm-qrev {
   .chat-input {
     font-size: inherit;
   }
+}
+
+/* --- Import from ComfyUI ---------------------------------------------------- */
+.comfy-import-open {
+  align-self: flex-start;
+  font-size: 0.8rem;
+  padding: 0.35rem 0.7rem;
+}
+.comfy-import-note {
+  font-size: 0.85rem;
+}
+.comfy-import-empty {
+  margin: 0.5rem 0;
+}
+.comfy-import-result {
+  font-size: 0.82rem;
+  color: var(--muted);
+  word-break: break-word;
+}
+.comfy-import-result ul {
+  margin: 0.25rem 0 0;
+  padding-left: 1.1rem;
+}
+.comfy-import-error {
+  color: var(--error);
+}
+.comfy-import-folder > summary {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.45rem 0.25rem;
+  cursor: pointer;
+  list-style: none;
+  border-radius: 6px;
+}
+.comfy-import-folder > summary::-webkit-details-marker {
+  display: none;
+}
+.comfy-import-folder > summary::before {
+  content: "›";
+  width: 0.8rem;
+  color: var(--muted);
+  transition: transform 0.12s;
+}
+.comfy-import-folder[open] > summary::before {
+  transform: rotate(90deg);
+}
+.comfy-import-folder > summary:hover {
+  background: var(--bg);
+}
+.comfy-import-folder-name {
+  font-weight: 600;
+  word-break: break-word;
+}
+.comfy-import-children {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0.25rem 0 0.35rem 0.6rem;
+  padding-left: 0.6rem;
+  border-left: 1px solid var(--border);
 }

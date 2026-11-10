@@ -14,6 +14,10 @@ with `COMFYUI_URL` in `.env`; defaults to `http://127.0.0.1:8188`).
   *Settings → Enable Dev mode Options* and use **Save (API Format)**.) The ordinary
   *Export*/*Save* writes the graph format, which GENie can't run.
 
+- **Imports.** *Import a workflow from ComfyUI…* under the Model picker copies a
+  workflow saved in ComfyUI's editor into `comfyui/` here, converting it for you. It's a
+  one-way copy — see [Importing from ComfyUI](../docs/COMFYUI.md#importing-from-comfyui).
+
 Nothing to author: GENie **recognizes** the nodes in a raw export and builds the
 form from them. Adding support for a new node type is a small file in
 [`../node_types/`](../node_types/) — see its

@@ -14,7 +14,10 @@ nodes in it and builds a form automatically.
    COMFYUI_URL=http://127.0.0.1:8188
    ```
 
-2. **Export the workflow from ComfyUI in API format** and drop the `.json` into the
+2. **Bring a workflow in.** The quick way is **Import a workflow from ComfyUI…** under
+   the Model picker, which copies one you've saved in ComfyUI's editor — see
+   [Importing from ComfyUI](#importing-from-comfyui). Or do it by hand:
+   **export the workflow from ComfyUI in API format** and drop the `.json` into the
    `workflows/` folder (change the location with `WORKFLOWS_DIR` in `.env`).
 
    In ComfyUI, with your workflow open, choose **File → Export (API)** and save the
@@ -40,6 +43,46 @@ nodes in it and builds a form automatically.
    turns it into a grid of frames across the clip. See
    [Filmstrip previews](#filmstrip-previews) below. GENie doesn't require it — skip this
    and everything else works exactly the same.
+
+## Importing from ComfyUI
+
+**Import a workflow from ComfyUI…** (under the Model picker) lists every workflow saved
+in ComfyUI's editor. Pick one and GENie reads it over ComfyUI's API, converts it from
+the editor's graph format to API format, and saves the result as
+`workflows/comfyui/<name>.json` — it then appears in the Model dropdown as
+`comfyui/<name>` and behaves like any other workflow.
+
+**It is a one-way copy.**
+
+- GENie never writes to ComfyUI. Your saved workflow is read, not changed.
+- The copy doesn't follow later edits. Save the workflow again in ComfyUI and the list
+  marks it **Changed in ComfyUI since import**; **Import again** replaces GENie's copy
+  (the settings you've picked for it in GENie are kept).
+- Nothing you change in GENie goes back to ComfyUI.
+
+ComfyUI only does this conversion in the browser, so GENie redoes it
+([`comfy-graph.js`](../comfy-graph.js)) from the saved graph plus ComfyUI's
+`/object_info`: muted nodes are dropped, bypassed nodes are routed around, Reroute /
+Get / Set / Primitive nodes are resolved away, and subgraphs are flattened. An import is
+**refused, with the reason,** rather than guessed at when:
+
+- it uses a node type that isn't installed in ComfyUI (install the pack, then import);
+- it uses legacy *group nodes* (convert them to subgraphs in ComfyUI first).
+
+It imports **with a note** when something was converted but deserves a look:
+
+- a node's saved settings don't line up with the installed version of that node;
+- a node keeps settings in editor-only widgets GENie can't read;
+- a prompt uses ComfyUI's `{a|b}` random-choice syntax, which only the editor expands —
+  GENie sends the text as written.
+
+Two editor behaviours are handled for you: a `%date:yyyy-MM-dd%` filename pattern becomes
+the server's own `%year%-%month%-%day%`, and inputs a node gained after the workflow
+was saved take their defaults. Workflows that rely on extensions which rewire the graph
+at queue time (*Use Everywhere*, for one) are not rewired here — export those by hand.
+
+[Continuations](#continuations--carry-state-between-runs) still need their marker
+added to the imported file, since an integer widget can't hold it in ComfyUI.
 
 ## Controls — from node recognition
 
