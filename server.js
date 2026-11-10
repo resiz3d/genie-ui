@@ -2141,8 +2141,9 @@ function formatComfyExecError(entry) {
 // connection and remember the latest {value,max} per prompt so /api/comfy/status
 // can report a % while a run is in flight. The socket is opened lazily when a run
 // is generated/polled, and the next poll reconnects it if it dropped.
+const COMFY_CLIENT_ID = "kie-seedance-ui";
 const COMFY_WS_URL =
-  COMFYUI_URL.replace(/^http/i, "ws") + "/ws?clientId=kie-seedance-ui";
+  COMFYUI_URL.replace(/^http/i, "ws") + `/ws?clientId=${COMFY_CLIENT_ID}`;
 let comfyWs = null;
 let comfyWsConnecting = false;
 let comfyCurrentPrompt = null;
@@ -2156,8 +2157,66 @@ const comfyProgress = new Map(); // promptId -> { value, max, updatedAt }
 const PREVIEW_EVENT_IMAGE = 1;
 const PREVIEW_MIME = { 1: "image/jpeg", 2: "image/png" };
 const PREVIEW_MAX_PROMPTS = 8; // ~30-80 KB each — a hard ceiling on this cache
-const comfyPreview = new Map(); // promptId -> { buf, mime, seq, updatedAt }
+// promptId -> { buf, mime, seq, updatedAt, anim? }. `anim` exists only on an animated
+// run: { length, rate, every, frames: Map(index -> { buf, seq }) }.
+const comfyPreview = new Map();
 let previewSeq = 0;
+
+// Animated previews (video runs). VideoHelperSuite, when the prompt asks for it (see
+// vhsPreviewExtra), replaces the single first-frame preview with one JPEG per latent
+// frame: a JSON `VHS_latentpreview` { length, rate } event, then binary frames laid
+// out [4B type=1][4B 1][4B 1][4B frame index][16B node id][JPEG] (ComfyUI prepends
+// the event type to VHS's own two-word header). A plain ComfyUI frame has its JPEG
+// at byte 8, so the two are told apart by where the image starts.
+const VHS_FRAME_INDEX = 12;
+const VHS_FRAME_HEADER = 32;
+const PREVIEW_MAX_FRAMES = 512; // per prompt — far above any real latent frame count
+const PREVIEW_EVERY_MAX = 16;
+const comfyPreviewEvery = new Map(); // promptId -> keep every nth latent frame
+
+function previewEvery(v) {
+  const n = Math.floor(Number(v));
+  return Number.isFinite(n) && n > 0 ? Math.min(n, PREVIEW_EVERY_MAX) : 0;
+}
+
+// extra_data that switches VideoHelperSuite's animated previews on for one prompt. It
+// only reads these two keys; rate 0 = its own per-model default (real-time playback).
+function vhsPreviewExtra() {
+  return {
+    workflow: { extra: { VHS_latentpreview: true, VHS_latentpreviewrate: 0 } },
+  };
+}
+
+function previewAnim(pid) {
+  let entry = comfyPreview.get(pid);
+  if (!entry) {
+    entry = { buf: null, mime: "image/jpeg", seq: 0, updatedAt: Date.now() };
+    comfyPreview.set(pid, entry);
+    if (comfyPreview.size > PREVIEW_MAX_PROMPTS) pruneComfyPreview(true);
+  }
+  entry.anim ||= {
+    length: 0,
+    rate: 8,
+    every: comfyPreviewEvery.get(pid) || 1,
+    frames: new Map(),
+  };
+  return entry;
+}
+
+// A sampler announcing its animated preview. A second sampler in the same run (Wan
+// 2.2's high/low pair) announces again: its frames overwrite the first's in place.
+function beginPreviewAnim(pid, data) {
+  const { anim } = previewAnim(pid);
+  const length = Math.floor(Number(data?.length));
+  const rate = Number(data?.rate);
+  if (Number.isFinite(length) && length > 0) anim.length = length;
+  if (Number.isFinite(rate) && rate > 0) anim.rate = rate;
+  for (const i of anim.frames.keys())
+    if (anim.length && i >= anim.length) anim.frames.delete(i);
+}
+
+const isJpegAt = (view, at) =>
+  view.byteLength > at + 1 && view.getUint16(at) === 0xffd8;
 
 function capturePreview(data) {
   if (!(data instanceof ArrayBuffer) || data.byteLength < 8) return;
@@ -2166,6 +2225,19 @@ function capturePreview(data) {
   const mime = PREVIEW_MIME[view.getUint32(4)];
   const pid = comfyCurrentPrompt;
   if (!mime || !pid) return;
+  if (!isJpegAt(view, 8) && isJpegAt(view, VHS_FRAME_HEADER)) {
+    const index = view.getUint32(VHS_FRAME_INDEX);
+    if (index >= PREVIEW_MAX_FRAMES) return;
+    const entry = previewAnim(pid);
+    const { anim } = entry;
+    if (index % anim.every) return; // not one of the frames this run keeps
+    const buf = Buffer.from(data, VHS_FRAME_HEADER);
+    anim.frames.set(index, { buf, seq: ++previewSeq });
+    // The newest frame doubles as the still, for a client that asks without an index.
+    Object.assign(entry, { buf, mime, seq: previewSeq, updatedAt: Date.now() });
+    broadcastPreview(pid, previewSeq, index);
+    return;
+  }
   // Buffer.from(arrayBuffer, 8) is a view, not a copy — the socket hands us a fresh
   // buffer per message, so there's nothing to clone.
   comfyPreview.set(pid, {
@@ -2234,6 +2306,9 @@ function ensureComfyWs() {
     llm.onComfyEvent(type); // a run started elsewhere takes the GPU back from the LLM
     if (type === "execution_start" || type === "executing") {
       if (data?.prompt_id) comfyCurrentPrompt = data.prompt_id;
+    } else if (type === "VHS_latentpreview") {
+      // Names no prompt, like the frames that follow it.
+      if (comfyCurrentPrompt) beginPreviewAnim(comfyCurrentPrompt, data);
     } else if (type === "progress") {
       const pid = data?.prompt_id || comfyCurrentPrompt;
       if (pid) comfyCurrentPrompt = pid; // the preview frame that follows belongs to this prompt
@@ -2253,8 +2328,10 @@ function ensureComfyWs() {
       if (data?.prompt_id) comfyProgress.delete(data.prompt_id);
       // Previews survive `executed` (that fires per output node) — only a finished
       // or failed run drops one.
-      if (data?.prompt_id && type !== "executed")
+      if (data?.prompt_id && type !== "executed") {
         comfyPreview.delete(data.prompt_id);
+        comfyPreviewEvery.delete(data.prompt_id);
+      }
     }
   });
 }
@@ -2390,6 +2467,7 @@ app.post("/api/comfy/generate", async (req, res) => {
     projectId,
     refVideoSeconds,
     previewMethod,
+    previewEvery: previewEveryReq,
     continueFrom,
     references: providedRefs,
     workflowMedia: mediaState,
@@ -2512,6 +2590,11 @@ app.post("/api/comfy/generate", async (req, res) => {
     llm.yieldForGeneration("a generation started").catch(() => {}),
     new Promise((r) => setTimeout(r, 30000)),
   ]);
+  // Animated preview: keep every nth latent frame (0 = the usual single frame). It
+  // always samples with latent2rgb — VideoHelperSuite decodes every frame on each
+  // step, and its TAESD path isn't written for ComfyUI's video TAEs.
+  const method = comfyPreviewMethod(previewMethod);
+  const every = method === "none" ? 0 : previewEvery(previewEveryReq);
   try {
     const r = await fetch(`${COMFYUI_URL}/prompt`, {
       method: "POST",
@@ -2521,9 +2604,20 @@ app.post("/api/comfy/generate", async (req, res) => {
       // ComfyUI's own web UI. Without one, preview frames are broadcast to every
       // socket — ours included. (ComfyUI applies the method to a process-global
       // setting, so it persists until the next prompt sets its own. Harmless.)
+      // An animated run is the exception and must name us: ComfyUI only tracks the
+      // executing node for a prompt that has a client_id, and VideoHelperSuite stamps
+      // that node on every frame — without one the sampler dies on a None node id.
+      // The cost is that ComfyUI's own web UI shows no progress for such a run.
       body: JSON.stringify({
         prompt: workflow,
-        extra_data: { preview_method: comfyPreviewMethod(previewMethod) },
+        extra_data:
+          every ?
+            {
+              preview_method: "latent2rgb",
+              extra_pnginfo: vhsPreviewExtra(),
+              client_id: COMFY_CLIENT_ID,
+            }
+          : { preview_method: method },
       }),
     });
     const body = await r.json().catch(() => ({}));
@@ -2533,6 +2627,12 @@ app.post("/api/comfy/generate", async (req, res) => {
         .json({ code: r.status || 502, msg: formatComfyPromptError(body) });
     }
     comfyProgressPasses.set(body.prompt_id, passes);
+    if (every) {
+      comfyPreviewEvery.set(body.prompt_id, every);
+      // Bounded like the frame cache: a run cancelled while queued never reports back.
+      if (comfyPreviewEvery.size > 200)
+        comfyPreviewEvery.delete(comfyPreviewEvery.keys().next().value);
+    }
     // Create the pending History entry now, so the server-side sweep can finish the
     // run even if the client never makes a second call.
     let historyId = null;
@@ -3096,8 +3196,26 @@ app.get("/api/comfy/stats", async (req, res) => {
 const previewClients = new Set();
 const PREVIEW_CLIENT_MAX = 20; // a runaway tab/proxy can't grow this without bound
 
-function broadcastPreview(promptId, seq) {
-  const line = `data: ${JSON.stringify({ promptId, seq })}\n\n`;
+// What a tab is told about one frame. An animated run's ping also carries the frame's
+// index and the clip's shape, so a tab that joins mid-run needs nothing else.
+function previewPing(promptId, seq, index) {
+  const anim = index == null ? null : comfyPreview.get(promptId)?.anim;
+  return `data: ${JSON.stringify(
+    anim ?
+      {
+        promptId,
+        seq,
+        index,
+        length: anim.length,
+        rate: anim.rate,
+        every: anim.every,
+      }
+    : { promptId, seq },
+  )}\n\n`;
+}
+
+function broadcastPreview(promptId, seq, index) {
+  const line = previewPing(promptId, seq, index);
   for (const res of previewClients) {
     try {
       res.write(line);
@@ -3122,8 +3240,12 @@ app.get("/api/comfy/preview-stream", (req, res) => {
   // Catch a late joiner up (a reload mid-run): without this the card stays blank
   // until the next sampler step, which on a video workflow is a long time.
   pruneComfyPreview();
-  for (const [pid, f] of comfyPreview)
-    res.write(`data: ${JSON.stringify({ promptId: pid, seq: f.seq })}\n\n`);
+  for (const [pid, f] of comfyPreview) {
+    if (f.anim)
+      for (const [index, fr] of f.anim.frames)
+        res.write(previewPing(pid, fr.seq, index));
+    else if (f.buf) res.write(previewPing(pid, f.seq));
+  }
   // Comment heartbeat: keeps idle proxies and socket timeouts from closing the stream.
   const beat = setInterval(() => {
     try {
@@ -3143,8 +3265,13 @@ app.get("/api/comfy/preview-stream", (req, res) => {
 // a valid (slightly newer) image instead of a 404.
 app.get("/api/comfy/preview", (req, res) => {
   const frame = comfyPreview.get(String(req.query.promptId || ""));
-  if (!frame) return res.status(404).end();
-  res.set("Cache-Control", "no-store").type(frame.mime).send(frame.buf);
+  // `index` picks one frame of an animated preview.
+  const buf =
+    req.query.index == null ?
+      frame?.buf
+    : frame?.anim?.frames.get(Number(req.query.index))?.buf;
+  if (!buf) return res.status(404).end();
+  res.set("Cache-Control", "no-store").type(frame.mime).send(buf);
 });
 
 // --- open the output folder in the OS file explorer -----------------------

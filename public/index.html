@@ -263,6 +263,13 @@
               <option value="taesd">Preview: sharp</option>
               <option value="off">Preview: off</option>
             </select>
+            <select id="previewEvery" title="Video runs: loop the frames as a preview clip instead of showing only the first. Fewer frames is lighter on a slow connection. Needs ComfyUI-VideoHelperSuite; always uses the fast preview.">
+              <option value="0">First frame</option>
+              <option value="1">Animated: all frames</option>
+              <option value="2">Animated: every 2nd</option>
+              <option value="3">Animated: every 3rd</option>
+              <option value="4">Animated: every 4th</option>
+            </select>
           </label>
           <span class="estimate" id="estimate"></span>
         </div>

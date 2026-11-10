@@ -157,6 +157,9 @@ let histTagFilter = (() => {
 // preview stream entirely.
 const PREVIEW_KEY = "genie_preview_method";
 let previewMethod = getPref(PREVIEW_KEY) || "auto";
+// Animated preview for video runs: keep every nth latent frame; 0 = first frame only.
+const PREVIEW_EVERY_KEY = "genie_preview_every";
+let previewEvery = Number(getPref(PREVIEW_EVERY_KEY)) || 0;
 
 const POLL_INTERVAL_MS = 5000;
 
@@ -1464,6 +1467,15 @@ previewMethodEl.addEventListener("change", () => {
   previewMethod = previewMethodEl.value;
   setPref(PREVIEW_KEY, previewMethod);
   if (previewMethod === "off") closePreviewStream();
+  previewEveryEl.disabled = previewMethod === "off";
+});
+const previewEveryEl = document.getElementById("previewEvery");
+previewEveryEl.value = String(previewEvery);
+if (previewEveryEl.selectedIndex < 0) previewEveryEl.value = "0";
+previewEveryEl.disabled = previewMethod === "off";
+previewEveryEl.addEventListener("change", () => {
+  previewEvery = Number(previewEveryEl.value) || 0;
+  setPref(PREVIEW_EVERY_KEY, previewEvery);
 });
 
 // Above the cards: ⏹ Cancel all queued (the runs still waiting in ComfyUI's queue —
@@ -5537,6 +5549,7 @@ async function queueComfyRun(
         projectId: job.projectId,
         refVideoSeconds: 0,
         previewMethod,
+        previewEvery,
         ...(cont ?
           {
             continueFrom: {
@@ -10074,6 +10087,31 @@ function createLiveStatus(job) {
 
   let previewImg = null;
   let previewToken = 0;
+  // Animated preview: decoded frames by latent-frame index, looped by a timer.
+  const animFrames = new Map(); // index -> { img, seq }
+  let animTimer = null;
+  let animFps = 0;
+  let animAt = -1; // index of the frame on screen
+  let animGone = 0; // ticks since the card left the page
+  const dropAnim = () => {
+    clearInterval(animTimer);
+    animTimer = null;
+    for (const f of animFrames.values()) URL.revokeObjectURL(f.img.src);
+    animFrames.clear();
+  };
+  const animTick = () => {
+    // The card is re-parented on every History refresh, so only a card that stays
+    // off the page (the run finished and was re-rendered) ends the loop.
+    if (!previewImg?.isConnected) {
+      if (++animGone * (1000 / animFps) > 5000) dropAnim();
+      return;
+    }
+    animGone = 0;
+    const order = [...animFrames.keys()].sort((a, b) => a - b);
+    if (!order.length) return;
+    animAt = order.find((i) => i > animAt) ?? order[0];
+    previewImg.src = animFrames.get(animAt).img.src;
+  };
   let baseStatus = "Generating…";
   let progInfo = null; // { value, max, pass, passes, perPass, stepInPass, anchorT, anchorValue }
   const progStartedAt = job.startedAt || Date.now();
@@ -10154,6 +10192,37 @@ function createLiveStatus(job) {
     },
     // Latest latent-preview frame. The <img> hangs off this controller's element, so
     // renderHistory's re-parenting keeps it on screen across refreshes.
+    // One frame of an animated preview (a video run). Frames are held as blobs — the
+    // loop shows each many times, and /api/comfy/preview is no-store — and refreshed
+    // in place as later sampler steps resend them. `fps` is the clip's real-time rate.
+    async setPreviewFrame(index, seq, url, fps) {
+      if (animFrames.get(index)?.seq > seq) return;
+      let blobUrl;
+      try {
+        const res = await fetch(url);
+        if (!res.ok) return;
+        blobUrl = URL.createObjectURL(await res.blob());
+      } catch {
+        return;
+      }
+      const img = new Image();
+      img.onerror = () => URL.revokeObjectURL(blobUrl);
+      img.onload = () => {
+        const old = animFrames.get(index);
+        if (old?.seq > seq) return URL.revokeObjectURL(blobUrl);
+        animFrames.set(index, { img, seq });
+        // The frame on screen keeps its pixels after its URL is revoked.
+        if (old) URL.revokeObjectURL(old.img.src);
+        if (!previewImg) this.setPreview(blobUrl);
+        fps = Math.min(30, Math.max(1, fps || 8));
+        if (!animTimer || fps !== animFps) {
+          clearInterval(animTimer);
+          animFps = fps;
+          animTimer = setInterval(animTick, 1000 / fps);
+        }
+      };
+      img.src = blobUrl;
+    },
     setPreview(url) {
       if (!previewImg) {
         previewImg = document.createElement("img");
@@ -10296,9 +10365,18 @@ function ensurePreviewStream() {
     const live = [...liveStatus.values()].find(
       (l) => l.isComfy && l.promptId === d.promptId,
     );
-    live?.setPreview(
-      `/api/comfy/preview?promptId=${encodeURIComponent(d.promptId)}&seq=${d.seq}`,
-    );
+    if (!live) return;
+    const url = `/api/comfy/preview?promptId=${encodeURIComponent(d.promptId)}&seq=${d.seq}`;
+    // An animated run pings once per latent frame; keeping every nth frame plays at
+    // 1/n the rate, so the loop still runs in real time.
+    if (Number.isInteger(d.index))
+      live.setPreviewFrame(
+        d.index,
+        d.seq,
+        `${url}&index=${d.index}`,
+        (d.rate || 8) / (d.every || 1),
+      );
+    else live.setPreview(url);
   });
   es.addEventListener("error", () => {
     // Per spec a non-2xx response closes the stream for good (signed out, or a server
