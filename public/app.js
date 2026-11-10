@@ -4658,18 +4658,40 @@ function renderComfyImport() {
       return card;
   };
 
-  // Lay the list out as ComfyUI's own Workflows panel does: folders first, each
-  // collapsible with a count of what's inside, then the loose workflows.
+  // Laid out as ComfyUI's own Workflows panel: folders first, then loose workflows.
+  comfyImportList.replaceChildren(
+    ...renderFolderTree(items, {
+      nameOf: (w) => w.name,
+      forceOpen: !!q, // a filter shows its matches wherever they are
+      openSet: comfyImportOpenFolders,
+      leaf: makeCard,
+    }),
+  );
+}
+
+// A collapsible folder tree from a flat list whose names are "/"-separated paths:
+// folders first (each with a count of what's inside), then the loose items, both
+// sorted by name. `leaf(item)` builds an item's element. `openSet` holds the folder
+// paths ("A/", "A/B/") the user has expanded and is kept up to date; `forceOpen`
+// expands everything without touching it (used while a filter is active).
+// `folders` lists folder paths to show even when empty; `folderExtra(summary, path)`
+// may add controls to a folder's header.
+function renderFolderTree(
+  items,
+  { nameOf, leaf, openSet, forceOpen = false, folders = [], folderExtra },
+) {
   const root = { path: "", dirs: new Map(), files: [] };
-  for (const w of items) {
+  const dirFor = (segs) => {
     let node = root;
-    for (const seg of w.name.split("/").slice(0, -1)) {
+    for (const seg of segs) {
       if (!node.dirs.has(seg))
         node.dirs.set(seg, { path: `${node.path}${seg}/`, dirs: new Map(), files: [] });
       node = node.dirs.get(seg);
     }
-    node.files.push(w);
-  }
+    return node;
+  };
+  for (const item of items) dirFor(nameOf(item).split("/").slice(0, -1)).files.push(item);
+  for (const f of folders) dirFor(f.split("/"));
   const countIn = (node) =>
     node.files.length + [...node.dirs.values()].reduce((n, d) => n + countIn(d), 0);
   const byName = (a, b) => a.localeCompare(b, undefined, { sensitivity: "base", numeric: true });
@@ -4678,35 +4700,479 @@ function renderComfyImport() {
       .sort((a, b) => byName(a[0], b[0]))
       .map(([name, dir]) => {
         const folder = document.createElement("details");
-        folder.className = "comfy-import-folder";
-        // A filter shows its matches wherever they are; otherwise folders stay as
-        // the user left them.
-        folder.open = !!q || comfyImportOpenFolders.has(dir.path);
+        folder.className = "tree-folder";
+        folder.open = forceOpen || openSet.has(dir.path);
         const summary = document.createElement("summary");
         const label = document.createElement("span");
-        label.className = "comfy-import-folder-name";
+        label.className = "tree-folder-name";
         label.textContent = name;
         const count = document.createElement("span");
         count.className = "lora-from";
         count.textContent = countIn(dir);
         summary.append(label, count);
+        folderExtra?.(summary, dir.path.slice(0, -1));
         const children = document.createElement("div");
-        children.className = "comfy-import-children";
+        children.className = "tree-children";
         children.append(...renderNode(dir));
         folder.append(summary, children);
         folder.addEventListener("toggle", () => {
-          if (comfyImportSearch.value.trim()) return; // opened by the filter, not the user
-          if (folder.open) comfyImportOpenFolders.add(dir.path);
-          else comfyImportOpenFolders.delete(dir.path);
+          if (forceOpen) return; // opened by the filter, not the user
+          if (folder.open) openSet.add(dir.path);
+          else openSet.delete(dir.path);
         });
         return folder;
       }),
-    ...node.files
-      .sort((a, b) => byName(a.name, b.name))
-      .map(makeCard),
+    ...node.files.sort((a, b) => byName(nameOf(a), nameOf(b))).map(leaf),
   ];
-  comfyImportList.replaceChildren(...renderNode(root));
+  return renderNode(root);
 }
+
+// --- Model picker --------------------------------------------------------------
+// The Model control is a button that opens a searchable list, with ComfyUI workflows
+// laid out as a folder tree. The hidden <select id="model"> stays the source of truth
+// — everything else still reads and sets it — so this only mirrors it: the list is
+// built from its options, and picking one sets its value and fires "change".
+const modelPickerBtn = document.getElementById("modelPickerBtn");
+const modelPickerLabel = document.getElementById("modelPickerLabel");
+const modelPickerModal = document.getElementById("modelPickerModal");
+const modelPickerList = document.getElementById("modelPickerList");
+const modelPickerSearch = document.getElementById("modelPickerSearch");
+const modelPickerOpenFolders = new Set();
+
+function syncModelPickerLabel() {
+  const opt = modelSelect.options[modelSelect.selectedIndex];
+  modelPickerLabel.textContent = opt ? opt.textContent : "Choose a model…";
+}
+
+// Code all over sets `modelSelect.value` directly, which fires no event, so the
+// button's label hooks the setter itself; option changes come via the observer.
+{
+  const desc = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value");
+  Object.defineProperty(modelSelect, "value", {
+    configurable: true,
+    get() {
+      return desc.get.call(this);
+    },
+    set(v) {
+      desc.set.call(this, v);
+      syncModelPickerLabel();
+    },
+  });
+  new MutationObserver(() => {
+    syncModelPickerLabel();
+    if (!modelPickerModal.classList.contains("hidden")) renderModelPicker();
+  }).observe(modelSelect, { childList: true, subtree: true, attributes: true, characterData: true });
+  modelSelect.addEventListener("change", syncModelPickerLabel);
+  syncModelPickerLabel();
+}
+
+function pickModel(value) {
+  hide(modelPickerModal);
+  modelPickerBtn.focus();
+  if (value === modelSelect.value) return;
+  modelSelect.value = value;
+  modelSelect.dispatchEvent(new Event("change", { bubbles: true }));
+}
+
+function renderModelPicker() {
+  const q = modelPickerSearch.value.trim().toLowerCase();
+  const terms = q.split(/\s+/).filter(Boolean);
+  const current = modelSelect.value;
+  const leaf = (isTree) => (opt) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "model-picker-item";
+    b.dataset.value = opt.value;
+    // Inside the tree a workflow shows its own name; its folders are above it.
+    b.textContent = isTree ? opt.textContent.split("/").pop() : opt.textContent;
+    b.disabled = opt.disabled;
+    if (opt.value === current) b.setAttribute("aria-current", "true");
+    b.addEventListener("click", () => pickModel(opt.value));
+    if (!isTree) return b;
+    // A workflow also gets a ⋯ for rename / move / copy / delete.
+    const row = document.createElement("div");
+    row.className = "model-picker-row";
+    row.append(b, wfMoreButton(`Manage ${b.textContent}`, () => openWorkflowMenu(opt)));
+    return row;
+  };
+  const sections = [];
+  for (const group of modelSelect.querySelectorAll("optgroup")) {
+    const opts = [...group.querySelectorAll("option")].filter((o) => {
+      const hay = o.textContent.toLowerCase();
+      return terms.every((t) => hay.includes(t));
+    });
+    if (!opts.length) continue;
+    const heading = document.createElement("div");
+    heading.className = "model-picker-group";
+    heading.textContent = group.label;
+    sections.push(heading);
+    // Only workflow names are paths; an API model's "480p/720p" is not a folder.
+    if (group.hasAttribute("data-comfy"))
+      sections.push(
+        ...renderFolderTree(opts, {
+          nameOf: (o) => o.textContent,
+          forceOpen: !!q,
+          openSet: modelPickerOpenFolders,
+          leaf: leaf(true),
+          folders: q ? [] : wfFolders, // empty folders too, unless searching
+          // default/ is GENie's own, so it offers nothing to manage.
+          folderExtra: (summary, path) => {
+            if (path.split("/")[0].toLowerCase() === "default") return;
+            summary.appendChild(wfMoreButton(`Manage folder ${path}`, () => openFolderMenu(path)));
+          },
+        }),
+      );
+    else sections.push(...opts.map(leaf(false)));
+  }
+  if (!sections.length) {
+    const p = document.createElement("p");
+    p.className = "muted comfy-import-empty";
+    p.textContent = "Nothing matches that search.";
+    sections.push(p);
+  }
+  modelPickerList.replaceChildren(...sections);
+}
+
+function openModelPicker() {
+  modelPickerSearch.value = "";
+  // Start with the selected workflow's folders open, so it's visible straight away.
+  const opt = modelSelect.options[modelSelect.selectedIndex];
+  if (opt?.value.startsWith("comfy:")) {
+    const segs = opt.textContent.split("/").slice(0, -1);
+    segs.forEach((_, i) => modelPickerOpenFolders.add(`${segs.slice(0, i + 1).join("/")}/`));
+  }
+  renderModelPicker();
+  show(modelPickerModal);
+  loadWfFolders().then(renderModelPicker); // adds any empty folders once known
+  modelPickerList.querySelector('[aria-current="true"]')?.scrollIntoView({ block: "center" });
+  // A phone would pop its keyboard over the list; there the search waits for a tap.
+  if (window.matchMedia("(hover: hover) and (pointer: fine)").matches) modelPickerSearch.focus();
+  else modelPickerModal.querySelector(".modal-box").focus();
+}
+
+// --- Managing workflows and folders (from the Model picker) ----------------------
+// Each workflow and folder in the picker has a ⋯ menu; the server enforces the rules
+// (/api/workflows/manage): default/ can't be changed and its workflows can only be
+// copied out, nothing is overwritten, and deletes go to workflows/.trash/.
+const wfManageModal = document.getElementById("wfManageModal");
+const wfManageBody = document.getElementById("wfManageBody");
+let wfFolders = []; // the user's folders, empty ones included
+
+async function loadWfFolders() {
+  try {
+    wfFolders = (await (await fetch("/api/workflows/folders")).json()).data || [];
+  } catch {
+    wfFolders = [];
+  }
+}
+
+function wfMoreButton(label, onClick) {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = "model-picker-more";
+  b.textContent = "⋯";
+  b.title = label;
+  b.setAttribute("aria-label", label);
+  b.addEventListener("click", (e) => {
+    e.preventDefault(); // inside a <summary> this would toggle the folder
+    e.stopPropagation();
+    onClick();
+  });
+  return b;
+}
+
+async function wfManage(body) {
+  let res, json;
+  try {
+    res = await fetch("/api/workflows/manage", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    json = await res.json();
+  } catch {
+    throw new Error("Couldn't reach the GENie server.");
+  }
+  if (!res.ok) throw new Error(json?.msg || "That didn't work.");
+  return json.data;
+}
+
+// Reload the lists after a change. `remap(value)` says where the selected model went
+// (a moved workflow's new value), so the form follows it instead of falling back.
+async function afterWfChange(remap) {
+  const before = modelSelect.value;
+  await Promise.all([loadWorkflows(), loadWfFolders()]);
+  const want = remap?.(before);
+  if (want && [...modelSelect.options].some((o) => o.value === want && !o.disabled))
+    modelSelect.value = want;
+  if (modelSelect.value !== before)
+    modelSelect.dispatchEvent(new Event("change", { bubbles: true }));
+  renderModelPicker();
+}
+
+const closeWfManage = () => hide(wfManageModal);
+const wfEl = (tag, className, text) => {
+  const el = document.createElement(tag);
+  if (className) el.className = className;
+  if (text != null) el.textContent = text;
+  return el;
+};
+
+// A list of actions for one workflow or folder.
+function wfMenu(title, actions) {
+  const list = wfEl("div", "wf-manage-actions");
+  for (const a of actions) {
+    const b = wfEl("button", a.danger ? "btn-secondary wf-danger" : "btn-secondary", a.label);
+    b.type = "button";
+    b.addEventListener("click", a.run);
+    list.appendChild(b);
+  }
+  const foot = wfEl("div", "modal-actions");
+  const cancel = wfEl("button", "btn-secondary", "Cancel");
+  cancel.type = "button";
+  cancel.addEventListener("click", closeWfManage);
+  foot.appendChild(cancel);
+  wfManageBody.replaceChildren(wfEl("h3", "wf-manage-title", title), list, foot);
+  show(wfManageModal);
+}
+
+// One step: an optional name box and/or folder choice, then confirm. `run` gets
+// { name, folder } and throws an Error whose message is shown in place.
+function wfForm({ title, message, name, folder, confirmLabel, danger, run }) {
+  const parts = [wfEl("h3", "wf-manage-title", title)];
+  if (message) parts.push(wfEl("p", "muted wf-manage-msg", message));
+  let nameInput, folderSelect;
+  if (folder !== undefined) {
+    const label = wfEl("label", "wf-manage-field", "Folder");
+    folderSelect = document.createElement("select");
+    folderSelect.appendChild(new Option("(top level)", ""));
+    for (const f of wfFolders) folderSelect.appendChild(new Option(f, f));
+    folderSelect.value = wfFolders.includes(folder) ? folder : "";
+    label.appendChild(folderSelect);
+    parts.push(label);
+  }
+  if (name !== undefined) {
+    const label = wfEl("label", "wf-manage-field", "Name");
+    nameInput = document.createElement("input");
+    nameInput.type = "text";
+    nameInput.maxLength = 110;
+    nameInput.autocomplete = "off";
+    nameInput.value = name;
+    label.appendChild(nameInput);
+    parts.push(label);
+  }
+  const error = wfEl("p", "comfy-import-error wf-manage-msg");
+  const foot = wfEl("div", "modal-actions");
+  const cancel = wfEl("button", "btn-secondary", "Cancel");
+  cancel.type = "button";
+  cancel.addEventListener("click", closeWfManage);
+  const ok = wfEl("button", danger ? "wf-danger" : "", confirmLabel);
+  ok.type = "button";
+  const submit = async () => {
+    const value = nameInput ? nameInput.value.trim() : undefined;
+    if (nameInput && !value) return (error.textContent = "Give it a name.");
+    ok.disabled = true;
+    error.textContent = "";
+    try {
+      await run({ name: value, folder: folderSelect ? folderSelect.value : undefined });
+      closeWfManage();
+    } catch (err) {
+      error.textContent = err.message;
+      ok.disabled = false;
+    }
+  };
+  ok.addEventListener("click", submit);
+  nameInput?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      submit();
+    }
+  });
+  foot.append(cancel, ok);
+  wfManageBody.replaceChildren(...parts, error, foot);
+  show(wfManageModal);
+  if (nameInput) {
+    nameInput.focus();
+    nameInput.select();
+  }
+}
+
+const wfJoin = (folder, name) => (folder ? `${folder}/${name}` : name);
+
+function openWorkflowMenu(opt) {
+  const file = opt.value.slice("comfy:".length);
+  const label = opt.textContent.replace(/\s*\(invalid JSON\)$/, "");
+  const base = label.split("/").pop();
+  // A shipped default's id is a bare filename though it's shown under default/.
+  const shipped = label.startsWith("default/") && !file.includes("/");
+  const folder = shipped ? "" : file.split("/").slice(0, -1).join("/");
+  const follow = (to) => (v) => (v === opt.value ? `comfy:${to}` : null);
+
+  const copy = {
+    label: "Copy to…",
+    run: () =>
+      wfForm({
+        title: `Copy “${base}”`,
+        message: shipped
+          ? "Shipped defaults stay where they are — this makes your own copy to change."
+          : undefined,
+        folder,
+        name: shipped ? base : `${base} copy`,
+        confirmLabel: "Copy",
+        run: async ({ name, folder: dest }) => {
+          await wfManage({ op: "copy", file, to: `${wfJoin(dest, name)}.json` });
+          await afterWfChange();
+        },
+      }),
+  };
+  if (shipped) return wfMenu(label, [copy]);
+
+  wfMenu(label, [
+    {
+      label: "Rename…",
+      run: () =>
+        wfForm({
+          title: `Rename “${base}”`,
+          name: base,
+          confirmLabel: "Rename",
+          run: async ({ name }) => {
+            const to = `${wfJoin(folder, name)}.json`;
+            if (to === file) return;
+            await wfManage({ op: "move", file, to });
+            await afterWfChange(follow(to));
+          },
+        }),
+    },
+    {
+      label: "Move to…",
+      run: () =>
+        wfForm({
+          title: `Move “${base}”`,
+          message: "Its saved settings and History runs move with it.",
+          folder,
+          confirmLabel: "Move",
+          run: async ({ folder: dest }) => {
+            const to = `${wfJoin(dest, base)}.json`;
+            if (to === file) return;
+            await wfManage({ op: "move", file, to });
+            await afterWfChange(follow(to));
+          },
+        }),
+    },
+    copy,
+    {
+      label: "Delete…",
+      danger: true,
+      run: () =>
+        wfForm({
+          title: `Delete “${base}”?`,
+          message:
+            "It leaves the Model list and goes to workflows/.trash/ on disk, where you can still get it back. Past runs stay in History but can't be re-imported.",
+          confirmLabel: "Delete",
+          danger: true,
+          run: async () => {
+            await wfManage({ op: "delete", file });
+            await afterWfChange();
+          },
+        }),
+    },
+  ]);
+}
+
+function openFolderMenu(path) {
+  const name = path.split("/").pop();
+  const parent = path.split("/").slice(0, -1).join("/");
+  const inside = [...modelSelect.options].filter((o) =>
+    o.value.startsWith(`comfy:${path}/`),
+  ).length;
+  wfMenu(`${path}/`, [
+    { label: "New folder inside…", run: () => openNewFolder(path) },
+    {
+      label: "Rename…",
+      run: () =>
+        wfForm({
+          title: `Rename folder “${name}”`,
+          message: inside ? "The workflows inside keep their settings and History runs." : undefined,
+          name,
+          confirmLabel: "Rename",
+          run: async ({ name: next }) => {
+            const to = wfJoin(parent, next);
+            if (to === path) return;
+            await wfManage({ op: "rename-folder", path, to });
+            if (modelPickerOpenFolders.delete(`${path}/`)) modelPickerOpenFolders.add(`${to}/`);
+            await afterWfChange((v) =>
+              v.startsWith(`comfy:${path}/`) ? `comfy:${to}${v.slice(`comfy:${path}`.length)}` : null,
+            );
+          },
+        }),
+    },
+    {
+      label: "Delete…",
+      danger: true,
+      run: () =>
+        wfForm({
+          title: `Delete folder “${name}”?`,
+          message:
+            (inside
+              ? `The ${inside === 1 ? "workflow" : `${inside} workflows`} inside ${inside === 1 ? "goes" : "go"} with it. `
+              : "It's empty. ") +
+            "The folder goes to workflows/.trash/ on disk, where you can still get it back.",
+          confirmLabel: "Delete",
+          danger: true,
+          run: async () => {
+            await wfManage({ op: "delete-folder", path });
+            await afterWfChange();
+          },
+        }),
+    },
+  ]);
+}
+
+function openNewFolder(parent = "") {
+  wfForm({
+    title: parent ? `New folder in “${parent}”` : "New folder",
+    name: "",
+    confirmLabel: "Create",
+    run: async ({ name }) => {
+      const path = wfJoin(parent, name);
+      await wfManage({ op: "mkdir", path });
+      if (parent) modelPickerOpenFolders.add(`${parent}/`);
+      await afterWfChange();
+    },
+  });
+}
+
+document.getElementById("modelPickerNewFolder").addEventListener("click", () => openNewFolder());
+wfManageModal.addEventListener("click", (e) => {
+  if (e.target === wfManageModal) closeWfManage();
+});
+wfManageModal.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    e.stopPropagation();
+    closeWfManage();
+  }
+});
+
+modelPickerBtn.addEventListener("click", openModelPicker);
+modelPickerSearch.addEventListener("input", renderModelPicker);
+modelPickerSearch.addEventListener("keydown", (e) => {
+  if (e.key !== "Enter") return;
+  e.preventDefault();
+  // Enter takes the first match.
+  modelPickerList.querySelector(".model-picker-item:not(:disabled)")?.click();
+});
+document
+  .getElementById("modelPickerClose")
+  .addEventListener("click", () => hide(modelPickerModal));
+modelPickerModal.addEventListener("click", (e) => {
+  if (e.target === modelPickerModal) hide(modelPickerModal);
+});
+modelPickerModal.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    hide(modelPickerModal);
+    modelPickerBtn.focus();
+  }
+});
 
 async function importComfyWorkflow(w, btn) {
   if (

@@ -20,6 +20,16 @@ heading for that version with the date, commit, then tag the commit `vX.Y.Z`.
   doesn't follow later edits (the list flags one that changed; import again to refresh).
   A workflow that can't be converted faithfully — a node pack that isn't installed, say —
   is refused with the reason.
+- **Searchable Model picker with folders.** The Model control opens a list you can
+  search (every word must match; Enter takes the first hit), with ComfyUI workflows
+  laid out as a collapsible folder tree — `comfyui/…` imports, `default/`, cloned
+  repos — and the API models listed beneath. It opens on the selected model's folder.
+- **Organize workflows from the Model picker.** Create, rename and delete folders, and
+  rename, move, copy and delete workflows, from a ⋯ menu on each. `default/` is
+  protected: nothing is created, changed or deleted there, and its workflows can only be
+  copied out. Nothing is overwritten, deletes go to `workflows/.trash/` rather than being
+  destroyed, and a moved or renamed workflow keeps its settings, model type and History
+  runs.
 - **LoRA info.** Each LoRA row has an ⓘ button (between the strength and ×) that opens
   your notes on that LoRA file: display name, description, URL (with an open link) and
   trigger phrases. Saved server-side in `settings/loras.json`, keyed by filename, so

@@ -1124,6 +1124,296 @@ app.post("/api/comfy/import-workflow", async (req, res) => {
   });
 });
 
+// --- Managing workflows and folders --------------------------------------------
+// Create / rename / delete folders under workflows/, and move / copy / rename /
+// delete the workflows in them, from the Model picker. Two rules hold throughout:
+//   - `default/` is GENie's. Nothing is created, renamed, moved or deleted there; a
+//     shipped workflow can only be *copied* out.
+//   - Nothing is ever overwritten, and "delete" moves to workflows/.trash/ (a dot
+//     folder, so the listing skips it) rather than destroying the file.
+// A moved or renamed workflow takes its saved settings, model type and History
+// references with it, so its past runs still re-import.
+const WF_TRASH_DIR = ".trash";
+const WF_RESERVED = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i;
+
+// One folder or file name, as given — rejected rather than silently altered.
+function validWfSegment(s) {
+  return (
+    typeof s === "string" &&
+    s.length > 0 &&
+    s.length <= 120 &&
+    s === s.trim() &&
+    !/[\\/<>:"|?*\u0000-\u001f]/.test(s) &&
+    !s.startsWith(".") &&
+    !s.endsWith(".") &&
+    !WORKFLOW_SKIP_DIRS.has(s) &&
+    !WF_RESERVED.test(s)
+  );
+}
+// "a/b" → ["a","b"]; "" → [] (the top level); null if any part is unusable.
+function wfFolderSegs(p) {
+  if (typeof p !== "string") return null;
+  if (p === "") return [];
+  const segs = p.split("/");
+  if (segs.length > WORKFLOW_MAX_DEPTH || !segs.every(validWfSegment)) return null;
+  return segs;
+}
+// A workflow id ("a/b/Name.json") → its segments, or null.
+function wfFileSegs(id) {
+  if (typeof id !== "string" || !/\.json$/i.test(id)) return null;
+  const segs = id.split("/");
+  const name = segs.pop();
+  if (!validWfSegment(name) || !name.replace(/\.json$/i, "")) return null;
+  const folder = wfFolderSegs(segs.join("/"));
+  return folder ? [...folder, name] : null;
+}
+const inDefaultFolder = (segs) => segs[0]?.toLowerCase() === "default";
+const wfAbs = (segs) => path.join(WORKFLOWS_DIR, ...segs);
+// True when `dir` (existing) really sits inside workflows/, symlinks resolved.
+function insideWorkflowsReal(dir) {
+  try {
+    const rel = path.relative(fs.realpathSync(WORKFLOWS_DIR), fs.realpathSync(dir));
+    return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+  } catch {
+    return false;
+  }
+}
+const shippedDefaultNames = () =>
+  new Set(jsonUnder(WORKFLOWS_DEFAULT_DIR, { depth: 0 }).map((f) => f.toLowerCase()));
+
+class WfError extends Error {
+  constructor(status, msg) {
+    super(msg);
+    this.status = status;
+  }
+}
+
+// Where a workflow may be written: never into default/, never over anything, and
+// not at the top level under a shipped default's name (which would hide the default).
+function wfWritableTarget(id) {
+  const segs = wfFileSegs(id);
+  if (!segs) throw new WfError(400, "That isn't a usable workflow name.");
+  if (inDefaultFolder(segs))
+    throw new WfError(403, "The default folder is GENie's — nothing can be put there.");
+  const abs = wfAbs(segs);
+  if (fs.existsSync(abs)) throw new WfError(409, "A workflow with that name is already there.");
+  if (segs.length === 1 && shippedDefaultNames().has(segs[0].toLowerCase()))
+    throw new WfError(
+      409,
+      "A shipped default has that name, and a top-level workflow would hide it — pick another name or a folder.",
+    );
+  const dir = path.dirname(abs);
+  fs.mkdirSync(dir, { recursive: true });
+  if (!insideWorkflowsReal(dir)) throw new WfError(400, "That folder is outside workflows/.");
+  return { id: segs.join("/"), abs };
+}
+
+// An existing workflow by id → { id, abs, shipped }.
+function wfSource(id) {
+  const abs = workflowPath(id);
+  if (!abs) throw new WfError(404, "That workflow doesn't exist.");
+  const rel = path.relative(WORKFLOWS_DEFAULT_DIR, abs);
+  const shipped = !rel.startsWith("..") && !path.isAbsolute(rel);
+  return { id, abs, shipped };
+}
+
+// An existing, user-owned folder → { segs, abs }.
+function wfOwnFolder(p) {
+  const segs = wfFolderSegs(p);
+  if (!segs || !segs.length) throw new WfError(400, "That isn't a usable folder name.");
+  if (inDefaultFolder(segs))
+    throw new WfError(403, "The default folder is GENie's and can't be changed.");
+  const abs = wfAbs(segs);
+  let st;
+  try {
+    st = fs.lstatSync(abs);
+  } catch {
+    throw new WfError(404, "That folder doesn't exist.");
+  }
+  if (!st.isDirectory() || !insideWorkflowsReal(abs))
+    throw new WfError(400, "That isn't a folder inside workflows/.");
+  return { segs, abs };
+}
+
+function wfTrash(abs) {
+  const trash = path.join(WORKFLOWS_DIR, WF_TRASH_DIR);
+  fs.mkdirSync(trash, { recursive: true });
+  const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\..*$/, "");
+  let dest = path.join(trash, `${stamp}-${path.basename(abs)}`);
+  for (let i = 2; fs.existsSync(dest); i++)
+    dest = path.join(trash, `${stamp}-${i}-${path.basename(abs)}`);
+  fs.renameSync(abs, dest);
+  return path.relative(WORKFLOWS_DIR, dest).split(path.sep).join("/");
+}
+
+// Point everything that names a workflow by id at its new id. `remap(id)` returns
+// the new id, or null to leave that one alone.
+function wfRetarget(remap) {
+  const mapModel = (model) => {
+    if (typeof model !== "string" || !model.startsWith("comfy:")) return null;
+    const to = remap(model.slice("comfy:".length));
+    return to ? `comfy:${to}` : null;
+  };
+  try {
+    const types = readModelTypes();
+    let changed = false;
+    for (const key of Object.keys(types)) {
+      const to = mapModel(key);
+      if (!to) continue;
+      if (!(to in types)) types[to] = types[key];
+      delete types[key];
+      changed = true;
+    }
+    if (changed) writeJson(MODEL_TYPES_FILE, types);
+  } catch (err) {
+    console.error("Workflow move: couldn't update model types:", err);
+  }
+  try {
+    const history = readJson(HISTORY_FILE);
+    let changed = false;
+    for (const e of Array.isArray(history) ? history : []) {
+      const to = mapModel(e?.input?.model);
+      if (!to) continue;
+      e.input.model = to;
+      e.input.workflow = to.slice("comfy:".length).replace(/\.json$/i, "");
+      changed = true;
+    }
+    if (changed) writeJson(HISTORY_FILE, history);
+  } catch (err) {
+    console.error("Workflow move: couldn't update history:", err);
+  }
+}
+
+// Move (or copy) a workflow's saved settings to follow it. Never overwrites.
+function wfCarrySettings(fromId, toId, copy) {
+  try {
+    const from = comfySettingsPath(fromId);
+    const to = comfySettingsPath(toId);
+    if (!from || !to || !fs.existsSync(from) || fs.existsSync(to)) return;
+    fs.mkdirSync(path.dirname(to), { recursive: true });
+    if (copy) fs.copyFileSync(from, to);
+    else fs.renameSync(from, to);
+  } catch (err) {
+    console.error("Workflow move: couldn't carry settings:", err);
+  }
+}
+
+// The user's folders (default/ excluded), empty ones included — the workflow list
+// alone can't show a folder with nothing in it yet.
+app.get("/api/workflows/folders", (req, res) => {
+  const out = [];
+  const walk = (abs, rel, left) => {
+    let entries;
+    try {
+      entries = fs.readdirSync(abs, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const d of entries) {
+      if (!d.isDirectory() || d.isSymbolicLink()) continue;
+      if (d.name.startsWith(".") || WORKFLOW_SKIP_DIRS.has(d.name)) continue;
+      if (!rel && d.name.toLowerCase() === "default") continue;
+      const p = rel ? `${rel}/${d.name}` : d.name;
+      out.push(p);
+      if (left > 1) walk(path.join(abs, d.name), p, left - 1);
+    }
+  };
+  walk(WORKFLOWS_DIR, "", WORKFLOW_MAX_DEPTH);
+  out.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base", numeric: true }));
+  res.json({ code: 200, msg: "success", data: out });
+});
+
+// Body: { op, … } —
+//   mkdir         { path }            create a folder
+//   rename-folder { path, to }        rename (or re-home) a folder
+//   delete-folder { path }            folder and contents → workflows/.trash/
+//   move          { file, to }        move or rename a workflow (to = its new id)
+//   copy          { file, to }        copy a workflow (the only way out of default/)
+//   delete        { file }            workflow → workflows/.trash/
+app.post("/api/workflows/manage", (req, res) => {
+  const b = req.body || {};
+  try {
+    let data = {};
+    switch (b.op) {
+      case "mkdir": {
+        const segs = wfFolderSegs(b.path);
+        if (!segs || !segs.length) throw new WfError(400, "That isn't a usable folder name.");
+        if (inDefaultFolder(segs))
+          throw new WfError(403, "The default folder is GENie's — nothing can be created there.");
+        const abs = wfAbs(segs);
+        if (fs.existsSync(abs)) throw new WfError(409, "A folder with that name already exists.");
+        fs.mkdirSync(abs, { recursive: true });
+        if (!insideWorkflowsReal(abs)) throw new WfError(400, "That folder is outside workflows/.");
+        data = { folder: segs.join("/") };
+        break;
+      }
+      case "rename-folder": {
+        const src = wfOwnFolder(b.path);
+        const segs = wfFolderSegs(b.to);
+        if (!segs || !segs.length) throw new WfError(400, "That isn't a usable folder name.");
+        if (inDefaultFolder(segs))
+          throw new WfError(403, "The default folder is GENie's — nothing can be moved there.");
+        const from = src.segs.join("/");
+        const to = segs.join("/");
+        if (`${to}/`.toLowerCase().startsWith(`${from}/`.toLowerCase()) && to.toLowerCase() !== from.toLowerCase())
+          throw new WfError(400, "A folder can't be moved inside itself.");
+        const abs = wfAbs(segs);
+        // A case-only rename ("wk09" → "Wk09") finds itself on Windows; that's fine.
+        if (fs.existsSync(abs) && to.toLowerCase() !== from.toLowerCase())
+          throw new WfError(409, "A folder with that name already exists.");
+        if (to === from) break;
+        fs.mkdirSync(path.dirname(abs), { recursive: true });
+        if (!insideWorkflowsReal(path.dirname(abs)))
+          throw new WfError(400, "That folder is outside workflows/.");
+        const ids = jsonUnder(src.abs).map((f) => `${from}/${f}`);
+        fs.renameSync(src.abs, abs);
+        for (const id of ids) wfCarrySettings(id, `${to}${id.slice(from.length)}`, false);
+        wfRetarget((id) => (id.startsWith(`${from}/`) ? `${to}${id.slice(from.length)}` : null));
+        data = { folder: to };
+        break;
+      }
+      case "delete-folder": {
+        const src = wfOwnFolder(b.path);
+        data = { trashed: wfTrash(src.abs) };
+        break;
+      }
+      case "move": {
+        const src = wfSource(b.file);
+        if (src.shipped)
+          throw new WfError(403, "Shipped defaults can't be moved or renamed — copy it instead.");
+        const dest = wfWritableTarget(b.to);
+        fs.renameSync(src.abs, dest.abs);
+        wfCarrySettings(src.id, dest.id, false);
+        wfRetarget((id) => (id === src.id ? dest.id : null));
+        data = { file: dest.id };
+        break;
+      }
+      case "copy": {
+        const src = wfSource(b.file);
+        const dest = wfWritableTarget(b.to);
+        fs.copyFileSync(src.abs, dest.abs, fs.constants.COPYFILE_EXCL);
+        wfCarrySettings(src.id, dest.id, true);
+        data = { file: dest.id };
+        break;
+      }
+      case "delete": {
+        const src = wfSource(b.file);
+        if (src.shipped) throw new WfError(403, "Shipped defaults can't be deleted.");
+        data = { trashed: wfTrash(src.abs) };
+        break;
+      }
+      default:
+        throw new WfError(400, "Unknown operation.");
+    }
+    res.json({ code: 200, msg: "done", data });
+  } catch (err) {
+    if (err instanceof WfError)
+      return res.status(err.status).json({ code: err.status, msg: err.message });
+    console.error("Workflow manage failed:", err);
+    res.status(500).json({ code: 500, msg: "Couldn't complete that." });
+  }
+});
+
 // Enriched token metadata for one workflow: combo tokens get their installed-file
 // options and numeric tokens get min/max/step, both from ComfyUI's /object_info.
 // Also returns the installed LoRA list for the dynamic-LoRA picker. `offline: true`

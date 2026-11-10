@@ -49,7 +49,13 @@
       <form id="genForm">
         <label>
           Model
-          <select id="model">
+          <!-- What you click: opens the searchable picker (openModelPicker). The select
+               below stays the source of truth and is only hidden. -->
+          <button type="button" id="modelPickerBtn" class="model-picker-btn" aria-haspopup="dialog">
+            <span id="modelPickerLabel"></span>
+            <span class="model-picker-caret" aria-hidden="true">▾</span>
+          </button>
+          <select id="model" class="hidden" tabindex="-1" aria-hidden="true">
             <!-- The "Local · ComfyUI" group is inserted above this one once workflows load. -->
             <optgroup label="kie.ai API" data-kie>
               <option value="bytedance/seedance-2-5" selected>Seedance 2.5 (up to 1080p)</option>
@@ -488,6 +494,27 @@
           <button type="button" id="loraBrowserClose" class="btn-secondary">Done</button>
         </div>
       </div>
+    </div>
+
+    <!-- Opened from the Model button; filled by renderModelPicker(). -->
+    <div id="modelPickerModal" class="modal hidden">
+      <div class="modal-box lora-browser-box" role="dialog" aria-labelledby="modelPickerHeading" tabindex="-1">
+        <h3 id="modelPickerHeading">Choose a model</h3>
+        <div class="lora-browser-bar">
+          <input type="search" id="modelPickerSearch" placeholder="Search models and workflows…" autocomplete="off" />
+          <button type="button" id="modelPickerNewFolder" class="btn-secondary">New folder</button>
+        </div>
+        <div class="lora-browser-list model-picker-list" id="modelPickerList"></div>
+        <div class="modal-actions">
+          <button type="button" id="modelPickerClose" class="btn-secondary">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Rename / move / copy / delete for a workflow or folder; opens over the model
+         picker and is filled by wfMenu() / wfForm(). -->
+    <div id="wfManageModal" class="modal hidden">
+      <div class="modal-box wf-manage-box" role="dialog" aria-labelledby="wfManageBody" id="wfManageBody"></div>
     </div>
 
     <!-- Opened from the button under the Model picker; filled by openComfyImport(). -->

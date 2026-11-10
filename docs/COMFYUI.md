@@ -84,6 +84,29 @@ at queue time (*Use Everywhere*, for one) are not rewired here — export those 
 [Continuations](#continuations--carry-state-between-runs) still need their marker
 added to the imported file, since an integer widget can't hold it in ComfyUI.
 
+## Organizing workflows
+
+The **Model** picker is searchable and shows your workflows as a folder tree. From it
+you can manage what's in `workflows/` without leaving the app:
+
+- **New folder** (top of the picker), or **⋯ → New folder inside…** on a folder.
+- **⋯ on a folder** — rename it, or delete it.
+- **⋯ on a workflow** — rename, move to another folder, copy, or delete.
+
+The rules:
+
+- **`default/` is GENie's.** Nothing can be created, renamed, moved or deleted there,
+  and nothing can be moved in. A shipped workflow offers only **Copy to…**, which gives
+  you your own copy to change.
+- **Nothing is overwritten.** A name that's taken is refused. So is a top-level name
+  matching a shipped default, since that would hide the default.
+- **Delete is recoverable.** A deleted workflow or folder is moved to
+  `workflows/.trash/` on disk (with a timestamp), not destroyed. Empty that folder
+  yourself when you're sure.
+- **Moves keep their history.** A moved or renamed workflow — or everything in a
+  renamed folder — takes its saved settings, its model type and its History runs along,
+  so past runs still re-import. A copy starts with a copy of the settings.
+
 ## Controls — from node recognition
 
 There is nothing to mark up. GENie reads the export, matches each node by its
@@ -181,9 +204,10 @@ over LAN — and it survives a browser-cache clear. Re-selecting the workflow (o
 re-importing a run from History) reloads it.
 
 A workflow in a subfolder keys on its path (`settings/comfy/<repo>/<name>.json`), so
-two repos can ship a same-named workflow without treading on each other. Move a
-workflow between folders and it starts from the export's own values again — its old
-settings file stays where it was.
+two repos can ship a same-named workflow without treading on each other. Move or rename
+a workflow from the Model picker and its settings go with it; move the file by hand on
+disk and it starts from the export's own values again — its old settings file stays
+where it was.
 
 ## Image inputs & the gallery
 
@@ -446,8 +470,9 @@ tune the frame count, the image size and a cheaper one-tile-per-step mode — se
   values, and re-populates the media fields from the run's saved gallery files
   (any file since deleted from the gallery is skipped).
 - A workflow's **identity is its path** under `workflows/`, and that's what History
-  records — move or rename one and older runs can't re-import it (the same has always
-  been true of a rename). The workflows GENie ships in `default/` are the exception:
+  records. Moving or renaming one from the Model picker rewrites those records, so its
+  runs still re-import; do it by hand on disk and older runs can't re-import it. The
+  workflows GENie ships in `default/` are the exception:
   they're addressed by bare filename, so runs made before subfolders existed keep
   working.
 - Errors from ComfyUI surface on the run's History card in readable form: a

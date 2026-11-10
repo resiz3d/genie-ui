@@ -5953,7 +5953,7 @@ textarea.hidden + .llm-qrev {
 .comfy-import-error {
   color: var(--error);
 }
-.comfy-import-folder > summary {
+.tree-folder > summary {
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -5962,30 +5962,182 @@ textarea.hidden + .llm-qrev {
   list-style: none;
   border-radius: 6px;
 }
-.comfy-import-folder > summary::-webkit-details-marker {
+.tree-folder > summary::-webkit-details-marker {
   display: none;
 }
-.comfy-import-folder > summary::before {
+.tree-folder > summary::before {
   content: "›";
   width: 0.8rem;
   color: var(--muted);
   transition: transform 0.12s;
 }
-.comfy-import-folder[open] > summary::before {
+.tree-folder[open] > summary::before {
   transform: rotate(90deg);
 }
-.comfy-import-folder > summary:hover {
+.tree-folder > summary:hover {
   background: var(--bg);
 }
-.comfy-import-folder-name {
+.tree-folder-name {
   font-weight: 600;
   word-break: break-word;
 }
-.comfy-import-children {
+.tree-children {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
   margin: 0.25rem 0 0.35rem 0.6rem;
   padding-left: 0.6rem;
   border-left: 1px solid var(--border);
+}
+
+/* --- Model picker ----------------------------------------------------------- */
+.model-picker-btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  width: 100%;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.6rem 0.7rem;
+  font: inherit;
+  font-weight: 400;
+  text-align: left;
+  cursor: pointer;
+}
+.model-picker-btn:hover,
+.model-picker-btn:focus-visible {
+  background: var(--bg);
+  border-color: var(--accent);
+  outline: none;
+}
+.model-picker-btn > span:first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.model-picker-caret {
+  color: var(--muted);
+}
+.modal-box:focus {
+  outline: none;
+}
+.model-picker-list {
+  gap: 0.15rem;
+}
+.model-picker-group {
+  margin-top: 0.5rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.model-picker-group:first-child {
+  margin-top: 0;
+}
+.model-picker-list .tree-children {
+  gap: 0.15rem;
+}
+.model-picker-item {
+  display: block;
+  width: 100%;
+  background: transparent;
+  color: var(--text);
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 0.55rem 0.6rem;
+  font: inherit;
+  font-weight: 400;
+  text-align: left;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+.model-picker-item:hover:not(:disabled),
+.model-picker-item:focus-visible {
+  background: var(--bg);
+  border-color: var(--border);
+  outline: none;
+}
+.model-picker-item[aria-current="true"] {
+  border-color: var(--accent);
+  background: var(--bg);
+}
+.model-picker-item:disabled {
+  color: var(--muted);
+  cursor: default;
+}
+
+/* --- Managing workflows and folders (Model picker) -------------------------- */
+.model-picker-row {
+  display: flex;
+  align-items: stretch;
+  gap: 0.25rem;
+}
+.model-picker-row .model-picker-item {
+  flex: 1;
+  min-width: 0;
+}
+.model-picker-more {
+  flex: none;
+  min-width: 2.4rem;
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 0.3rem 0.5rem;
+  font: inherit;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+}
+.model-picker-more:hover,
+.model-picker-more:focus-visible {
+  background: var(--bg);
+  border-color: var(--border);
+  color: var(--text);
+  outline: none;
+}
+.tree-folder > summary .model-picker-more {
+  margin-left: auto;
+}
+.modal-box.wf-manage-box {
+  width: min(420px, 94vw);
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+}
+.wf-manage-title {
+  overflow-wrap: anywhere;
+}
+.wf-manage-msg {
+  margin: 0;
+  font-size: 0.88rem;
+}
+.wf-manage-msg:empty {
+  display: none;
+}
+.wf-manage-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.wf-manage-actions button {
+  text-align: left;
+  padding: 0.7rem 0.8rem;
+}
+.wf-manage-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+.wf-danger,
+.btn-secondary.wf-danger {
+  color: var(--error);
+}
+button.wf-danger:not(.btn-secondary) {
+  background: var(--error);
+  border-color: var(--error);
+  color: #fff;
 }
