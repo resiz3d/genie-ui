@@ -6772,9 +6772,36 @@ const EDITED_VIDEO = { kind: "video", ext: "mp4", mime: "video/mp4" };
 function saveEditedVideo(target, file, name) {
   return saveEditedMedia(target, file, name, EDITED_VIDEO);
 }
-function saveEditedMedia({ kind, id, index = 0, overwrite = false }, file, name, media) {
+function saveEditedMedia({ kind, id, index = 0, overwrite = false, projectId }, file, name, media) {
   const { ext, mime } = media;
   const what = media.kind; // "video" | "image", for messages
+  // A new Gallery item in `projectId`, not tied to an existing one (the editor's
+  // "Save to Gallery" for an edit that wasn't opened from the Gallery).
+  if (kind === "gallery-new") {
+    const proj = resolveProject(projectId);
+    const newId = randomUUID();
+    copyToFreeName(file, path.join(INPUT_DIR, proj.slug), newId, ext);
+    const storedName = `${proj.slug}/${newId}.${ext}`;
+    const base =
+      String(name || what)
+        .replace(/[\\/:*?"<>|\x00-\x1f]/g, "_")
+        .replace(/\.[^.]+$/, "")
+        .slice(0, 150) || what;
+    const added = {
+      id: newId,
+      kind: what,
+      projectId: proj.id,
+      storedName,
+      name: `${base}.${ext}`,
+      mime,
+      localUrl: `/input/${storedName}`,
+      createdAt: new Date().toISOString(),
+    };
+    const images = readJson(IMAGES_FILE);
+    images.unshift(added);
+    writeJson(IMAGES_FILE, images);
+    return { kind: "gallery", id: added.id, url: added.localUrl, name: added.name };
+  }
   if (kind === "history") {
     const entries = readJson(HISTORY_FILE);
     const entry = entries.find((e) => e.id === id);

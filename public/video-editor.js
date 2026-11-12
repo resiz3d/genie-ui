@@ -49,11 +49,13 @@
         </div>
         <div class="fp-controls">
           <button type="button" class="btn-secondary ve-first" title="First frame (Home)">⏮</button>
+          <button type="button" class="btn-secondary ve-back24" title="Back 24 frames — a second at 24 fps (Page Up)">−24</button>
           <button type="button" class="btn-secondary ve-back10" title="Back 10 frames (Shift+←)">−10</button>
           <button type="button" class="btn-secondary ve-back" title="Back 1 frame (←)">−1</button>
           <button type="button" class="btn-secondary ve-play" title="Play what's kept, on into the next clips / pause (Space)">▶︎</button>
           <button type="button" class="btn-secondary ve-fwd" title="Forward 1 frame (→)">+1</button>
           <button type="button" class="btn-secondary ve-fwd10" title="Forward 10 frames (Shift+→)">+10</button>
+          <button type="button" class="btn-secondary ve-fwd24" title="Forward 24 frames — a second at 24 fps (Page Down)">+24</button>
           <button type="button" class="btn-secondary ve-last" title="Last frame (End)">⏭</button>
         </div>
         <div class="ve-edit">
@@ -120,6 +122,7 @@
       <button type="button" class="btn-secondary ve-close">Close</button>
       <button type="button" class="btn-secondary ve-cancel hidden">Cancel export</button>
       <button type="button" class="btn-secondary ve-saveas" disabled title="Re-encode the result and choose where on this device to save it">Save as…</button>
+      <button type="button" class="btn-secondary ve-gsave" disabled title="Re-encode the result and add it to this project's Gallery as a new video — ready to use as a reference">🖼 Save to Gallery</button>
       <button type="button" class="ve-save" disabled title="Re-encode the result and save it as a new file in this project's output folder (edited_videos) — existing files are never overwritten">💾 Save</button>
     </div>
   </div>`;
@@ -182,7 +185,7 @@
     "restore", "cuts", "mix", "size", "fit", "msg", "err", "reset", "cancel", "save",
     "saveas", "import", "pick", "lastframe", "fcount", "fclear", "fdownload", "fsaveas", "fsave",
     "fstrip", "target", "overwrite", "thint", "proj", "popen", "psave", "exports", "split",
-    "fx", "plugin-actions",
+    "fx", "plugin-actions", "gsave",
   ])
     el[k] = $(`.ve-${k}`, modal);
   el.badge = $(".ve-cut-badge", modal);
@@ -505,8 +508,13 @@
     const seconds = done.reduce((t, c) => t + keptFrames(c) / c.fps, 0);
     const edited =
       clips.length > 1 || clips.some((c) => c.cuts.length) || !VideoFx.isEmpty(fxForm.get());
-    el.save.disabled = el.saveas.disabled =
-      !!job || !!ffmpegHint || !edited || !clips.length || done.length < clips.length || !(seconds > 0);
+    const blocked =
+      !!job || !!ffmpegHint || !clips.length || done.length < clips.length || !(seconds > 0);
+    el.save.disabled = el.saveas.disabled = blocked || !edited;
+    // Save to Gallery also takes an unedited clip (e.g. a History video, to use as a
+    // reference). Opened from the Gallery, the main Save already adds there.
+    el.gsave.classList.toggle("hidden", target?.kind === "gallery");
+    el.gsave.disabled = blocked;
   }
 
   // Everything that depends on the cuts and the clip list.
@@ -900,7 +908,7 @@
     el.editor.classList.add("hidden");
     el.reset.classList.add("hidden");
     el.cancel.classList.add("hidden");
-    el.save.disabled = el.saveas.disabled = true;
+    el.save.disabled = el.saveas.disabled = el.gsave.disabled = true;
     sizeFrom = null;
     if (!keepFrames) setFx(VideoFx.blank(), false);
     el.fx.classList.add("hidden");
@@ -954,9 +962,17 @@
 
   // toFile: hand the result to the browser (a save dialog, or its downloads) instead
   // of keeping it in the project's edited_videos folder.
-  async function save(toFile) {
-    if (job || el.save.disabled) return;
-    const toCard = !toFile && target ? { ...target, overwrite: el.overwrite.checked } : null;
+  // toGallery: add the result to the project's Gallery as a new video.
+  async function save(toFile, toGallery = false) {
+    if (job || (toGallery ? el.gsave : el.save).disabled) return;
+    const toCard =
+      toGallery ?
+        {
+          kind: "gallery-new",
+          projectId: typeof activeProjectId !== "undefined" ? activeProjectId : "default",
+        }
+      : !toFile && target ? { ...target, overwrite: el.overwrite.checked }
+      : null;
     if (
       toCard?.overwrite &&
       !confirm(
@@ -984,7 +1000,7 @@
       }
     }
 
-    el.save.disabled = el.saveas.disabled = true;
+    el.save.disabled = el.saveas.disabled = el.gsave.disabled = true;
     el.cancel.classList.remove("hidden");
     const still = (id) => clips === mine && job === id;
     let jobId = null;
@@ -1992,6 +2008,8 @@
   $(".ve-fwd", modal).addEventListener("click", () => st && go(st.cur + 1));
   $(".ve-back10", modal).addEventListener("click", () => st && go(st.cur - 10));
   $(".ve-fwd10", modal).addEventListener("click", () => st && go(st.cur + 10));
+  $(".ve-back24", modal).addEventListener("click", () => st && go(st.cur - 24));
+  $(".ve-fwd24", modal).addEventListener("click", () => st && go(st.cur + 24));
   el.play.addEventListener("click", play);
 
   // Every edit works on the frame on screen, so settle playback on a frame first.
@@ -2047,6 +2065,7 @@
   });
   el.save.addEventListener("click", () => save(false));
   el.saveas.addEventListener("click", () => save(true));
+  el.gsave.addEventListener("click", () => save(false, true));
   el.cancel.addEventListener("click", () => {
     if (!job) return;
     if (job !== "starting") fetch(`${API}/jobs/${job}`, { method: "DELETE" }).catch(() => {});
@@ -2097,6 +2116,8 @@
       ArrowRight: () => go(st.cur + step),
       ",": () => go(st.cur - 1),
       ".": () => go(st.cur + 1),
+      PageUp: () => go(st.cur - 24),
+      PageDown: () => go(st.cur + 24),
       Home: () => go(0),
       End: () => go(st.frames - 1),
       " ": play,

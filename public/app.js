@@ -630,12 +630,8 @@ function makeMediaList(kind, opts = {}) {
       };
       list.items.push(entry);
       list.render();
-      if (mediaType === "video") {
-        probeDuration(url).then((d) => {
-          entry.durationSec = d;
-          updateEstimate();
-        });
-      }
+      if (mediaType === "video" || mediaType === "audio")
+        probeRefMedia(entry, url);
     },
 
     // Read a local file, show a thumbnail, and save it locally only.
@@ -671,12 +667,8 @@ function makeMediaList(kind, opts = {}) {
           entry.localId = data.image.id;
           entry.thumb = data.image.localUrl || entry.thumb;
           entry.status = "ready";
-          if (mediaType === "video") {
-            probeDuration(entry.thumb).then((d) => {
-              entry.durationSec = d;
-              updateEstimate();
-            });
-          }
+          if (mediaType === "video" || mediaType === "audio")
+            probeRefMedia(entry, entry.thumb, file.size);
           loadGallery();
         } catch (err) {
           console.error(err);
@@ -701,12 +693,8 @@ function makeMediaList(kind, opts = {}) {
       };
       list.items.push(entry);
       list.render();
-      if (mediaType === "video") {
-        probeDuration(item.localUrl).then((d) => {
-          entry.durationSec = d;
-          updateEstimate();
-        });
-      }
+      if (mediaType === "video" || mediaType === "audio")
+        probeRefMedia(entry, item.localUrl);
     },
 
     addFiles(fileList) {
@@ -820,16 +808,50 @@ function makeMediaList(kind, opts = {}) {
   return list;
 }
 
-// Read a media file's duration (seconds) from its metadata; null if unreadable.
-function probeDuration(src) {
+// Read a media file's duration (seconds) and, for video, its frame size from its
+// metadata; nulls where unreadable.
+function probeMedia(src) {
   return new Promise((resolve) => {
     const v = document.createElement("video");
     v.preload = "metadata";
     v.onloadedmetadata = () =>
-      resolve(Number.isFinite(v.duration) ? v.duration : null);
-    v.onerror = () => resolve(null);
+      resolve({
+        duration: Number.isFinite(v.duration) ? v.duration : null,
+        width: v.videoWidth || null,
+        height: v.videoHeight || null,
+      });
+    v.onerror = () => resolve({ duration: null, width: null, height: null });
     v.src = src;
   });
+}
+
+// A file's size in bytes from a HEAD request (null when the server won't say, e.g.
+// a cross-origin URL).
+async function probeBytes(src) {
+  try {
+    const res = await fetch(src, { method: "HEAD" });
+    const n = Number(res.headers.get("content-length"));
+    return res.ok && n > 0 ? n : null;
+  } catch {
+    return null;
+  }
+}
+
+// Fill a reference video/audio entry's durationSec, width/height and bytes (for the
+// per-file limit checks), then refresh the estimate. Returns the promise, which is
+// also kept on the entry so a submit can wait for it.
+function probeRefMedia(entry, src, knownBytes = null) {
+  entry.probed = Promise.all([
+    probeMedia(src),
+    knownBytes ?? probeBytes(src),
+  ]).then(([m, bytes]) => {
+    entry.durationSec = m.duration;
+    entry.width = m.width;
+    entry.height = m.height;
+    entry.bytes = bytes;
+    updateEstimate();
+  });
+  return entry.probed;
 }
 
 // Total seconds of ready reference videos (video refs bill by combined
@@ -2508,9 +2530,11 @@ function updateEstimate() {
   const est = Math.round(r.rate * (duration + refSecs));
   const refNote =
     refSecs > 0 ? ` (incl. ~${Math.round(refSecs)}s video ref)` : "";
+  const fileProblems = refFileProblems();
   const overLimit =
     refSecs > refLimits().secs ?
       ` ⚠ video refs exceed the ${refLimits().secs}s total limit`
+    : fileProblems.length ? ` ⚠ ${escapeHtmlJs(fileProblems[0])}`
     : "";
   estimateEl.innerHTML = `Est. cost: ~<b>${est.toLocaleString()}</b> credits${refNote}${batchCostNote(est)}${overLimit}`;
   estimateEl.title = `Based on your ${r.n} most recent run${r.n > 1 ? "s" : ""} at this resolution/audio setting (median).`;
@@ -2822,20 +2846,81 @@ const WAN_ASPECTS = ["adaptive", "16:9", "4:3", "1:1", "3:4", "9:16"];
 // Reference-media limits per model: how many of each kind, the total seconds of
 // reference video (and of audio), and the per-video size. Seedance 2.5 is far
 // roomier than the rest, which all share the 2.0 numbers (H3 reference-to-video too).
-const REF_LIMITS_25 = { image: 30, video: 10, audio: 10, secs: 30, videoMB: 200 };
-const REF_LIMITS = { image: 9, video: 3, audio: 3, secs: 15, videoMB: 50 };
-// Kling 4.0: 10 images, 5 videos (10MB each, 30s total), 3 voices; keyframe-to-video
-// takes up to 8 middle keyframes.
-const REF_LIMITS_KLING = { image: 10, video: 5, audio: 3, secs: 30, videoMB: 10 };
+// Per file: `clipSecs` is each video/audio clip's [min, max] length, `audioMB` the
+// audio size cap, and (where the docs give them) `side` the video's [min, max] pixel
+// side and `aspect` its [min, max] width/height ratio.
+const REF_LIMITS_25 = {
+  image: 30, video: 10, audio: 10, secs: 30, videoMB: 200, audioMB: 15,
+  clipSecs: [2, 30],
+};
+const REF_LIMITS = {
+  image: 9, video: 3, audio: 3, secs: 15, videoMB: 50, audioMB: 15,
+  clipSecs: [2, 15],
+};
+// MiniMax H3 reference-to-video: the 2.0 numbers plus a frame-size range.
+const REF_LIMITS_H3 = { ...REF_LIMITS, side: [256, 5760], aspect: [0.4, 2.5] };
+// Kling 4.0: 10 images, 5 videos (10MB each, 2–30s each, 30s total), 3 voices;
+// keyframe-to-video takes up to 8 middle keyframes.
+const REF_LIMITS_KLING = {
+  image: 10, video: 5, audio: 3, secs: 30, videoMB: 10, audioMB: 15,
+  clipSecs: [2, 30],
+};
 const REF_LIMITS_KLING_KEY = { ...REF_LIMITS_KLING, image: 8 };
-// Wan 3.0: 10 images, 5 videos (100MB each) and 5 audio clips, each kind ≤ 15s total.
-const REF_LIMITS_WAN = { image: 10, video: 5, audio: 5, secs: 15, videoMB: 100 };
+// Wan 3.0: 10 images, 5 videos (100MB each) and 5 audio clips, each 1–15s and each
+// kind ≤ 15s total; video sides 240–4096px.
+const REF_LIMITS_WAN = {
+  image: 10, video: 5, audio: 5, secs: 15, videoMB: 100, audioMB: 15,
+  clipSecs: [1, 15], side: [240, 4096],
+};
 const refLimits = () =>
   is25() ? REF_LIMITS_25
   : isKlingRef() ? REF_LIMITS_KLING
   : isKlingKey() ? REF_LIMITS_KLING_KEY
   : isWan() ? REF_LIMITS_WAN
+  : isH3Ref() ? REF_LIMITS_H3
   : REF_LIMITS;
+
+// Each ready reference video/audio file that breaks the model's per-file limits
+// (length, size, frame size), as one message per file. Files not yet probed, or
+// whose metadata couldn't be read, pass — kie.ai will say if they're wrong.
+function refFileProblems() {
+  if (!usesRefMedia()) return [];
+  const lim = refLimits();
+  const out = [];
+  const fmtSecs = (s) => String(Number(s.toFixed(1))); // 15.08 → "15.1", not "15"
+  // Kling's audio list is voices, whose limits aren't documented — videos only there.
+  for (const kind of isKling() ? ["video"] : ["video", "audio"]) {
+    lists[kind].items
+      .filter((i) => i.status === "ready")
+      .forEach((i, n) => {
+        const name = `${kind === "video" ? "Video" : "Audio"} ${n + 1}${i.name && !/^https?:/.test(i.name) ? ` (${i.name})` : ""}`;
+        const s = i.durationSec;
+        if (lim.clipSecs && s > 0) {
+          const [lo, hi] = lim.clipSecs;
+          if (s < lo || s > hi)
+            out.push(`${name} is ${fmtSecs(s)}s long — this model takes ${lo}–${hi}s per clip.`);
+        }
+        const capMB = kind === "video" ? lim.videoMB : lim.audioMB;
+        if (capMB && i.bytes > capMB * 1024 * 1024)
+          out.push(`${name} is ${(i.bytes / 1024 / 1024).toFixed(1)}MB — this model takes at most ${capMB}MB per file.`);
+        if (kind === "video" && i.width > 0 && i.height > 0) {
+          const dims = `${i.width}×${i.height}`;
+          if (lim.side) {
+            const [lo, hi] = lim.side;
+            if (Math.min(i.width, i.height) < lo || Math.max(i.width, i.height) > hi)
+              out.push(`${name} is ${dims} — each side must be ${lo}–${hi}px.`);
+          }
+          if (lim.aspect) {
+            const [lo, hi] = lim.aspect;
+            const r = i.width / i.height;
+            if (r < lo || r > hi)
+              out.push(`${name} is ${dims} (aspect ${r.toFixed(2)}) — this model takes ${lo}–${hi}.`);
+          }
+        }
+      });
+  }
+  return out;
+}
 
 // Seedance 2.5 draft mode: a 480p preview whose task id can be finalized at 1080p
 // (bytedance/seedance-2-5-draft) within 7 days. Not the History "draft" tag.
@@ -11823,10 +11908,22 @@ async function submitKieRuns(fromSaved, plan) {
     ].filter(Boolean);
     if (over.length)
       return fail(`This model takes at most ${over.join(", ")} as references.`);
+    // Wait for any still-probing files so lengths/sizes below are known.
+    if (usesRefMedia())
+      await Promise.all(
+        ["video", "audio"].flatMap((k) =>
+          lists[k].items.map((i) => i.probed).filter(Boolean),
+        ),
+      );
     if (usesRefMedia() && refVideoSeconds() > lim.secs)
       return fail(
         `Reference videos total ${Math.round(refVideoSeconds())}s — this model's limit is ${lim.secs}s.`,
       );
+    // Per-file length / size / frame size.
+    if (usesRefMedia()) {
+      const problems = refFileProblems();
+      if (problems.length) return fail(problems.join("\n"));
+    }
   }
   // Wildcards: each run of a ×N batch gets its own picks.
   let runs;

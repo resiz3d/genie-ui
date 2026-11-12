@@ -4421,6 +4421,29 @@ select.llm-s-add {
   grid-template-columns: repeat(7, minmax(0, 1fr));
   gap: 0.35rem;
 }
+/* The video editor's row adds ±24 — nine buttons. On a phone: the six steps on one
+   row, ⏮ ▶ ⏭ wide below them; a single row once there's room. */
+.ve-box .fp-controls {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-areas:
+    "b24 b10 b1 f1 f10 f24"
+    "first first play play last last";
+}
+.ve-box .ve-first { grid-area: first; }
+.ve-box .ve-back24 { grid-area: b24; }
+.ve-box .ve-back10 { grid-area: b10; }
+.ve-box .ve-back { grid-area: b1; }
+.ve-box .ve-play { grid-area: play; }
+.ve-box .ve-fwd { grid-area: f1; }
+.ve-box .ve-fwd10 { grid-area: f10; }
+.ve-box .ve-fwd24 { grid-area: f24; }
+.ve-box .ve-last { grid-area: last; }
+@media (min-width: 600px) {
+  .ve-box .fp-controls {
+    grid-template-columns: repeat(9, minmax(0, 1fr));
+    grid-template-areas: "first b24 b10 b1 play f1 f10 f24 last";
+  }
+}
 .fp-controls button {
   min-height: 44px; /* thumb-sized on a phone */
   padding: 0.3rem 0;
