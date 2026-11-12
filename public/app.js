@@ -6342,7 +6342,7 @@ function makeComfyReference(ref, baked = []) {
     ref.name,
     ref.kind,
     slotNames,
-    null,
+    ref.tail || null, // per-file "use last N sec" where the loader can skip frames
     [],
     ref.label,
   );

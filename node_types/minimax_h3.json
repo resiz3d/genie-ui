@@ -1,5 +1,5 @@
 {
-  "_comment": "MiniMax H3 reference-to-video node. `prompt` is followed through its PrimitiveStringMultiline to the editable text. The node also takes dynamic reference collections — 1+ images, videos, audio — wired into dotted inputs (ref_images.ref_image_N, …). GENie renders a multi-upload per collection and, at submit, injects the matching loader nodes (LoadImage / VHS_LoadVideo / VHS_LoadAudioUpload) and wires them, mirroring the shipped tokenized workflow. Loader nodes already wired into a collection are managed by it (not shown as standalone controls).",
+  "_comment": "MiniMax H3 reference-to-video node. `prompt` is followed through its PrimitiveStringMultiline to the editable text. The node also takes dynamic reference collections — 1+ images, videos, audio — wired into dotted inputs (ref_images.ref_image_N, …). GENie renders a multi-upload per collection and, at submit, injects the matching loader nodes (LoadImage / VHS_LoadVideo / VHS_LoadAudioUpload) and wires them, mirroring the shipped tokenized workflow. Loader nodes already wired into a collection are managed by it (not shown as standalone controls). Reference videos take a per-file 'use last N sec' (`tail`): a skip_first_frames on the injected loader, the kept frame count snapped down to H3's 17k+5 grid so the newest frames survive.",
   "nodes": {
     "MiniMaxH3ReferenceToVideo": {
       "display_name": "MiniMax H3 Reference to Video",
@@ -23,6 +23,7 @@
                   "class_type": "VHS_LoadVideo", "input": "video",
                   "defaults": { "force_rate": 0, "custom_width": 0, "custom_height": 0, "frame_load_cap": 0, "skip_first_frames": 0, "select_every_nth": 1, "format": "AnimateDiff" }
                 },
+                "tail": { "input": "skip_first_frames", "grid": [17, 5] },
                 "wires": [
                   { "prefix": "ref_videos.ref_video_", "slot": 0 },
                   { "prefix": "ref_video_audios.ref_video_audio_", "slot": 2 }

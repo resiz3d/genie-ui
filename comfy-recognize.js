@@ -321,6 +321,9 @@ export function recognizeWorkflow(workflow, nodeTypes) {
         targetNodeId: String(nodeId),
         loader: rc.loader,
         wires,
+        // `tail`: each file can be trimmed to its last N seconds by a frame skip on its
+        // loader — { input, grid } (see applyReferenceCollections / the server's tails).
+        ...(rc.tail ? { tail: { input: rc.tail.input || "skip_first_frames", grid: rc.tail.grid || null } } : {}),
       });
       handledNodeIds.add(String(nodeId));
     }
@@ -590,8 +593,11 @@ function dropEmptyMirrors(workflow, ref) {
   }
 }
 
+// Returns { "<name>_<n>": loaderId } for each loader injected (n counts from 1, the
+// same slot names the form uses), so per-file tails can find their loader.
 export function applyReferenceCollections(workflow, references, provided) {
-  if (!references?.length || !provided) return workflow;
+  const injected = {};
+  if (!references?.length || !provided) return injected;
   let nextId = maxNumericId(workflow) + 1;
   for (const ref of references) {
     const files = Array.isArray(provided[ref.name]) ? provided[ref.name].filter(Boolean) : null;
@@ -619,7 +625,12 @@ export function applyReferenceCollections(workflow, references, provided) {
       workflow[loaderId] = {
         inputs: { [ref.loader.input]: filename, ...(ref.loader.defaults || {}) },
         class_type: ref.loader.class_type,
+        // The tail settings travel on the loader, where the server's tail code reads them.
+        ...(ref.tail ?
+          { _meta: { tail_input: ref.tail.input, ...(ref.tail.grid ? { tail_frame_grid: ref.tail.grid } : {}) } }
+        : {}),
       };
+      injected[`${ref.name}_${i + 1}`] = loaderId;
       for (const w of ref.wires || []) {
         const inputs = wireNode(workflow, ref, w)?.inputs;
         // An `exact` wire is a plain single input (GetVideoComponents.video): the prefix
@@ -631,7 +642,7 @@ export function applyReferenceCollections(workflow, references, provided) {
     // Prune the export's original loaders if nothing references them any more.
     for (const id of oldLoaders) if (!isReferencedBy(workflow, id)) delete workflow[id];
   }
-  return workflow;
+  return injected;
 }
 
 // Coerce a submitted value to the JSON type the target input originally held, so

@@ -135,6 +135,11 @@ Add a `references` array to a variant (alongside or instead of `expose`):
 - A wire's optional **`exact`** (`true`) makes its prefix the whole input name, with
   no slot number appended — for a plain single input such as Get Video Components'
   `video` (`{ "prefix": "video", "slot": 0, "exact": true }`, with `max: 1`).
+- An optional **`tail`** (`{ "input": "skip_first_frames", "grid": [17, 5] }`) gives each
+  file of a video collection a "use last N sec" box. GENie writes the frame skip into
+  the injected loader's `input`, keeping a frame count snapped down to `n % k === r`
+  for `grid: [k, r]` (leave `grid` out for no snapping). MiniMax H3's reference
+  videos use it.
 - **`mirrors`** name other nodes that must receive the same files — e.g. the Batch
   Images node that hands a prompt enhancer the pictures the encoder also gets. Each is
   `{ class_type, prefix, slot, start }`, resolved to the node of that class already

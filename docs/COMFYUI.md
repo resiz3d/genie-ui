@@ -261,10 +261,21 @@ The server reports `refLabelScheme: "minimax_h3"` for workflows containing a
 `MiniMaxH3ReferenceToVideo` node, plus a per-video `soundtrack` flag; other
 workflows keep each field's own numbering.
 
-> **Reference-video tails ("use last N sec")** — trimming a reference to its last few
-> seconds (cheaper attention on continuations) was previously tied to the retired
-> `{{token}}` layer and is **not currently active** on the recognition path. Re-adding
-> it as a property of a recognized reference collection is tracked as follow-up work.
+### Reference-video tails ("use last N sec")
+
+Each reference video gets a **use last N sec** box under the dropzone: the run uses
+only the end of that clip (handy for continuing a shot, and cheaper — reference frames
+ride through every sampling step). 0 or blank uses the whole clip. GENie turns the
+seconds into a frame-exact `skip_first_frames` on that video's injected `VHS_LoadVideo`,
+so its soundtrack stays in sync, with no re-encoding.
+
+The kept frame count snaps **down** to the node's frame grid — MiniMax H3's is 17k+5
+(5, 22, 39, 56 … frames), because H3 would otherwise drop frames from the *end*, the
+very ones being continued from. The hint beside the box shows what will actually be
+kept (e.g. "last 39 frames (1.6s)" for 2 seconds of a 24 fps clip). The History card
+records the trim that ran, and Re-import restores it.
+
+A collection opts in with `tail` in its `node_types` entry (see the node_types README).
 
 Qwen Image 2.1 numbers its pictures `<image1>`, `<image2>`, … in the order they're
 loaded (`refLabelScheme: "qwen_image"`), and the thumbnails show those tags the same way.

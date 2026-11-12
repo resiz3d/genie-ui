@@ -3206,7 +3206,10 @@ app.post("/api/comfy/generate", async (req, res) => {
           throw new Error(`Pick a ${c.label || c.name} — none is selected.`);
     }
     applyRecognizedValues(workflow, activeControls, runValues); // patch recognized node inputs
-    applyReferenceCollections(workflow, recognizedRefs, providedRefs); // inject dynamic ref media loaders
+    // Inject dynamic ref media loaders; their slot names ("ref_video_1") join the token
+    // map so per-file tails reach the injected loaders too.
+    const injected = applyReferenceCollections(workflow, recognizedRefs, providedRefs);
+    for (const [slot, id] of Object.entries(injected)) tokenNodes.set(slot, { id });
     tailResult = await applyTails(workflow, tokenNodes, tails); // trim references to their last N seconds
     const bypassIds = (Array.isArray(bypass) ? bypass : []).map(String);
     for (const id of [...bypassIds, ...bypassDependents(workflow, bypassIds)])
