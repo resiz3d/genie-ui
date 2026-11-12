@@ -10,6 +10,8 @@ heading for that version with the date, commit, then tag the commit `vX.Y.Z`.
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-11-12
+
 ### Added
 
 - **Your own History tags.** A **＋** after the Filter chips opens *Your tags*: add a
@@ -947,7 +949,8 @@ second path.
 - A failed run's long error message (e.g. kie.ai's "Timeout while downloading url=…")
   took over its History card and crushed the buttons beside it.
 
-[Unreleased]: https://github.com/resiz3d/genie-ui/compare/v1.5.1...HEAD
+[Unreleased]: https://github.com/resiz3d/genie-ui/compare/v1.6.0...HEAD
+[1.6.0]: https://github.com/resiz3d/genie-ui/compare/v1.5.1...v1.6.0
 [1.5.1]: https://github.com/resiz3d/genie-ui/compare/v1.5.0...v1.5.1
 [1.5.0]: https://github.com/resiz3d/genie-ui/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/resiz3d/genie-ui/compare/v1.3.0...v1.4.0
