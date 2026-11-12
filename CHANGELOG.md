@@ -12,6 +12,19 @@ heading for that version with the date, commit, then tag the commit `vX.Y.Z`.
 
 ### Added
 
+- **Your own History tags.** A **＋** after the Filter chips opens *Your tags*: add a
+  tag for the project History is showing, or tick **Global** to have it in every
+  project. Each tag is a switch on the History cards (after ☆ favorite and 📝 draft)
+  and a Filter chip. Removing a tag takes it off the cards that had it.
+- **Notes on History cards.** A one-line note (up to 255 characters) at the foot of
+  each card, saved as you type.
+- **✨ Revise with AI keeps a history.** The prompt box's Revise panel has a
+  **🕘 Revision history**, per project: the prompt before, what you asked (with the
+  guide, length and model), and the result once a suggestion comes back — marked
+  applied, not applied, discarded, stopped or failed. Open one for the before → after
+  diff, to ask the same thing again, or to put either text back in the prompt box
+  (with ↶ Undo). The newest 200 are kept, in `projects/<project>/revisions.json`.
+
 - **One ⚙ Settings window, and no `.env` editing to get started.** *⚙ Settings* in the
   page header opens a single window with a tab per section: **Image / Video** (your
   ComfyUI servers), **LLM** (the LLM settings, moved in from their own window) and

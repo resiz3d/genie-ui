@@ -89,6 +89,8 @@ GENie starts itself, any **OpenAI-compatible** server, or **kie.ai**'s chat mode
   prompt around them.
 - **✨ Revise with AI** — say what to change in a prompt and get it rewritten, following
   the prompting guide for the model you're on (Seedance, Kling, MiniMax, Qwen Edit).
+  Each project keeps a history of its revisions: the prompt before, what you asked, and
+  the result.
 - **✨ Analyze images** — fills in a subject's definition from its reference images.
 - **💬 Chat** — talk to the same LLM, with pictures; chats are kept on the server.
 - **Shares the GPU politely** — a local LLM loads only when ComfyUI is idle and there's
@@ -101,7 +103,8 @@ GENie starts itself, any **OpenAI-compatible** server, or **kie.ai**'s chat mode
   gallery, history and output folder. Projects can be filed in folders.
 - **History** — each run is saved with its prompt, settings and references. **Re-import**
   loads it back into the form, **Re-run** generates it again; filter by tag (video /
-  image / draft / favorite, plus per-workflow auto-tags), select many to move them, and
+  image / draft / favorite, per-workflow auto-tags, and tags of your own — per project
+  or global), jot a note on any card, select many to move them, and
   **📦 Export** a project as a self-contained folder you can zip and share.
 - **Gallery** — every reference file you drop (or paste with Ctrl+V) is kept per
   project, with an optional subject key and definition, ready to click back into a run.
@@ -114,8 +117,6 @@ GENie starts itself, any **OpenAI-compatible** server, or **kie.ai**'s chat mode
   frame** to start the next clip from), add PNG overlays, adjust colour and resize.
   Frame-accurate, never overwrites a source. Needs [ffmpeg](docs/FFMPEG.md).
 - **🖼 Image editor** — crop, flip, draw, and paint masks, with pinch-zoom.
-- **🧩 Local plugins** — personal additions in a git-ignored `plugins/` folder. See the
-  notes at the top of `plugins.js`.
 
 ### Settings
 
@@ -354,8 +355,6 @@ llm.js             LLM sources, GPU turn-taking with ComfyUI, prompt-build jobs
 public/video-editor.js  ✂ Video editor dialog
 video-editor.js    the video editor's uploads, ffmpeg export jobs (with effects) and download
 public/video-fx.js the video editor's 🎨 Effects form and live preview
-plugins.js         loads local plugins from plugins/
-plugins/<name>/    your own plugins (git-ignored)
 .env.example       template for the optional .env (port, LAN access, password, folders)
 output/<project>/   downloaded result videos (git-ignored, created at runtime)
 output/<project>/edited_videos/  what the ✂ Video editor's Save button writes
@@ -394,5 +393,6 @@ the author is **not responsible or liable** for:
   credits. Guard it accordingly.
 
 This is an unofficial hobby tool. It is **not affiliated with, endorsed by, or
-supported by kie.ai or ByteDance**. Their APIs, models, pricing, and terms can
+supported by kie.ai, ByteDance, ComfyUI, or any other corporation or organization**.
+Their APIs, models, pricing, and terms can
 change at any time and break this app without notice.

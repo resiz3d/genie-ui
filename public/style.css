@@ -2363,6 +2363,81 @@ button.hist-tag-switch.active {
   opacity: 1;
 }
 
+/* ＋ after the Filter chips: opens "Your tags". */
+.ve-lib-chip.hist-tag-add {
+  border-style: solid;
+  color: var(--accent);
+  font-weight: 600;
+  padding: 0.15rem 0.5rem;
+}
+.ve-lib-chip.hist-tag-add:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+/* A card's note: reads as a quiet line until it's hovered or typed in. */
+input[type="text"].hist-note {
+  width: 100%;
+  margin-top: auto; /* the foot of the card, whatever its height */
+  padding: 0.4rem 0.6rem;
+  font-size: 0.85rem;
+  background: transparent;
+  border-color: transparent;
+  border-bottom-color: var(--border);
+  border-radius: 6px;
+  resize: none;
+}
+input[type="text"].hist-note:hover,
+input[type="text"].hist-note:focus {
+  background: var(--bg);
+  border-color: var(--border);
+}
+input[type="text"].hist-note:focus {
+  border-color: var(--accent);
+}
+input[type="text"].hist-note.unsaved {
+  border-color: var(--error);
+}
+/* "Your tags" (the ＋ chip). */
+.modal-box.tag-box {
+  width: min(440px, 94vw);
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+.tag-intro {
+  margin: 0;
+  font-size: 0.85rem;
+}
+.tag-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  max-height: 40vh;
+  overflow-y: auto;
+}
+.tag-list > p {
+  margin: 0;
+  font-size: 0.85rem;
+}
+.tag-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+.tag-row .hint {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.8rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tag-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
 /* Modal (export options). */
 .modal {
   position: fixed;
@@ -4189,6 +4264,7 @@ select.llm-s-add {
   line-height: 1.5;
 }
 .llm-rev-diff ins,
+.llm-qhist .hint ins,
 .llm-rev-result .hint ins {
   text-decoration: none;
   background: rgba(76, 175, 122, 0.25);
@@ -4196,6 +4272,7 @@ select.llm-s-add {
   border-radius: 3px;
 }
 .llm-rev-diff del,
+.llm-qhist .hint del,
 .llm-rev-result .hint del {
   background: rgba(255, 107, 107, 0.18);
   color: #ffb3b3;
@@ -4204,6 +4281,94 @@ select.llm-s-add {
 .llm-rev-applied {
   margin: 0;
   font-size: 0.85rem;
+}
+/* 🕘 Revision history, at the foot of the prompt box's Revise panel. */
+.llm-qhist > summary {
+  cursor: pointer;
+  font-size: 0.88rem;
+  font-weight: 500;
+}
+.llm-qhist-empty,
+.llm-qhist-foot {
+  margin: 0.5rem 0 0;
+  font-size: 0.85rem;
+}
+.llm-qhist-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-top: 0.5rem;
+  max-height: 28rem;
+  overflow-y: auto;
+}
+.llm-qhist-row {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.4rem 0.6rem;
+}
+.llm-qhist-row > summary {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  cursor: pointer;
+  font-size: 0.85rem;
+  min-width: 0;
+}
+.llm-qhist-when,
+.llm-qhist-status {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+.llm-qhist-status.st-applied {
+  color: #7fd8a6;
+}
+.llm-qhist-status.st-failed {
+  color: var(--error);
+}
+.llm-qhist-ask {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.llm-qhist-row[open] > summary .llm-qhist-ask {
+  white-space: normal;
+}
+.llm-qhist-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 0.6rem;
+}
+.llm-qhist-meta {
+  margin: 0;
+  font-size: 0.8rem;
+}
+.llm-qhist-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 0.88rem;
+}
+.llm-qhist-acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.llm-qhist-acts .btn-secondary {
+  padding: 0.4rem 0.7rem;
+  border-radius: 8px;
+  font-size: 0.82rem;
+}
+@media (max-width: 600px) {
+  .llm-qhist-row > summary {
+    flex-wrap: wrap;
+  }
+  .llm-qhist-ask {
+    flex-basis: 100%;
+  }
 }
 
 /* Frame stage, scrubber, step buttons and frame strip (used by the ✂ Video editor) */

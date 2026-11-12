@@ -1779,6 +1779,12 @@
         </div>
       </div>
       <p class="llm-rev-applied hidden">Applied.<span class="llm-qrev-note"></span> <button type="button" class="link-btn llm-rev-undo">↶ Undo</button></p>
+      <details class="llm-qhist">
+        <summary>🕘 Revision history <span class="hint llm-qhist-count"></span></summary>
+        <p class="muted llm-qhist-empty">Nothing yet — each revision you ask for in this project is kept here: the prompt before, what you asked, and the result.</p>
+        <div class="llm-qhist-list"></div>
+        <p class="llm-qhist-foot hidden"><button type="button" class="link-btn llm-qhist-clear">🧹 Clear this project's history</button></p>
+      </details>
     </div>`;
   const q = {
     appliedNote: $(".llm-qrev-note", qrev),
@@ -1803,6 +1809,154 @@
   let qst = null; // { jobId, job, before, applied }
   let qundo = null; // { ta, value }
   let qTimer = null;
+
+  // ---- revision history (per project, on the server: /api/llm/revisions) ----
+  // Every ✨ Revise here is written down as it goes: the prompt before and the request
+  // when it's asked, the text after once a suggestion comes back, and whether it was
+  // applied. `qst.rev` is the record of the revision in hand.
+  const qh = {
+    box: $(".llm-qhist", qrev),
+    list: $(".llm-qhist-list", qrev),
+    count: $(".llm-qhist-count", qrev),
+    empty: $(".llm-qhist-empty", qrev),
+    foot: $(".llm-qhist-foot", qrev),
+  };
+  let qhist = []; // newest first
+  let qhistProject = null; // the project it was loaded for
+  const QH_STATUS = {
+    asked: "⏳ asked",
+    suggested: "💡 suggested, not applied",
+    applied: "✓ applied",
+    discarded: "✕ discarded",
+    failed: "⚠ failed",
+    stopped: "⏹ stopped",
+  };
+  const guideName = (v) => [...q.guide.options].find((o) => o.value === v)?.text || v;
+
+  async function loadQHist() {
+    const projectId = activeProjectId;
+    try {
+      const list = await api(`/api/llm/revisions?projectId=${encodeURIComponent(projectId)}`);
+      if (projectId !== activeProjectId) return;
+      qhist = list || [];
+      qhistProject = projectId;
+    } catch {
+      /* offline — keep what's shown */
+    }
+    renderQHist();
+  }
+  // Write one step of the revision in hand; the list follows.
+  async function noteQ(st, patch) {
+    if (!st?.rev) return;
+    try {
+      const saved = await api(`/api/llm/revisions/${st.rev.id}`, "PUT", { projectId: st.projectId, ...patch });
+      st.rev = saved;
+      if (st.projectId === qhistProject) {
+        qhist = qhist.map((r) => (r.id === saved.id ? saved : r));
+        renderQHist();
+      }
+    } catch {
+      /* the revision itself still works; its history line just isn't updated */
+    }
+  }
+  // A text from the history goes into the prompt box, with ↶ Undo as for Apply.
+  function useQText(text) {
+    if (!qta) return;
+    qundo = { ta: qta, value: qta.value };
+    setBox(qta, text);
+    q.appliedNote.textContent = " (from the revision history)";
+    renderQ();
+    qta.focus();
+  }
+  function renderQHist() {
+    qh.count.textContent = qhist.length ? `(${qhist.length})` : "";
+    qh.empty.classList.toggle("hidden", qhist.length > 0);
+    qh.foot.classList.toggle("hidden", !qhist.length);
+    const open = new Set([...qh.list.querySelectorAll("details[open]")].map((d) => d.dataset.id));
+    qh.list.innerHTML = "";
+    for (const r of qhist) {
+      const row = el("details", "llm-qhist-row");
+      row.dataset.id = r.id;
+      const sum = el("summary");
+      const ask = r.instruction || (r.guide || r.duration ? "(no request — reworked to the guide / length)" : "(no request)");
+      sum.append(
+        el("span", "llm-qhist-when", when(r.at)),
+        el("span", `llm-qhist-status st-${r.status}`, QH_STATUS[r.status] || r.status),
+        el("span", "llm-qhist-ask", ask.replace(/\s+/g, " ")),
+      );
+      const body = el("div", "llm-qhist-body");
+      // Filled when the row is opened: a diff of two long prompts isn't free.
+      const fill = () => {
+        if (body.childElementCount) return;
+        const bits = [];
+        if (r.guide) bits.push(`Guide: ${guideName(r.guide)}`);
+        if (r.duration) bits.push(`Length: ${r.duration}s`);
+        if (r.model) bits.push(`Model: ${r.model}`);
+        if (r.error) bits.push(`⚠ ${r.error}`);
+        if (bits.length) body.appendChild(el("p", "muted llm-qhist-meta", bits.join(" · ")));
+        if (r.instruction) {
+          body.appendChild(el("div", "pe-refs-head", "What you asked"));
+          body.appendChild(el("div", "llm-qhist-text", r.instruction));
+        }
+        const head = el("div", "pe-refs-head");
+        const text = el("div", "llm-rev-diff");
+        if (typeof r.after === "string") {
+          head.innerHTML = `Before → after <span class="hint">— <ins>added</ins> / <del>removed</del></span>`;
+          text.innerHTML = diffHtml(r.before, r.after);
+        } else {
+          head.textContent = "The prompt before";
+          text.textContent = r.before || "(empty)";
+        }
+        body.append(head, text);
+        const acts = el("div", "llm-qhist-acts");
+        const btn = (label, title, fn) => {
+          const b = el("button", "btn-secondary", label);
+          b.type = "button";
+          b.title = title;
+          b.addEventListener("click", fn);
+          acts.appendChild(b);
+        };
+        btn("↺ Ask this again", "Put this request, guide and length back in the form above", () => {
+          q.ask.value = r.instruction || "";
+          q.guide.value = r.guide || "";
+          if (q.guide.selectedIndex < 0) q.guide.value = "";
+          q.len.value = r.duration || "";
+          q.ask.focus();
+        });
+        btn("⬑ Use the “before” text", "Put the prompt as it was before this revision into the prompt box", () => useQText(r.before));
+        if (typeof r.after === "string")
+          btn("⬎ Use the “after” text", "Put this revision's result into the prompt box", () => useQText(r.after));
+        btn("🗑", "Remove this revision from the history", async () => {
+          try {
+            qhist = await api(`/api/llm/revisions/${r.id}?projectId=${encodeURIComponent(qhistProject)}`, "DELETE");
+            renderQHist();
+          } catch (err) {
+            alert(err.message);
+          }
+        });
+        body.appendChild(acts);
+      };
+      row.addEventListener("toggle", () => row.open && fill());
+      row.append(sum, body);
+      if (open.has(r.id)) {
+        row.open = true;
+        fill();
+      }
+      qh.list.appendChild(row);
+    }
+  }
+  qh.box.addEventListener("toggle", () => {
+    if (qh.box.open) loadQHist();
+  });
+  $(".llm-qhist-clear", qrev).addEventListener("click", async () => {
+    if (!qhistProject || !confirm("Clear this project's revision history?")) return;
+    try {
+      qhist = await api(`/api/llm/revisions/all?projectId=${encodeURIComponent(qhistProject)}`, "DELETE");
+      renderQHist();
+    } catch (err) {
+      alert(err.message);
+    }
+  });
 
   // Reference media for the LLM: gallery entries ({ id, kind, localUrl, name }). Images
   // it looks at (<Picture N>); audio clips it can't hear but cites by label (<Audio N>,
@@ -1945,6 +2099,18 @@
     }
     renderQ();
     if (ACTIVE.includes(qst.job.status)) qTimer = setTimeout(pollQ, 1500);
+    else settleQ(qst);
+  }
+  // The job is over: its outcome goes in the history (once).
+  function settleQ(st) {
+    if (!st?.rev || st.settled) return;
+    const job = st.job || {};
+    if (ACTIVE.includes(job.status)) return;
+    st.settled = true;
+    if (job.status === "done" && job.result)
+      noteQ(st, { status: "suggested", after: revisedText(job.result, false).text });
+    else if (job.status === "cancelled") noteQ(st, { status: "stopped" });
+    else noteQ(st, { status: "failed", error: job.error || job.message || "" });
   }
 
   async function startQ() {
@@ -1973,9 +2139,28 @@
         guide: q.guide.value,
         duration,
       });
-      qst = { jobId: job.id, job, before, images: qimgs.slice() };
+      const st = (qst = { jobId: job.id, job, before, images: qimgs.slice(), projectId: activeProjectId });
       renderQ();
       pollQ();
+      // Written down straight away, so a revision that's still running — or whose tab
+      // gets closed — is in the history with what was asked.
+      api("/api/llm/revisions", "POST", {
+        projectId: st.projectId,
+        before,
+        instruction,
+        guide: q.guide.value,
+        duration,
+        model: src.model || "",
+      })
+        .then((rev) => {
+          st.rev = rev;
+          if (st.projectId === qhistProject) {
+            qhist = [rev, ...qhist];
+            renderQHist();
+          }
+          settleQ(st); // a quick one may be over already
+        })
+        .catch(() => {});
     } catch (err) {
       q.status.textContent = `⚠ ${err.message}`;
     }
@@ -1999,6 +2184,7 @@
       /* already over */
     }
     renderQ();
+    settleQ(qst);
   });
   $(".llm-rev-apply", qrev).addEventListener("click", () => {
     const res = qst?.job?.result;
@@ -2007,6 +2193,7 @@
     const placed = revisedText(res, true);
     setBox(qta, placed.text);
     qst.applied = true;
+    noteQ(qst, { status: "applied", after: placed.text }); // accepted, as it went in the box
     const plural = (n) => `${n} image${n === 1 ? "" : "s"}`;
     q.appliedNote.textContent =
       (placed.added ? ` ${plural(placed.added)} added to the references.` : "") +
@@ -2026,6 +2213,7 @@
     renderQ();
   });
   $(".llm-rev-discard", qrev).addEventListener("click", () => {
+    noteQ(qst, { status: "discarded" });
     qst = null;
     renderQ();
   });
@@ -2033,6 +2221,7 @@
     if (!qundo) return;
     setBox(qundo.ta, qundo.value);
     qundo = null;
+    if (qst?.applied) noteQ(qst, { status: "suggested" }); // taken back: not accepted after all
     if (qst) qst.applied = false; // the suggestion can be applied again
     renderQ();
   });
@@ -2050,6 +2239,7 @@
     ta.after(qrev);
     qrev.classList.remove("hidden");
     renderQ();
+    if (qhistProject !== activeProjectId || qh.box.open) loadQHist(); // this project's
     q.ask.focus();
   };
 

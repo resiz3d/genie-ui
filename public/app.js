@@ -1426,6 +1426,11 @@ function renderHistTagChips() {
       const k = String(t).toLowerCase();
       if (!tags.has(k) && !custom.has(k)) custom.set(k, String(t));
     }
+  // Your own tags (＋) have a chip from the moment they exist, cards or not.
+  for (const d of shownTagDefs()) {
+    const k = d.name.toLowerCase();
+    if (!tags.has(k) && !custom.has(k)) custom.set(k, d.name);
+  }
   for (const [k, t] of [...custom].sort((a, b) => a[1].localeCompare(b[1]))) tags.set(k, t);
   for (const t of Object.keys(histTagFilter))
     if (!tags.has(t.toLowerCase())) tags.set(t.toLowerCase(), t);
@@ -1457,6 +1462,222 @@ function renderHistTagChips() {
     });
     histTagChipsEl.appendChild(b);
   }
+  const add = document.createElement("button");
+  add.type = "button";
+  add.className = "ve-lib-chip hist-tag-add";
+  add.textContent = "＋";
+  add.title = "Your own tags — add one (for this project, or everywhere) or remove one";
+  add.setAttribute("aria-label", "Add or remove your own tags");
+  add.addEventListener("click", openTagManager);
+  histTagChipsEl.appendChild(add);
+}
+
+// --- your own tags ---------------------------------------------------------------
+// Tags you make up, beside the built-in ones: each is a switch on the History cards
+// and a Filter chip. A tag belongs to one project, or — marked global — shows in every
+// project. The definitions live on the server (/api/tags); which cards carry a tag is
+// on the cards (entry.tags, with the workflow auto-tags).
+let tagDefs = { global: [], projects: {} };
+const tagDefsFor = (projectId) => [
+  ...(tagDefs.projects[projectId || "default"] || []),
+  ...tagDefs.global,
+];
+// The ones the History list is showing cards for: one project's, or everyone's.
+function shownTagDefs() {
+  const filter = historyFilter.value || "all";
+  if (filter !== "all") return tagDefsFor(filter);
+  return [...Object.values(tagDefs.projects).flat(), ...tagDefs.global];
+}
+async function loadTagDefs() {
+  try {
+    const d = await (await fetch("/api/tags")).json();
+    if (d?.data) tagDefs = { global: d.data.global || [], projects: d.data.projects || {} };
+  } catch {
+    /* offline — the cards still show the tags they carry */
+  }
+  renderHistory(historyEntries);
+}
+async function toggleCustomTag(entry, name, on) {
+  try {
+    const res = await fetch(`/api/history/${entry.id}/tags`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tag: name, on }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.msg || "Update failed");
+    if (body.data) Object.assign(entry, { tags: body.data.tags });
+    renderHistory(historyEntries);
+  } catch (err) {
+    alert(err.message || String(err));
+  }
+}
+
+// The ＋ chip's window: the tags there are, and a line to add another.
+const tagModal = document.createElement("div");
+tagModal.className = "modal hidden";
+tagModal.innerHTML = `
+  <div class="modal-box tag-box" role="dialog" aria-labelledby="tagHeading">
+    <div class="pe-head">
+      <h3 id="tagHeading">Your tags</h3>
+      <button type="button" class="link-btn pe-close tag-close" title="Close (Esc)">×</button>
+    </div>
+    <p class="muted tag-intro">A tag you add shows as a switch on every History card, and as a Filter chip.</p>
+    <div class="tag-list"></div>
+    <form class="tag-form">
+      <label>New tag
+        <input type="text" class="tag-name" maxlength="32" autocomplete="off" placeholder="e.g. keeper" />
+      </label>
+      <label class="inline" title="Off: only the project named here gets the tag. On: every project does.">
+        <input type="checkbox" class="tag-global" /> Global <span class="hint tag-scope"></span>
+      </label>
+      <p class="sp-save-warn hidden tag-err"></p>
+      <div class="modal-actions">
+        <button type="button" class="btn-secondary tag-close">Done</button>
+        <button type="submit">＋ Add tag</button>
+      </div>
+    </form>
+  </div>`;
+document.body.appendChild(tagModal);
+// A new tag goes to the project History is showing, or the active one under "All".
+const tagProjectId = () =>
+  historyFilter.value && historyFilter.value !== "all" ? historyFilter.value : activeProjectId;
+function renderTagManager() {
+  const pid = tagProjectId();
+  const pname = projects.find((p) => p.id === pid)?.name || "this project";
+  const globalOn = tagModal.querySelector(".tag-global").checked;
+  tagModal.querySelector(".tag-scope").textContent =
+    globalOn ? "— shows in every project" : `— off: only in “${pname}”`;
+  const list = tagModal.querySelector(".tag-list");
+  list.innerHTML = "";
+  const rows = [
+    ...(tagDefs.projects[pid] || []).map((d) => ({ d, global: false })),
+    ...tagDefs.global.map((d) => ({ d, global: true })),
+  ];
+  if (!rows.length) {
+    const p = document.createElement("p");
+    p.className = "muted";
+    p.textContent = "No tags of your own yet.";
+    list.appendChild(p);
+  }
+  for (const { d, global } of rows) {
+    const row = document.createElement("div");
+    row.className = "tag-row";
+    const chip = document.createElement("span");
+    chip.className = "hist-tag hist-tag-auto";
+    chip.textContent = d.name;
+    const scope = document.createElement("span");
+    scope.className = "hint";
+    scope.textContent = global ? "🌐 global" : pname;
+    const del = document.createElement("button");
+    del.type = "button";
+    del.className = "link-btn";
+    del.textContent = "🗑";
+    del.title = `Remove “${d.name}”`;
+    del.addEventListener("click", async () => {
+      const where = global ? "every project's cards" : `the cards in “${pname}”`;
+      if (!confirm(`Remove the tag “${d.name}”? It also comes off ${where} that have it.`)) return;
+      const q = global ? "global=1" : `projectId=${encodeURIComponent(pid)}`;
+      const res = await fetch(`/api/tags/${d.id}?${q}`, { method: "DELETE" });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) return alert(body.msg || "Couldn't remove the tag");
+      tagDefs = { global: body.data.global, projects: body.data.projects };
+      renderTagManager();
+      loadHistory(); // the cards it came off
+    });
+    row.append(chip, scope, del);
+    list.appendChild(row);
+  }
+}
+function openTagManager() {
+  tagModal.querySelector(".tag-err").classList.add("hidden");
+  tagModal.querySelector(".tag-name").value = "";
+  tagModal.querySelector(".tag-global").checked = false;
+  renderTagManager();
+  tagModal.classList.remove("hidden");
+  tagModal.querySelector(".tag-name").focus();
+}
+const closeTagManager = () => tagModal.classList.add("hidden");
+tagModal.querySelector(".tag-global").addEventListener("change", renderTagManager);
+tagModal.querySelector(".tag-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const err = tagModal.querySelector(".tag-err");
+  const nameEl = tagModal.querySelector(".tag-name");
+  err.classList.add("hidden");
+  try {
+    const res = await fetch("/api/tags", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: nameEl.value,
+        global: tagModal.querySelector(".tag-global").checked,
+        projectId: tagProjectId(),
+      }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.msg || "Couldn't add the tag");
+    tagDefs = { global: body.data.global, projects: body.data.projects };
+    nameEl.value = "";
+    renderTagManager();
+    renderHistory(historyEntries);
+    nameEl.focus();
+  } catch (ex) {
+    err.textContent = ex.message;
+    err.classList.remove("hidden");
+  }
+});
+tagModal.addEventListener("click", (e) => {
+  if (e.target === tagModal || e.target.closest(".tag-close")) closeTagManager();
+});
+tagModal.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    e.stopPropagation();
+    closeTagManager();
+  }
+});
+
+// A History card's note: saved a moment after typing stops, and when the box is left.
+const histNoteTimers = new Map(); // entry id → timer
+async function saveHistoryNote(entry, input) {
+  clearTimeout(histNoteTimers.get(entry.id));
+  histNoteTimers.delete(entry.id);
+  const notes = input.value.trim();
+  if (notes === (entry.notes || "")) return;
+  try {
+    const res = await fetch(`/api/history/${entry.id}/notes`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ notes }),
+    });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).msg || "Save failed");
+    entry.notes = notes;
+    input.classList.remove("unsaved");
+  } catch (err) {
+    input.classList.add("unsaved");
+    input.title = `Not saved: ${err.message || err}`;
+  }
+}
+function makeHistoryNote(entry, typing) {
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "hist-note";
+  input.maxLength = 255;
+  input.placeholder = "Add a note…";
+  input.setAttribute("aria-label", "Note for this card");
+  input.dataset.noteFor = entry.id;
+  // A re-render mid-sentence (a run finishing, another card's tag) keeps what's typed.
+  input.value = typing ? typing.value : entry.notes || "";
+  input.addEventListener("input", () => {
+    clearTimeout(histNoteTimers.get(entry.id));
+    histNoteTimers.set(entry.id, setTimeout(() => saveHistoryNote(entry, input), 900));
+  });
+  input.addEventListener("change", () => saveHistoryNote(entry, input));
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") input.blur();
+    e.stopPropagation(); // the page's shortcuts aren't for a text box
+  });
+  input.addEventListener("click", (e) => e.stopPropagation()); // not a card pick in ☑ Select
+  return input;
 }
 const autoDraftMaxEl = document.getElementById("autoDraftMax");
 fetch("/api/settings")
@@ -12944,6 +13165,17 @@ function renderHistory(entries) {
   const oldMedia = new Map();
   for (const m of historyEl.querySelectorAll(".hist-thumb > [data-hist-key]"))
     oldMedia.set(m.dataset.histKey, m);
+  // A note being typed survives the redraw: its text, caret and focus.
+  const active = document.activeElement;
+  const typing =
+    active?.classList?.contains("hist-note") && historyEl.contains(active) ?
+      {
+        id: active.dataset.noteFor,
+        value: active.value,
+        start: active.selectionStart,
+        end: active.selectionEnd,
+      }
+    : null;
   historyEl.innerHTML = "";
   const filter = historyFilter.value || "all"; // used below for the per-entry project label
   const visible = filterHistory(entries);
@@ -13448,8 +13680,11 @@ function renderHistory(entries) {
     // (both also relocate the saved file server-side), then the date line.
     const tagsRow = document.createElement("div");
     tagsRow.className = "hist-tags";
+    // Your own tags (＋ beside the Filter chips) are switches too, after those two.
+    const ownTags = tagDefsFor(entryProjectId);
+    const isOwn = (t) => ownTags.some((d) => d.name.toLowerCase() === String(t).toLowerCase());
     for (const t of entryTags(entry)) {
-      if (t === "favorite" || t === "draft") continue; // the toggles below show these
+      if (t === "favorite" || t === "draft" || isOwn(t)) continue; // the toggles below show these
       const chip = document.createElement("span");
       chip.className =
         ["image", "video"].includes(t) ?
@@ -13482,6 +13717,21 @@ function renderHistory(entries) {
       "📝 draft",
       entry.draft ? "Remove the draft tag" : "Tag this as a draft",
     );
+    const seenOwn = new Set();
+    for (const d of ownTags) {
+      const key = d.name.toLowerCase();
+      if (seenOwn.has(key)) continue; // a project tag and a global one of the same name
+      seenOwn.add(key);
+      const on = (entry.tags || []).some((t) => String(t).toLowerCase() === key);
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = `hist-tag hist-tag-switch${on ? " active hist-tag-auto" : ""}`;
+      b.textContent = d.name;
+      b.title = on ? `Remove the “${d.name}” tag` : `Tag this “${d.name}”`;
+      b.setAttribute("aria-pressed", String(on));
+      b.addEventListener("click", () => toggleCustomTag(entry, d.name, !on));
+      tagsRow.appendChild(b);
+    }
     const head = document.createElement("div");
     head.className = "hist-card-head";
     head.append(tagsRow, meta);
@@ -13489,6 +13739,14 @@ function renderHistory(entries) {
     body.append(head, main);
     if (org.childElementCount) body.appendChild(org);
     body.appendChild(buildHistDetails(entry, input, comfyEntry, isImg));
+    const mine = typing?.id === entry.id ? typing : null;
+    const note = makeHistoryNote(entry, mine);
+    body.appendChild(note);
+    if (mine)
+      queueMicrotask(() => {
+        note.focus({ preventScroll: true });
+        note.setSelectionRange(mine.start, mine.end);
+      });
     // In flight, the body goes under the status and progress bar, beside the live
     // preview — not wrapped below it. live.el survives re-renders, so drop the body
     // an earlier render put there.
@@ -13828,4 +14086,5 @@ loadProjects();
 loadCredits();
 loadGallery();
 loadHistory().then(resumeFromHistory); // re-attach live status to any run still pending server-side
+loadTagDefs(); // your own tags: the cards' switches and the Filter chips
 loadWorkflows(); // add any local ComfyUI workflows to the model dropdown

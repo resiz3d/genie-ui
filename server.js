@@ -6198,12 +6198,22 @@ app.post("/api/generation/test-comfy", async (req, res) => {
 
 // --- toggle an entry's tags (hidden / draft / favorite) -------------------
 app.post("/api/history/:id/tags", (req, res) => {
-  const { hidden, draft, favorite } = req.body || {};
+  const { hidden, draft, favorite, tag, on } = req.body || {};
   const entries = readJson(HISTORY_FILE);
   const entry = entries.find((e) => e.id === req.params.id);
   if (!entry)
     return res.status(404).json({ code: 404, msg: "history entry not found" });
   if (typeof hidden === "boolean") entry.hidden = hidden;
+  // One of your own tags (see /api/tags), switched on or off on this card. They sit
+  // in `tags` beside the workflow's auto-tags.
+  const [name] = cleanTags([tag]);
+  if (name && typeof on === "boolean") {
+    const rest = (Array.isArray(entry.tags) ? entry.tags : []).filter(
+      (t) => String(t).toLowerCase() !== name.toLowerCase(),
+    );
+    entry.tags = cleanTags(on ? [...rest, name] : rest);
+    if (!entry.tags.length) delete entry.tags;
+  }
   // draft and favorite both change where the file lives (see outputSubfolder), so
   // relocate whenever either flips.
   const relocates =
@@ -6227,6 +6237,176 @@ app.post("/api/history/:id/tags", (req, res) => {
   }
   writeJson(HISTORY_FILE, entries);
   res.json({ code: 200, msg: "updated", data: entry });
+});
+
+// A card's note: one line of your own, up to 255 characters.
+const HISTORY_NOTE_MAX = 255;
+app.post("/api/history/:id/notes", (req, res) => {
+  const entries = readJson(HISTORY_FILE);
+  const entry = entries.find((e) => e.id === req.params.id);
+  if (!entry)
+    return res.status(404).json({ code: 404, msg: "history entry not found" });
+  const notes = String(req.body?.notes ?? "")
+    .replace(/[\r\n]+/g, " ")
+    .trim()
+    .slice(0, HISTORY_NOTE_MAX);
+  if (notes) entry.notes = notes;
+  else delete entry.notes;
+  saveHistoryEntry(entry, entries);
+  res.json({ code: 200, msg: "updated", data: { id: entry.id, notes: entry.notes || "" } });
+});
+
+// --- your own History tags (per project, or global) --------------------------
+// Tags you make up ("keeper", "client A", "needs redo"): each one shows as a switch on
+// the History cards and as a Filter chip. A project keeps its own
+// (<PROJECT_DATA_DIR>/<slug>/tags.json); ones marked global live in tags.json and show
+// in every project. Entries: { id, name, createdAt }. Which cards carry a tag is on the
+// cards themselves (`tags`, beside the workflow auto-tags), so removing a tag here
+// takes it off the cards it covered too.
+const TAGS_FILE = path.join(__dirname, "tags.json");
+const RESERVED_TAGS = new Set(["video", "image", "draft", "favorite", "cancelled", "hidden"]);
+function tagsFile(proj) {
+  return proj ? path.join(PROJECT_DATA_DIR, proj.slug, "tags.json") : TAGS_FILE;
+}
+function readTagDefs(proj) {
+  const list = readJson(tagsFile(proj));
+  return Array.isArray(list) ? list : [];
+}
+function writeTagDefs(proj, list) {
+  const file = tagsFile(proj);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  writeJson(file, list);
+}
+function allTagDefs() {
+  const projects = {};
+  for (const proj of ensureDefaultProject()) {
+    const list = readTagDefs(proj);
+    if (list.length) projects[proj.id] = list;
+  }
+  return { global: readTagDefs(null), projects };
+}
+app.get("/api/tags", (req, res) => {
+  res.json({ code: 200, msg: "success", data: allTagDefs() });
+});
+app.post("/api/tags", (req, res) => {
+  const global = !!req.body?.global;
+  const proj = global ? null : findProject(req.body?.projectId);
+  if (!global && !proj)
+    return res.status(400).json({ code: 400, msg: "unknown projectId" });
+  const [name] = cleanTags([req.body?.name]);
+  if (!name) return res.status(400).json({ code: 400, msg: "Give the tag a name." });
+  const key = name.toLowerCase();
+  if (RESERVED_TAGS.has(key))
+    return res.status(400).json({ code: 400, msg: `"${name}" is one of the built-in tags.` });
+  const list = readTagDefs(proj);
+  const same = (t) => String(t.name).toLowerCase() === key;
+  if (list.some(same) || (!global && readTagDefs(null).some(same)))
+    return res.status(400).json({ code: 400, msg: `There's already a tag called "${name}".` });
+  if (list.length >= 50)
+    return res.status(400).json({ code: 400, msg: "That's the limit of 50 tags here." });
+  list.push({ id: randomUUID(), name, createdAt: new Date().toISOString() });
+  writeTagDefs(proj, list);
+  res.json({ code: 200, msg: "created", data: allTagDefs() });
+});
+app.delete("/api/tags/:id", (req, res) => {
+  const global = req.query.global === "1";
+  const proj = global ? null : findProject(req.query.projectId);
+  if (!global && !proj)
+    return res.status(400).json({ code: 400, msg: "unknown projectId" });
+  const list = readTagDefs(proj);
+  const def = list.find((t) => t.id === req.params.id);
+  if (!def) return res.status(404).json({ code: 404, msg: "tag not found" });
+  writeTagDefs(proj, list.filter((t) => t !== def));
+  // Off the cards it covered: this project's, or everyone's for a global tag — except
+  // where a project has a tag of its own by that name.
+  const key = String(def.name).toLowerCase();
+  const keeps = new Set();
+  if (global)
+    for (const p of ensureDefaultProject())
+      if (readTagDefs(p).some((t) => String(t.name).toLowerCase() === key)) keeps.add(p.id);
+  const entries = readJson(HISTORY_FILE);
+  let cleared = 0;
+  for (const e of entries) {
+    const pid = e.projectId || "default";
+    if (global ? keeps.has(pid) : pid !== proj.id) continue;
+    if (!Array.isArray(e.tags)) continue;
+    const rest = e.tags.filter((t) => String(t).toLowerCase() !== key);
+    if (rest.length === e.tags.length) continue;
+    if (rest.length) e.tags = rest;
+    else delete e.tags;
+    cleared++;
+  }
+  if (cleared) writeJson(HISTORY_FILE, entries);
+  res.json({ code: 200, msg: "deleted", data: { ...allTagDefs(), cleared } });
+});
+
+// --- ✨ Revise with AI: what was asked, and what came of it (per project) ------
+// Each revision of a prompt box: the text before, the request, and — once a suggestion
+// comes back — the text after and whether it was applied. Newest first, in
+// <PROJECT_DATA_DIR>/<slug>/revisions.json. The browser writes it as a revision moves
+// along (asked → suggested → applied / discarded / failed).
+const REVISIONS_KEEP = 200;
+const REVISION_TEXT_MAX = 60000;
+const REVISION_STATES = new Set(["asked", "suggested", "applied", "discarded", "failed", "stopped"]);
+function revisionsFile(proj) {
+  return path.join(PROJECT_DATA_DIR, proj.slug, "revisions.json");
+}
+function readRevisions(proj) {
+  const list = readJson(revisionsFile(proj));
+  return Array.isArray(list) ? list : [];
+}
+function writeRevisions(proj, list) {
+  const file = revisionsFile(proj);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  writeJson(file, list.slice(0, REVISIONS_KEEP));
+}
+const revText = (v) => String(v ?? "").slice(0, REVISION_TEXT_MAX);
+app.get("/api/llm/revisions", (req, res) => {
+  const proj = findProject(req.query.projectId);
+  if (!proj) return res.status(400).json({ code: 400, msg: "unknown projectId" });
+  res.json({ code: 200, msg: "success", data: readRevisions(proj) });
+});
+app.post("/api/llm/revisions", (req, res) => {
+  const proj = findProject(req.body?.projectId);
+  if (!proj) return res.status(400).json({ code: 400, msg: "unknown projectId" });
+  const b = req.body || {};
+  const dur = Number(b.duration);
+  const entry = {
+    id: randomUUID(),
+    at: new Date().toISOString(),
+    status: "asked",
+    before: revText(b.before),
+    instruction: String(b.instruction ?? "").slice(0, 4000),
+    guide: String(b.guide ?? "").slice(0, 40),
+    duration: Number.isFinite(dur) && dur > 0 ? dur : null,
+    model: String(b.model ?? "").slice(0, 300),
+  };
+  const list = readRevisions(proj);
+  list.unshift(entry);
+  writeRevisions(proj, list);
+  res.json({ code: 200, msg: "created", data: entry });
+});
+app.put("/api/llm/revisions/:id", (req, res) => {
+  const proj = findProject(req.body?.projectId);
+  if (!proj) return res.status(400).json({ code: 400, msg: "unknown projectId" });
+  const list = readRevisions(proj);
+  const entry = list.find((r) => r.id === req.params.id);
+  if (!entry) return res.status(404).json({ code: 404, msg: "revision not found" });
+  const b = req.body || {};
+  if (REVISION_STATES.has(b.status)) entry.status = b.status;
+  if (b.after !== undefined) entry.after = revText(b.after);
+  if (b.error !== undefined) entry.error = String(b.error ?? "").slice(0, 500);
+  entry.updatedAt = new Date().toISOString();
+  writeRevisions(proj, list);
+  res.json({ code: 200, msg: "updated", data: entry });
+});
+// One revision, or — with id "all" — the project's whole list.
+app.delete("/api/llm/revisions/:id", (req, res) => {
+  const proj = findProject(req.query.projectId);
+  if (!proj) return res.status(400).json({ code: 400, msg: "unknown projectId" });
+  const list = readRevisions(proj);
+  writeRevisions(proj, req.params.id === "all" ? [] : list.filter((r) => r.id !== req.params.id));
+  res.json({ code: 200, msg: "deleted", data: readRevisions(proj) });
 });
 
 // --- delete a history entry (and its saved output file) -------------------
