@@ -4,168 +4,166 @@
 
 # GENie
 
-*Your wish, rendered.* A tiny local web app that is, first, a **friendly front-end
-for your own ComfyUI** and a **project manager** for everything you generate — and,
-secondarily, a client for **cloud models** via [kie.ai](https://kie.ai). Everything
-runs from one UI: pick a workflow (or a cloud model) per generation and the form
-adapts to it.
+*Your wish, rendered.* A small local web app that is a **friendly front-end for your own
+ComfyUI**, a **project manager** for everything you generate, and a **prompt workshop**
+with an LLM at your elbow — plus, optionally, a client for **cloud models** through
+[kie.ai](https://kie.ai). One page does it all: pick a workflow (or a cloud model) and
+the form adapts to it.
 
-**Local ComfyUI — the main event.** Drop a raw ComfyUI API export into `workflows/`
-and pick it from the Model dropdown like any other model. There is **nothing to
-author**: GENie recognizes the nodes in the export (KSampler, prompts, latent size,
-loaders, savers, …) and builds a form for them automatically, node by node. Add extra
-LoRAs, toggle optional nodes, watch live sampler previews and host GPU/VRAM stats, and
-carry state between runs with the Continue feature. Supporting a new node type is a
-small file you drop in — no code. See [`docs/COMFYUI.md`](docs/COMFYUI.md).
+![GENie on the desktop: the workflow form on the left, History on the right](screenshot.png)
 
-**Project manager.** Every generation — local or cloud — lands in a **project** with
-its own gallery, history, and output folder: drag-and-drop reference media, re-import
-or re-run any past generation, and **export** a self-contained, shareable bundle of a
-project's history. Your whole library of prompts, references, and results stays
-organized on your own disk.
+- **No workflow authoring.** Import a workflow straight from ComfyUI (or drop an API
+  export into `workflows/`) and GENie builds a form from the nodes it recognizes.
+- **No config files.** `npm install`, `npm start`, open the page. ComfyUI servers, LLM
+  servers and API keys are all set up in the app, under **⚙ Settings**.
+- **Everything stays on your disk**, filed by project: prompts, references, results.
+- **Works on your phone.** The whole app is mobile-friendly — see
+  [Desktop and phone](#desktop-and-phone).
 
-**Cloud models (optional)** via [kie.ai](https://kie.ai): **Seedance 2.5** /
-**Seedance 2** / **Seedance 2 Fast** / **Seedance 2 Mini** (video; Fast and Mini are
-480p/720p only — 2.5 reaches 1080p and adds an adaptive aspect ratio, up to 30s
-duration, mp4/mov output, and cheap 480p drafts you can finalize at 1080p from
-History), **Kling 4.0** reference-to-video / keyframe-to-video (3–30s at 720p or
-1080p, with reference images, videos and voices, or first/middle/last keyframes),
-**MiniMax H3 / Hailuo 03** text-to-video /
-image-to-video / reference-to-video (4–15s at 768P or 2K with native audio — one
-dropdown entry per mode, since kie.ai ships them as separate models), and
-**Seedream 5.0 Lite** image-to-image / text-to-image (the form adapts: quality tier
-instead of resolution/duration, image references only — or none at all for
-text-to-image — and results display as images). Add a kie.ai API key to enable these;
-skip it and GENie is a pure ComfyUI front-end.
+> **What's new:** see the [changelog](CHANGELOG.md). The running version is shown in the
+> page footer.
 
-A small Express server runs the whole thing locally: local ComfyUI runs talk to your
-own ComfyUI instance, and — if you add a key — it keeps that key server-side (never
-exposed to the browser) and proxies requests to kie.ai. A single-page UI lets you
-submit a prompt + reference media, then polls until the result is ready.
+## Contents
 
-![Screenshot of GENie](screenshot.png)
-
-> **API reference:** local copies of the kie.ai model docs (parameters per model,
-> shared endpoints, and known discrepancies) live in
-> [`docs/kie-api/`](docs/kie-api/README.md) so you don't have to re-check the web.
->
-> **What's new:** see the [changelog](CHANGELOG.md). The running version is shown in
-> the page footer.
+- [Features](#features) — [ComfyUI front-end](#local-comfyui-front-end) ·
+  [Prompts](#prompts) · [LLM help](#llm-help) · [Projects, History and Gallery](#projects-history-and-gallery) ·
+  [Editors](#editors) · [Settings](#settings) · [kie.ai cloud](#kieai-cloud-optional)
+- [Desktop and phone](#desktop-and-phone)
+- [Setup](#setup)
 
 ## Features
 
 ### Local ComfyUI front-end
 
-- **Zero-authoring workflows** — drop a raw **File → Export (API)** `.json` in
-  `workflows/` and GENie recognizes its nodes and builds the form automatically,
-  rendering each recognized node as its own collapsible section. Nodes it doesn't
-  recognize run exactly as saved. See [`docs/COMFYUI.md`](docs/COMFYUI.md).
-- **Extensible by data, not code** — supporting a new node type is a small JSON file
-  in [`node_types/`](node_types/); no server changes. A file you add can also override
-  a shipped one.
-- **Live model options** — dropdowns for models, LoRAs, VAEs, and samplers fill from
-  your running ComfyUI (`/object_info`), and number fields pick up their real
-  min/max/step, so you pick from exactly what's installed.
-- **Dynamic LoRAs & optional nodes** — add extra LoRAs to any checkpoint workflow, and
-  flip `_meta.bypassable` "patch" nodes on/off (they're removed and reconnected at
-  generate time) without editing the graph.
-- **Live previews & host stats** — a run's card shows the frame forming each sampler
-  step plus a CPU/GPU/VRAM strip; an optional
-  [filmstrip node](docs/COMFYUI.md#filmstrip-previews) turns a video preview into a
-  grid across the clip.
-- **Continue** — workflows that carry state between runs get an opaque per-run id and
-  a Continue button, so a second clip can pick up where the first left off.
+- **Zero-authoring workflows** — **Import a workflow from ComfyUI…** copies one you've
+  saved in ComfyUI's editor (converted to API format for you), or drop a raw
+  **File → Export (API)** `.json` into `workflows/`. GENie recognizes its nodes and
+  builds the form automatically, each recognized node a collapsible section; nodes it
+  doesn't recognize run exactly as saved. See [`docs/COMFYUI.md`](docs/COMFYUI.md).
+- **Searchable Model picker** — workflows are laid out as a folder tree you can search,
+  with the cloud models beneath. Create folders and rename, move, copy or delete
+  workflows from the picker itself.
 
-### Project manager
+  ![The Model picker: a searchable folder tree of workflows, then the cloud models](docs/screenshots/model-picker.png)
 
-- **Projects** — divide generations into projects via the header switcher (＋ new,
-  ✎ rename, 🗑 delete). Each project gets its own `input/<slug>/` and
-  `output/<slug>/` subfolders; the gallery is strictly per-project and history can
-  be filtered by project (or All). Re-running another project's generation warns
-  before saving the result to the active project. Deleting a project moves its
-  media and history to Default. Pre-project data is auto-migrated to Default on
-  first start.
-- **Generation history** — every successful generation (local or cloud) is saved to
-  `history.json` with its prompt, settings, references, and — for cloud runs —
-  measured credit cost. Each entry has **Re-import** (load the settings back into the
-  form) and **Re-run** (load + generate again).
-- **Media gallery** — every dropped file is kept in a per-project gallery (video/audio
-  get a kind badge); expand it to click any past item back into the matching reference
-  list.
-- **Drag-and-drop reference media** — images, videos, and audio each have a dropzone:
-  drop local files (or click to browse, or drag a URL in). Thumbnails are labeled and
-  reorderable — drag to re-sort and the labels update. Each has an **×** to remove and
-  a **Clear all** button.
-- **Saved results** — finished videos/images are downloaded into the `output/` folder,
-  and the history record links to the local copy (and, for cloud runs, the original
-  URL).
-- **Export** — the **📦 Export** button (next to Open folder) writes the shown
-  history to a new self-contained subfolder in `exports/`: a standalone
-  `index.html` (prompt + reference thumbnails on the left, the result on the
-  right, all click-to-enlarge, with model/resolution/aspect/duration/credit-cost
-  details) plus `input/` and `output/` folders holding copies of every reference
-  and result file. Zip the folder to share it — it needs no server. Exports one
-  project at a time (pick a specific project in the History filter first); override
-  the location with `EXPORTS_DIR` in `.env`.
-- **✂ Video editor** — in the header, and as **✂ Edit video** on every History card and
-  Gallery video: open videos from your file explorer or **import** them from GENie (the
-  project's History results, Gallery videos and earlier edits), step through them frame
-  by frame, cut off the start or end or cut parts out of the middle, and **Prepend** /
-  **Append** more clips and reorder them. Its **Frames** row picks stills — any frame,
-  or **⇥ Last frame** to start the next clip from — and saves them to the gallery or
-  downloads them. Opened from a card, Save adds the edit to the card as another video,
-  or replaces the card's video when **Overwrite** is ticked (off by default).
-  **Save** writes the joined result as a new file in `output/<project>/edited_videos/`
-  — it never overwrites a file, and your source videos are never changed — and
-  **Save as…** puts it wherever you choose. Cuts are frame-accurate and the result is
-  re-encoded as H.264 MP4 at near-lossless quality. When clips differ in size or frame
-  rate a warning spells out what will happen to each one, and you choose which clip's
-  size the result takes and whether the others get black bars (**Fit**) or are cropped
-  (**Fill**). **🎨 Effects** under the clips add PNG **overlay layers** (on the whole
-  video or on one clip; full-frame or placed in a corner, edge or centre, with size,
-  margin and opacity), adjust **brightness, contrast, saturation and hue**, and **resize** to a width,
-  height or both; the player previews the overlays and colour, and saved edit
-  projects keep the effects. Needs [ffmpeg](docs/FFMPEG.md).
-- **🧩 Local plugins** — personal additions that stay out of the repo: a folder in
-  `plugins/` (git-ignored) with a `server.js` (`export default (app, ctx) => …`, where
-  `ctx.videoEditor` is the editor's export engine) and/or a `public/` folder whose
-  `client.js` and `style.css` are loaded into the page (`window.GENie.videoEditor`
-  adds buttons to the editor and reads its effects). See the notes at the top of
-  `plugins.js`. Set `PLUGINS_DIR` in `.env` to keep them somewhere else.
-- **Reload-safe** — the in-flight task id is saved to `localStorage`, so closing or
-  reloading the tab mid-generation resumes polling automatically on the next load
-  (generations can take 5+ minutes; nothing is held on an open connection).
+- **Several ComfyUI servers** — add every ComfyUI you use (this PC, a RunPod pod, another
+  machine) in ⚙ Settings; a picker next to **Generate** chooses which one runs the job.
+- **Live model options** — dropdowns for models, LoRAs, VAEs and samplers fill from the
+  running ComfyUI, and number fields pick up their real min/max/step, so you choose from
+  exactly what's installed.
+- **LoRAs** — add extra LoRAs to any workflow, edit the ones it already has, keep notes
+  on each (name, description, URL, trigger phrases), and browse them by **model type**.
+- **Optional nodes** — flip `_meta.bypassable` "patch" nodes on and off without editing
+  the graph.
+- **Live previews & host stats** — a run's card shows the frame forming as it samples
+  (or, for video, the clip looping), with a CPU / GPU / VRAM strip and a **Free VRAM**
+  button.
+- **Queue control** — queue several runs with **×N**, cancel one, or **Cancel all
+  queued**. Runs finish server-side, so closing the tab (or the phone going to sleep)
+  loses nothing.
+- **Continue** — workflows that carry state between runs get a Continue button, so a
+  second clip picks up where the first left off.
+- **Extensible by data, not code** — supporting a new node type is a small JSON file in
+  [`node_types/`](node_types/); no server changes.
 
-- **✨ Build with AI** — a local vision LLM (LM Studio, text-generation-webui,
-  Ollama, or any OpenAI-compatible server) looks at gallery images and writes
-  a shot list from a short description and theme. You edit the shots and add breaks;
-  it then writes the rest of each prompt around its shots, unchanged, and saves them
-  to Saved Prompts with the images as references (several runs of shots become
-  separate prompts, one per run). GENie loads the model only when ComfyUI is idle and
-  VRAM allows (freeing ComfyUI's models if needed), and unloads it the moment a
-  generation starts. See [`docs/LLM.md`](docs/LLM.md).
+### Prompts
+
+- **Saved Prompts** — save a prompt with its reference media, per project or 🌐 global,
+  and generate straight from the card. **Prompt groups** string saved prompts into a
+  sequence for longer videos.
+- **Structured prompt formats** — besides plain text, a MiniMax H3 editor with
+  subjects, shots (each with a length, re-orderable), retention and sound, for
+  reference-to-video and text-to-video.
+- **Wildcards and Variables** — named lists a prompt picks from at random, and named
+  blocks of text you write once and reuse (`$name`), global or per project.
+- **Prompt lock (🔒)** — keep the prompt and references when switching models.
+
+### LLM help
+
+Works with **LM Studio**, **text-generation-webui**, **Ollama**, a **llama.cpp server**
+GENie starts itself, any **OpenAI-compatible** server, or **kie.ai**'s chat models
+(Claude, GPT, Gemini…). See [`docs/LLM.md`](docs/LLM.md).
+
+- **✨ Build with AI** — a vision model looks at the images you pick and writes a shot
+  list from a short description; you edit the shots, and it writes the rest of each
+  prompt around them.
+- **✨ Revise with AI** — say what to change in a prompt and get it rewritten, following
+  the prompting guide for the model you're on (Seedance, Kling, MiniMax, Qwen Edit).
+- **✨ Analyze images** — fills in a subject's definition from its reference images.
+- **💬 Chat** — talk to the same LLM, with pictures; chats are kept on the server.
+- **Shares the GPU politely** — a local LLM loads only when ComfyUI is idle and there's
+  VRAM for it, and unloads the moment a generation starts. A CPU-only or cloud LLM runs
+  alongside.
+
+### Projects, History and Gallery
+
+- **Projects** — every generation, local or cloud, lands in a project with its own
+  gallery, history and output folder. Projects can be filed in folders.
+- **History** — each run is saved with its prompt, settings and references. **Re-import**
+  loads it back into the form, **Re-run** generates it again; filter by tag (video /
+  image / draft / favorite, plus per-workflow auto-tags), select many to move them, and
+  **📦 Export** a project as a self-contained folder you can zip and share.
+- **Gallery** — every reference file you drop (or paste with Ctrl+V) is kept per
+  project, with an optional subject key and definition, ready to click back into a run.
+- **Drag-and-drop references** — images, video and audio each have a dropzone;
+  thumbnails are labeled and re-orderable, and the labels in your prompt follow.
+
+### Editors
+
+- **✂ Video editor** — trim, cut, split, join and re-order clips, pick stills (**⇥ Last
+  frame** to start the next clip from), add PNG overlays, adjust colour and resize.
+  Frame-accurate, never overwrites a source. Needs [ffmpeg](docs/FFMPEG.md).
+- **🖼 Image editor** — crop, flip, draw, and paint masks, with pinch-zoom.
+- **🧩 Local plugins** — personal additions in a git-ignored `plugins/` folder. See the
+  notes at the top of `plugins.js`.
+
+### Settings
+
+**⚙ Settings** (top right) is one window with a tab per section — nothing to edit by
+hand, and every device that opens GENie shares the same settings.
+
+![Settings: the Image / Video tab with two ComfyUI servers](docs/screenshots/settings.png)
+
+- **Image / Video** — your ComfyUI servers: a name, an address and a **Test** button
+  each, plus an optional sign-in (access token, or username and password) for one that's
+  behind a login.
+- **LLM** — the LLM servers and how they share the GPU with ComfyUI.
+- **Online providers** — API keys for cloud services. kie.ai's key is entered once and
+  covers both its image/video models and its chat models.
 
 ### kie.ai cloud (optional)
 
-- **Cloud reference hosting** — dropped files are saved locally and only uploaded to
-  kie.ai's file host at generate time, so kie.ai's ~3-day URL expiry never matters;
-  re-runs re-host saved references automatically. In prompts, `@Image1`/`@Video1`/…
-  match the reference thumbnail labels.
-- **Batches** — set the **×N** counter beside Generate to queue up to 20 identical runs
-  in one click. References are uploaded once and shared by the batch, then one kie.ai
-  task per run is created (spaced to stay under the rate limit), each with its own
-  History card; the cost estimate shows the batch total.
-- **Live credit balance** — shown in the header (`GET /api/v1/chat/credit`), with a
-  refresh button.
-- **Cost estimate** — kie.ai has no price-preview API, so cost is *measured*: the
-  exact `creditsConsumed` reported by the task-detail API (falling back to the
-  credit-balance delta around the run) is stored in history. The estimate next to
-  the Generate button is seeded from known per-second rates (480p ≈ 19 credits/s,
-  720p ≈ 41 credits/s, audio on) and refines itself from your measured runs per
-  resolution + audio setting. Reference videos appear to bill by the combined
-  input + output duration, so their measured lengths are added to the estimate
-  (with a warning if they exceed the model's total input limit — 15s, or 30s on
-  Seedance 2.5).
+Add a kie.ai key (⚙ Settings → Online providers) and the cloud models switch on in the
+Model picker; skip it and GENie is a pure ComfyUI front-end.
+
+- **Models** — **Seedance 2.5 / 2 / 2 Fast / 2 Mini**, **Kling 4.0** (reference-to-video
+  and keyframe-to-video), **MiniMax H3 / Hailuo 03** (text-, image- and
+  reference-to-video), **Wan 3.0 / 3.0 Prime**, and **Seedream 5.0** (image-to-image and
+  text-to-image). The form adapts to each. Local copies of the model docs live in
+  [`docs/kie-api/`](docs/kie-api/README.md).
+- **Reference hosting** — dropped files are saved locally and uploaded to kie.ai only at
+  generate time, so its short-lived URLs never matter; re-runs re-host automatically.
+- **Batches** — **×N** queues up to 20 identical runs; references upload once.
+- **Credits and cost** — the live balance sits in the header, each run's measured cost
+  is stored in History, and the estimate beside Generate learns from your own runs.
+- **Your key stays server-side** — the browser only ever talks to your local GENie.
+
+## Desktop and phone
+
+GENie is laid out for a desktop browser first — from 1200px wide the form and History
+sit side by side — and the same page reflows for a phone: every feature works there,
+including the editors, the prompt tools, live previews and Settings. Runs are tracked by
+the server, not the tab, so you can queue from the PC and watch (or queue more) from the
+couch.
+
+<p align="center">
+  <img src="docs/screenshots/main-mobile.png" alt="GENie on a phone: the workflow form" width="300" />
+  &nbsp;&nbsp;
+  <img src="docs/screenshots/settings-mobile.png" alt="GENie on a phone: Settings" width="300" />
+</p>
+
+To reach it from your phone, see
+[Accessing from other devices on your home network](#accessing-from-other-devices-on-your-home-network).
 
 ## Setup
 
@@ -178,16 +176,14 @@ You'll need [Node.js](https://nodejs.org) 18+ (uses the built-in `fetch`).
 # 1. Install dependencies
 npm install
 
-# 2. Create your config (optional: add a kie.ai key for cloud models)
-cp .env.example .env        # on Windows: copy .env.example .env
-#   for the cloud models, edit .env and paste your key from https://kie.ai/api-key
-#   — skip this and GENie runs as a pure ComfyUI front-end
-
-# 3. Run it
+# 2. Run it
 npm start
 ```
 
-Open <http://localhost:3000> in your browser.
+Open <http://localhost:3000> in your browser. There's no config file to edit first:
+your ComfyUI servers, LLM servers and the kie.ai key are all set up in the app, under
+**⚙ Settings** (top right). A `.env` file is only for the optional extras in
+`.env.example` — port, LAN access, a password, custom folders.
 
 For auto-restart while developing: `npm run dev`.
 
@@ -196,17 +192,22 @@ macOS: `brew install ffmpeg`, Debian/Ubuntu: `sudo apt install ffmpeg`) for the
 ✂ Video editor's cutting and saving, and for exact frame rates. Everything else works
 without it.
 
-To run **local ComfyUI workflows**, point GENie at your ComfyUI instance (defaults to
-`http://127.0.0.1:8188`) — see [`docs/COMFYUI.md`](docs/COMFYUI.md). No API key needed
-for local workflows.
+To run **local ComfyUI workflows**, GENie looks for ComfyUI at `http://127.0.0.1:8188`.
+Somewhere else, or more than one (this PC and a RunPod pod, say)? Add them in
+**⚙ Settings → Image / Video**; with several, a picker next to **Generate** chooses
+which one runs the job. See [`docs/COMFYUI.md`](docs/COMFYUI.md). No API key needed for
+local workflows.
 
 ## Getting an API key (for cloud models)
 
 The kie.ai key is only needed for the **cloud** models — local ComfyUI workflows don't
 use it. To enable the cloud models:
 
-1. Go to <https://kie.ai/api-key>
-2. Create a key and copy it into `.env` as `KIE_API_KEY=...`
+1. Go to <https://kie.ai/api-key> and create a key
+2. In GENie, open **⚙ Settings → Online providers**, paste it under kie.ai and **Save**
+
+The same key also lets you add kie.ai's chat models as an LLM server (**⚙ Settings →
+LLM → ＋ Add… → kie.ai**).
 
 **Each person running the app needs their own key**, and cloud generations are billed
 to the key's account.
@@ -230,7 +231,8 @@ a file, use the ZIP steps.
 
 Whichever method you use, your personal stuff is always kept:
 
-- **`.env`** — your API key, password, and any settings
+- **`.env`** and the **`settings` folder** — your password and options, your ComfyUI /
+  LLM servers and your API key
 - **`history.json`, `images.json`, `projects.json`** — your generation history,
   gallery, and projects
 - **the `output`, `input` and `projects` folders** — your generated results,
@@ -338,7 +340,7 @@ shared password meant for a trusted home network, not per-user accounts.
 | `POST /api/save` | Downloads the finished video into `output/` and appends the record (incl. measured cost) to `history.json`. |
 | `GET /api/history` | Returns the saved generation history. |
 
-The browser never sees `KIE_API_KEY` — it only talks to this local server.
+The browser never sees your kie.ai key — it only talks to this local server.
 
 ## Project layout
 
@@ -354,7 +356,7 @@ video-editor.js    the video editor's uploads, ffmpeg export jobs (with effects)
 public/video-fx.js the video editor's 🎨 Effects form and live preview
 plugins.js         loads local plugins from plugins/
 plugins/<name>/    your own plugins (git-ignored)
-.env.example       template — copy to .env and add your key
+.env.example       template for the optional .env (port, LAN access, password, folders)
 output/<project>/   downloaded result videos (git-ignored, created at runtime)
 output/<project>/edited_videos/  what the ✂ Video editor's Save button writes
 output/<project>/edited_videos/overlays/  images added as 🎨 overlay layers
@@ -386,8 +388,8 @@ the author is **not responsible or liable** for:
 - anything you create, generate, publish, or otherwise do with this software
   or its outputs — that's on you, including complying with kie.ai's and
   ByteDance's terms of service and the laws that apply to you;
-- the safekeeping of your API key. Your key is stored in a local `.env` file
-  and sent only to kie.ai. If you commit it, share it, screenshot it, paste it
+- the safekeeping of your API key. Your key is stored in a local file
+  (`settings/generation.json`) and sent only to kie.ai. If you commit it, share it, screenshot it, paste it
   somewhere public, or otherwise leak it, anyone who has it can spend your
   credits. Guard it accordingly.
 

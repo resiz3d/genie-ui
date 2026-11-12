@@ -130,6 +130,14 @@ function setPref(key, value) {
   }).catch(() => {});
 }
 
+// Where generations run (settings/generation.json, edited in ⚙ Settings): the ComfyUI
+// servers, which of them is picked, and whether there's a kie.ai key.
+let genSettings = serverSettings.generation || {
+  comfy: { instances: [], activeId: null },
+  kie: { hasKey: false },
+};
+const comfyInstanceId = () => genSettings.comfy.activeId || null;
+
 const PROJECT_KEY = "seedance_project";
 let projects = [];
 let activeProjectId = getPref(PROJECT_KEY) || "default";
@@ -2099,11 +2107,24 @@ refreshCredits.addEventListener("click", loadCredits);
 // a kie.ai model left selected by default gives way to the first ComfyUI workflow.
 // Runs once the key status is known and again whenever the workflow list loads.
 let kieConfigured = null; // null until /api/credits answers
+let kieLocked = false; // the kie.ai models are currently disabled for want of a key
 function syncKieAvailability() {
+  if (kieConfigured && kieLocked) {
+    // A key was just added in ⚙ Settings: switch the models back on, no reload needed.
+    kieLocked = false;
+    const group = modelSelect.querySelector("optgroup[data-kie]");
+    if (group) {
+      group.label = "kie.ai API";
+      for (const o of group.querySelectorAll("option")) o.disabled = false;
+    }
+    document.getElementById("projectCredits").classList.remove("hidden");
+    return;
+  }
   if (kieConfigured !== false) return;
+  kieLocked = true;
   const group = modelSelect.querySelector("optgroup[data-kie]");
   if (group) {
-    group.label = "kie.ai API — add KIE_API_KEY to .env to enable";
+    group.label = "kie.ai API — add a key in ⚙ Settings → Online providers";
     for (const o of group.querySelectorAll("option")) o.disabled = true;
   }
   document.getElementById("projectCredits").classList.add("hidden");
@@ -2118,6 +2139,63 @@ function syncKieAvailability() {
       scheduleComfyStats(0);
     }
   }
+}
+
+// --- which ComfyUI server ------------------------------------------------------
+// With more than one set up in ⚙ Settings, a picker next to Generate (and its copy in
+// the quick bar) chooses where the next run goes. The choice is saved on the server, so
+// it's the last one used on every device; the form's model / LoRA lists are re-read
+// from the newly picked server, since two ComfyUIs rarely have the same files.
+function renderComfyInstancePick() {
+  const { instances, activeId } = genSettings.comfy;
+  for (const sel of document.querySelectorAll(".comfy-instance-pick")) {
+    sel.innerHTML = "";
+    for (const i of instances) sel.appendChild(new Option(i.name, i.id));
+    sel.value = activeId;
+  }
+  document
+    .getElementById("comfyInstanceField")
+    .classList.toggle("hidden", !(isComfy() && instances.length > 1));
+}
+document.getElementById("comfyInstance").addEventListener("change", async (e) => {
+  const id = e.target.value;
+  if (!id || id === genSettings.comfy.activeId) return;
+  await reloadComfyFormAfter(async () => {
+    genSettings.comfy.activeId = id;
+    try {
+      const res = await fetch("/api/generation/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ comfy: { activeId: id } }),
+      });
+      const d = await res.json();
+      if (res.ok && d.data) genSettings = d.data;
+    } catch {
+      /* offline — this tab still sends its pick with each run */
+    }
+  });
+});
+// Switch servers and redraw the workflow form from the new one. What's in the form is
+// saved first, so the redraw doesn't lose unsent edits — except when it was drawn with
+// ComfyUI offline: its empty pickers would overwrite the saved choices.
+async function reloadComfyFormAfter(change) {
+  if (isComfy() && comfyFields.length && !comfyMetaOffline)
+    await saveComfySettings(comfyFile());
+  await change();
+  renderComfyInstancePick();
+  if (isComfy()) applyModelUI();
+  scheduleComfyStats(0);
+}
+// ⚙ Settings saved a change (settings-ui.js): new servers, another address, a key.
+// `reload`: the picked server's sign-in changed, so its option lists are worth re-asking.
+function applyGenSettings(next, reload = false) {
+  const was = genSettings.comfy.instances.find((i) => i.id === genSettings.comfy.activeId);
+  const now = next.comfy.instances.find((i) => i.id === next.comfy.activeId);
+  const moved = reload || was?.url !== now?.url;
+  if (moved) return reloadComfyFormAfter(async () => void (genSettings = next)).then(loadCredits);
+  genSettings = next;
+  renderComfyInstancePick();
+  return loadCredits();
 }
 
 // How many of the most-recent matching runs feed a price estimate. Estimates are
@@ -2743,6 +2821,7 @@ function applyModelUI() {
   document
     .getElementById("previewMethodField")
     .classList.toggle("hidden", !comfy);
+  renderComfyInstancePick();
   if (comfy) {
     // Swap the whole kie.ai form for the recognized workflow controls.
     for (const id of KIE_FIELDS)
@@ -3149,6 +3228,7 @@ seedanceDraftEl.addEventListener("change", applyModelUI);
 let comfyWorkflows = [];
 const comfyControlsEl = document.getElementById("comfyControls");
 let comfyFields = []; // [{ name, getValue() }] for the active workflow
+let comfyMetaOffline = false; // the form was drawn without ComfyUI's option lists
 let comfyLoraControl = null; // the dynamic-LoRA section for the active workflow
 let comfyBypassControl = null; // enable/disable toggles for bypassable patch nodes
 let comfyRenderPromise = null; // resolves when the active workflow's controls are built
@@ -3630,7 +3710,7 @@ function makeComfyMedia(token, mediaKind) {
       const res = await fetch("/api/comfy/upload", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: source.id }),
+        body: JSON.stringify({ id: source.id, comfyInstanceId: comfyInstanceId() }),
       });
       const data = await res.json();
       if (!res.ok || !data.data?.filename)
@@ -3690,6 +3770,7 @@ async function renderComfyControls() {
   }
   if (seq !== comfyRenderSeq) return; // a newer workflow was selected meanwhile
   comfyControlsEl.innerHTML = "";
+  comfyMetaOffline = !!meta.offline;
   if (meta.offline) {
     const note = document.createElement("p");
     note.className = "muted comfy-offline";
@@ -5926,7 +6007,7 @@ function makeComfyMediaMulti(
           const res = await fetch("/api/comfy/upload", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ id: it.localId }),
+            body: JSON.stringify({ id: it.localId, comfyInstanceId: comfyInstanceId() }),
           });
           const data = await res.json();
           if (!res.ok || !data.data?.filename)
@@ -6243,6 +6324,7 @@ async function queueComfyRun(
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         file: wf.file,
+        comfyInstanceId: comfyInstanceId(),
         values,
         prune,
         references: references || {},

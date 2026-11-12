@@ -12,6 +12,28 @@ heading for that version with the date, commit, then tag the commit `vX.Y.Z`.
 
 ### Added
 
+- **One ⚙ Settings window, and no `.env` editing to get started.** *⚙ Settings* in the
+  page header opens a single window with a tab per section: **Image / Video** (your
+  ComfyUI servers), **LLM** (the LLM settings, moved in from their own window) and
+  **Online providers** (API keys for cloud services). A fresh install needs no `.env`
+  at all; it's now only for the optional extras (port, LAN access, password, folders).
+- **Several ComfyUI servers.** Add as many as you use — this PC, a RunPod pod, another
+  machine — each with a name, an address and a *Test* button. With more than one, a 🖥
+  picker next to **Generate** chooses which runs the next job, and the last one used is
+  remembered. A run stays tied to the server it was queued on (progress, previews,
+  cancel, the finished file), so runs can be in flight on several at once; a local LLM
+  only takes turns on the GPU with the ComfyUI on this PC. A server behind a login can
+  be given a **Sign-in** — an access token (a login custom node such as ComfyUI-Login)
+  or a username and password (a reverse proxy) — kept on the GENie machine and sent
+  with every request to that server, the progress socket included.
+- **kie.ai as an online provider.** Its key is entered once, under *Online providers*,
+  and covers both the cloud image/video models and kie.ai's chat models — which switch
+  on as soon as it's saved, no restart. In the LLM tab, **＋ Add…** now offers each
+  server type directly, kie.ai included. `KIE_API_KEY` and `COMFYUI_URL` are no longer
+  read from `.env`: if an existing `.env` has them, they're copied into
+  `settings/generation.json` the first time this version starts, and changed in
+  ⚙ Settings from then on.
+
 - **Import from ComfyUI.** *Import a workflow from ComfyUI…* under the Model picker lists
   the workflows saved in ComfyUI's editor and copies a chosen one into
   `workflows/comfyui/`, converting it from the editor's graph format to API format

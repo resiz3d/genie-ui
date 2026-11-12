@@ -38,12 +38,8 @@ const APP_VERSION = (() => {
 const API_BASE = "https://api.kie.ai/api/v1/jobs";
 const UPLOAD_URL = "https://kieai.redpandaai.co/api/file-stream-upload";
 const CREDITS_URL = "https://api.kie.ai/api/v1/chat/credit";
-// Optional: without a key GENie is a pure ComfyUI front-end. The .env.example
-// placeholder counts as no key, so a copied-but-unedited .env behaves the same.
-const API_KEY =
-  /^(|your_api_key_here)$/.test((process.env.KIE_API_KEY || "").trim()) ? "" : (
-    process.env.KIE_API_KEY.trim()
-  );
+// Optional: without a key GENie is a pure ComfyUI front-end. The key is entered in the
+// app (⚙ Image/Video settings, or a kie.ai server in ⚙ LLM settings) — see kieKey().
 const PORT = process.env.PORT || 3000;
 // Network interface to bind. Default 127.0.0.1 = this PC only. Set HOST=0.0.0.0
 // in .env to also accept connections from other devices on your home network
@@ -103,9 +99,6 @@ const PROJECT_DATA_DIR = path.resolve(
 // too and addressed by their relative path, while top-level and shipped ones keep
 // their bare filename, which is what every history entry written before subfolders
 // existed uses.
-const COMFYUI_URL = (
-  process.env.COMFYUI_URL || "http://127.0.0.1:8188"
-).replace(/\/+$/, "");
 const WORKFLOWS_DIR = path.resolve(
   __dirname,
   process.env.WORKFLOWS_DIR || "workflows",
@@ -117,6 +110,154 @@ const COMFY_SETTINGS_DIR = path.resolve(
   __dirname,
   process.env.COMFY_SETTINGS_DIR || "settings/comfy",
 );
+
+// --- image/video generation settings (settings/generation.json) ---------------
+// Where generations run, set up in the app (⚙ Image/Video settings) rather than .env:
+//   comfy.instances — the ComfyUI servers: [{ id, name, url, auth? }] (this PC, a RunPod
+//                     pod…). `auth` is the sign-in a protected one asks for:
+//                     { type: "bearer", secret } or { type: "basic", username, secret }.
+//                     ComfyUI has no password of its own; a login custom node or a
+//                     reverse proxy in front of it adds one. Secrets stay on this server.
+//   comfy.activeId  — the one last picked next to Generate
+//   kieApiKey       — the kie.ai key for the cloud models (never sent to the browser)
+// Git-ignored like the rest of settings/. The first time it's needed, a KIE_API_KEY /
+// COMFYUI_URL left in .env by an older version is copied in; after that .env isn't read
+// for either.
+const GEN_SETTINGS_FILE = path.join(COMFY_SETTINGS_DIR, "..", "generation.json");
+const DEFAULT_COMFY_URL = "http://127.0.0.1:8188";
+function cleanComfyUrl(u) {
+  let s = String(u || "").trim().replace(/\/+$/, "");
+  if (s && !/^https?:\/\//i.test(s)) s = `http://${s}`;
+  return s.slice(0, 300);
+}
+function normalizeGenSettings(raw) {
+  const seen = new Set();
+  const instances = [];
+  for (const x of Array.isArray(raw?.comfy?.instances) ? raw.comfy.instances : []) {
+    const url = cleanComfyUrl(x?.url);
+    const id = String(x?.id || randomUUID()).slice(0, 60);
+    if (!url || seen.has(id) || instances.length >= 20) continue;
+    seen.add(id);
+    const name = String(x?.name || "").trim().slice(0, 60) || `ComfyUI ${instances.length + 1}`;
+    const inst = { id, name, url };
+    const type = x?.auth?.type;
+    const secret = String(x?.auth?.secret || "").slice(0, 2000);
+    const username = String(x?.auth?.username || "").trim().slice(0, 200);
+    if (type === "bearer" && secret) inst.auth = { type, secret: secret.trim() };
+    else if (type === "basic" && (username || secret)) inst.auth = { type, username, secret };
+    instances.push(inst);
+  }
+  if (!instances.length)
+    instances.push({ id: "local", name: "Local ComfyUI", url: DEFAULT_COMFY_URL });
+  const activeId =
+    instances.some((i) => i.id === raw?.comfy?.activeId) ? raw.comfy.activeId : instances[0].id;
+  return {
+    kieApiKey: String(raw?.kieApiKey || "").trim().slice(0, 500),
+    comfy: { instances, activeId },
+  };
+}
+let genSettingsCache = null;
+function readGenSettings() {
+  if (genSettingsCache) return genSettingsCache;
+  let raw = null;
+  try {
+    raw = JSON.parse(fs.readFileSync(GEN_SETTINGS_FILE, "utf8"));
+  } catch {
+    /* first run */
+  }
+  if (!raw) {
+    const envKey = (process.env.KIE_API_KEY || "").trim();
+    const envUrl = cleanComfyUrl(process.env.COMFYUI_URL);
+    const kieApiKey = /^(|your_api_key_here)$/.test(envKey) ? "" : envKey;
+    raw = {
+      kieApiKey,
+      comfy: { instances: envUrl ? [{ id: "local", name: "ComfyUI", url: envUrl }] : [] },
+    };
+    if (kieApiKey || envUrl) {
+      try {
+        writeGenSettings(raw);
+        console.log(
+          "  Copied the kie.ai key / ComfyUI address from .env into settings/generation.json —\n" +
+            "  change them in the app from now on (⚙ Image/Video settings); .env is no longer read for them.\n",
+        );
+      } catch (err) {
+        console.error("Couldn't save settings/generation.json:", err.message);
+      }
+    }
+  }
+  return (genSettingsCache = normalizeGenSettings(raw));
+}
+function writeGenSettings(s) {
+  const clean = normalizeGenSettings(s);
+  fs.mkdirSync(path.dirname(GEN_SETTINGS_FILE), { recursive: true });
+  fs.writeFileSync(GEN_SETTINGS_FILE, JSON.stringify(clean, null, 2));
+  genSettingsCache = clean;
+  return clean;
+}
+const comfyInstances = () => readGenSettings().comfy.instances;
+// The server with this id; without one (or once it's been removed), the active one.
+function comfyInstance(id) {
+  const c = readGenSettings().comfy;
+  return (
+    (id && c.instances.find((i) => i.id === id)) ||
+    c.instances.find((i) => i.id === c.activeId) ||
+    c.instances[0]
+  );
+}
+const activeComfyUrl = () => comfyInstance().url;
+// The sign-in a server asks for, as request headers ({} for an open one).
+function comfyAuthHeaders(inst) {
+  const a = inst?.auth;
+  if (a?.type === "bearer") return { Authorization: `Bearer ${a.secret}` };
+  if (a?.type === "basic")
+    return {
+      Authorization: `Basic ${Buffer.from(`${a.username}:${a.secret}`).toString("base64")}`,
+    };
+  return {};
+}
+// fetch() for anything on a ComfyUI server: finds whose address the URL is under (the
+// longest, should one sit under another) and adds that server's sign-in. Any other URL
+// — a kie.ai result link, say — goes out untouched.
+function comfyFetch(url, opts = {}) {
+  const u = String(url);
+  let inst = null;
+  for (const i of comfyInstances())
+    if ((u === i.url || u.startsWith(`${i.url}/`)) && i.url.length > (inst?.url.length || 0)) inst = i;
+  const auth = comfyAuthHeaders(inst);
+  if (!auth.Authorization) return fetch(url, opts);
+  return fetch(url, { ...opts, headers: { ...auth, ...(opts.headers || {}) } });
+}
+// Which server a queued prompt went to: remembered when it's queued, and on its History
+// entry (`comfyInstanceId`) for after a restart. Entries from before there were several
+// have none and fall to the active one.
+const comfyPromptInstance = new Map(); // promptId → instance id | null
+function comfyForPrompt(promptId) {
+  let id = comfyPromptInstance.get(promptId);
+  if (id === undefined) {
+    try {
+      id = readJson(HISTORY_FILE).find((e) => e.taskId === promptId)?.comfyInstanceId || null;
+    } catch {
+      id = null;
+    }
+    if (comfyPromptInstance.size > 500) comfyPromptInstance.clear(); // bounded; history keeps it
+    comfyPromptInstance.set(promptId, id);
+  }
+  return comfyInstance(id);
+}
+// The ComfyUI that shares this PC's GPU with a local LLM (see llm.js): the first one on
+// a loopback address — or, with a single server set up, that one, as it always was. A
+// second server elsewhere (RunPod) never makes the LLM wait or unload.
+const isLoopbackUrl = (u) => /^https?:\/\/(localhost|127\.|\[::1\])/i.test(u);
+function gpuComfyUrl() {
+  const all = comfyInstances();
+  return all.find((i) => isLoopbackUrl(i.url))?.url || (all.length === 1 ? all[0].url : null);
+}
+// The kie.ai key: the one in ⚙ Image/Video settings, else a kie.ai LLM server's own —
+// entering it in either place switches the cloud models on.
+function kieKey() {
+  return readGenSettings().kieApiKey || llm.kieSourceKey();
+}
+
 // Data-driven node recognition library. Each node_types/*.json describes which of a
 // node's inputs become form controls, so a raw ComfyUI export drives the form.
 // See comfy-recognize.js and node_types/README.md.
@@ -143,21 +284,14 @@ function comfyPreviewMethod(requested) {
     );
 }
 
-if (!API_KEY) {
-  console.log(
-    "\n  No KIE_API_KEY set — kie.ai cloud models are disabled; ComfyUI workflows work as usual.\n" +
-      "  To enable them, add a key from https://kie.ai/api-key to .env and restart.\n",
-  );
-}
-
 // Guard for routes that call kie.ai: without a key they'd only bounce off its auth.
 function requireKieKey(req, res, next) {
-  if (API_KEY) return next();
+  if (kieKey()) return next();
   res
     .status(400)
     .json({
       code: 400,
-      msg: "No kie.ai API key configured — add KIE_API_KEY to .env to use the kie.ai models.",
+      msg: "No kie.ai API key yet — add one in ⚙ Image/Video settings to use the kie.ai models.",
     });
 }
 
@@ -552,7 +686,7 @@ app.get("/settings.js", (req, res) => {
     .type("js")
     .set("Cache-Control", "no-store")
     .send(
-      `window.GENIE_SETTINGS = ${JSON.stringify(publicAppSettings(readAppSettings())).replace(/</g, "\\u003c")};\n`,
+      `window.GENIE_SETTINGS = ${JSON.stringify({ ...publicAppSettings(readAppSettings()), generation: publicGenSettings() }).replace(/</g, "\\u003c")};\n`,
     );
 });
 
@@ -570,7 +704,7 @@ async function uploadToKie(buf, mime, fileName) {
   if (fileName) form.append("fileName", fileName);
   const up = await fetch(UPLOAD_URL, {
     method: "POST",
-    headers: { Authorization: `Bearer ${API_KEY}` },
+    headers: { Authorization: `Bearer ${kieKey()}` },
     body: form,
   });
   const body = await up.json().catch(() => ({}));
@@ -630,7 +764,7 @@ app.post("/api/create", requireKieKey, (req, res) => {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${API_KEY}`,
+        Authorization: `Bearer ${kieKey()}`,
       },
       body: JSON.stringify({ model, input: clean }),
     }),
@@ -645,7 +779,7 @@ app.get("/api/status", requireKieKey, (req, res) => {
   forward(
     res,
     fetch(`${API_BASE}/recordInfo?taskId=${encodeURIComponent(taskId)}`, {
-      headers: { Authorization: `Bearer ${API_KEY}` },
+      headers: { Authorization: `Bearer ${kieKey()}` },
     }),
   );
 });
@@ -1004,7 +1138,7 @@ function comfyImportTarget(savedPath) {
 }
 
 async function comfyUserdata(query) {
-  const r = await fetch(`${COMFYUI_URL}/userdata${query}`);
+  const r = await comfyFetch(`${activeComfyUrl()}/userdata${query}`);
   if (!r.ok) {
     const err = new Error(`ComfyUI answered ${r.status}`);
     err.status = r.status;
@@ -1026,7 +1160,7 @@ app.get("/api/comfy/saved-workflows", async (req, res) => {
     return res.status(502).json({
       code: 502,
       offline: true,
-      msg: `Couldn't reach ComfyUI at ${COMFYUI_URL} — is it running?`,
+      msg: `Couldn't reach ComfyUI at ${activeComfyUrl()} — is it running?`,
     });
   }
   const data = [];
@@ -1713,6 +1847,7 @@ function applyAutoTags(entry) {
 // inputs are the same locally-stored files the API side uses).
 app.post("/api/comfy/upload", async (req, res) => {
   const { base64Data, fileName, id } = req.body || {};
+  const comfyUrl = comfyInstance(req.body?.comfyInstanceId).url;
   let buf, name;
   try {
     if (id) {
@@ -1734,7 +1869,7 @@ app.post("/api/comfy/upload", async (req, res) => {
     const form = new FormData();
     form.append("image", new Blob([buf]), name);
     form.append("overwrite", "true");
-    const r = await fetch(`${COMFYUI_URL}/upload/image`, {
+    const r = await comfyFetch(`${comfyUrl}/upload/image`, {
       method: "POST",
       body: form,
     });
@@ -1750,7 +1885,7 @@ app.post("/api/comfy/upload", async (req, res) => {
     console.error("ComfyUI upload error:", err);
     res
       .status(502)
-      .json({ code: 502, msg: `Could not reach ComfyUI at ${COMFYUI_URL}` });
+      .json({ code: 502, msg: `Could not reach ComfyUI at ${comfyUrl}` });
   }
 });
 
@@ -1812,21 +1947,17 @@ function pruneWorkflow(workflow, pruneNames) {
 
 // --- ComfyUI /object_info: available files + input metadata -------------------
 // Cached briefly so the workflow-meta endpoint and lora injection don't hammer it.
-let objectInfoCache = null;
-let objectInfoAt = 0;
+// Per server: two ComfyUIs rarely have the same models and custom nodes installed.
+const objectInfoCache = new Map(); // server URL → { data, at }
 const OBJECT_INFO_TTL_MS = 30000;
-async function getObjectInfo(force = false) {
-  if (
-    !force &&
-    objectInfoCache &&
-    Date.now() - objectInfoAt < OBJECT_INFO_TTL_MS
-  )
-    return objectInfoCache;
-  const r = await fetch(`${COMFYUI_URL}/object_info`);
+async function getObjectInfo(force = false, comfyUrl = activeComfyUrl()) {
+  const hit = objectInfoCache.get(comfyUrl);
+  if (!force && hit && Date.now() - hit.at < OBJECT_INFO_TTL_MS) return hit.data;
+  const r = await comfyFetch(`${comfyUrl}/object_info`);
   if (!r.ok) throw new Error(`object_info ${r.status}`);
-  objectInfoCache = await r.json();
-  objectInfoAt = Date.now();
-  return objectInfoCache;
+  const data = await r.json();
+  objectInfoCache.set(comfyUrl, { data, at: Date.now() });
+  return data;
 }
 
 // Map each token name → the node id + class_type + input key it first appears in,
@@ -2579,15 +2710,26 @@ function formatComfyExecError(entry) {
 
 // --- live progress via the ComfyUI websocket ---------------------------------
 // ComfyUI broadcasts run progress (sampler steps, etc.) over /ws. We keep one
-// connection and remember the latest {value,max} per prompt so /api/comfy/status
+// connection per ComfyUI server in use and remember the latest {value,max} per prompt so /api/comfy/status
 // can report a % while a run is in flight. The socket is opened lazily when a run
 // is generated/polled, and the next poll reconnects it if it dropped.
 const COMFY_CLIENT_ID = "kie-seedance-ui";
-const COMFY_WS_URL =
-  COMFYUI_URL.replace(/^http/i, "ws") + `/ws?clientId=${COMFY_CLIENT_ID}`;
-let comfyWs = null;
-let comfyWsConnecting = false;
-let comfyCurrentPrompt = null;
+// server URL → { ws, connecting, currentPrompt }. `currentPrompt` is the prompt that
+// server is executing — each runs one at a time, so it's per connection.
+const comfySockets = new Map();
+// Servers that were removed or re-addressed in the settings: hang up on them.
+function closeStaleComfySockets() {
+  const live = new Map(comfyInstances().map((i) => [i.url, comfyAuthHeaders(i).Authorization || ""]));
+  for (const [url, conn] of comfySockets) {
+    if (live.get(url) === conn.auth) continue; // same address, same sign-in
+    comfySockets.delete(url);
+    try {
+      conn.ws?.close();
+    } catch {
+      /* already closed */
+    }
+  }
+}
 const comfyProgress = new Map(); // promptId -> { value, max, updatedAt }
 
 // When ComfyUI actually began executing each prompt (epoch ms) — distinct from the
@@ -2636,7 +2778,7 @@ function comfyExecStartFor(promptId) {
 // Latent preview frames. ComfyUI's binary frame is [4B big-endian event type]
 // [4B big-endian image type][image bytes] and names no prompt — but the JSON
 // `progress` message naming one is broadcast immediately before it, and ComfyUI
-// executes one prompt at a time, so the frame belongs to comfyCurrentPrompt.
+// executes one prompt at a time, so the frame belongs to its connection's currentPrompt.
 // Only the newest frame per prompt is kept.
 const PREVIEW_EVENT_IMAGE = 1;
 const PREVIEW_MIME = { 1: "image/jpeg", 2: "image/png" };
@@ -2691,12 +2833,12 @@ function beginPreviewAnim(pid, data) {
 const isJpegAt = (view, at) =>
   view.byteLength > at + 1 && view.getUint16(at) === 0xffd8;
 
-function capturePreview(data) {
+function capturePreview(data, conn) {
   if (!(data instanceof ArrayBuffer) || data.byteLength < 8) return;
   const view = new DataView(data);
   if (view.getUint32(0) !== PREVIEW_EVENT_IMAGE) return; // some other binary event
   const mime = PREVIEW_MIME[view.getUint32(4)];
-  const pid = comfyCurrentPrompt;
+  const pid = conn.currentPrompt;
   if (!mime || !pid) return;
   if (!isJpegAt(view, 8) && isJpegAt(view, VHS_FRAME_HEADER)) {
     const index = view.getUint32(VHS_FRAME_INDEX);
@@ -2732,27 +2874,47 @@ function pruneComfyPreview(force) {
     comfyPreview.delete(comfyPreview.keys().next().value);
 }
 
-function ensureComfyWs() {
-  if (comfyWs || comfyWsConnecting) return;
-  comfyWsConnecting = true;
+function ensureComfyWs(inst = comfyInstance()) {
+  const url = inst?.url;
+  if (!url) return;
+  let conn = comfySockets.get(url);
+  if (!conn)
+    comfySockets.set(
+      url,
+      (conn = {
+        ws: null,
+        connecting: false,
+        currentPrompt: null,
+        auth: comfyAuthHeaders(inst).Authorization || "",
+      }),
+    );
+  if (conn.ws || conn.connecting) return;
+  conn.connecting = true;
   let ws;
   try {
-    ws = new WebSocket(COMFY_WS_URL);
+    // Node's WebSocket takes request headers as an option (browsers' can't). A login
+    // node such as ComfyUI-Login also reads the token from the address, for sockets.
+    const auth = comfyAuthHeaders(inst);
+    const token = inst.auth?.type === "bearer" ? `&token=${encodeURIComponent(inst.auth.secret)}` : "";
+    ws = new WebSocket(
+      url.replace(/^http/i, "ws") + `/ws?clientId=${COMFY_CLIENT_ID}${token}`,
+      auth.Authorization ? { headers: auth } : undefined,
+    );
     // Preview frames then arrive as ArrayBuffers, in order. The default ("blob")
     // would force an await per frame and let two frames land out of order.
     ws.binaryType = "arraybuffer";
   } catch {
-    comfyWsConnecting = false;
+    conn.connecting = false;
     return;
   }
   const drop = () => {
-    if (comfyWs === ws) comfyWs = null;
-    comfyWsConnecting = false;
-    comfyCurrentPrompt = null; // stale after a reconnect — don't misattribute frames
+    if (conn.ws === ws) conn.ws = null;
+    conn.connecting = false;
+    conn.currentPrompt = null; // stale after a reconnect — don't misattribute frames
   };
   ws.addEventListener("open", () => {
-    comfyWs = ws;
-    comfyWsConnecting = false;
+    conn.ws = ws;
+    conn.connecting = false;
   });
   ws.addEventListener("close", drop);
   ws.addEventListener("error", drop);
@@ -2760,11 +2922,11 @@ function ensureComfyWs() {
     if (typeof ev.data !== "string") {
       // Binary = a latent preview frame. binaryType is "arraybuffer" above; the Blob
       // branch only guards against that ever not being honored.
-      if (ev.data instanceof ArrayBuffer) capturePreview(ev.data);
+      if (ev.data instanceof ArrayBuffer) capturePreview(ev.data, conn);
       else
         ev.data
           ?.arrayBuffer?.()
-          .then(capturePreview)
+          .then((buf) => capturePreview(buf, conn))
           .catch(() => {});
       return;
     }
@@ -2775,9 +2937,10 @@ function ensureComfyWs() {
       return;
     }
     const { type, data } = msg || {};
-    llm.onComfyEvent(type); // a run started elsewhere takes the GPU back from the LLM
+    // A run started elsewhere takes the GPU back from the LLM — when it's this PC's GPU.
+    if (url === gpuComfyUrl()) llm.onComfyEvent(type);
     if (type === "execution_start" || type === "executing") {
-      if (data?.prompt_id) comfyCurrentPrompt = data.prompt_id;
+      if (data?.prompt_id) conn.currentPrompt = data.prompt_id;
       if (type === "execution_start" && data?.prompt_id) {
         const ts = Number(data.timestamp);
         recordComfyExecStart(
@@ -2787,10 +2950,10 @@ function ensureComfyWs() {
       }
     } else if (type === "VHS_latentpreview") {
       // Names no prompt, like the frames that follow it.
-      if (comfyCurrentPrompt) beginPreviewAnim(comfyCurrentPrompt, data);
+      if (conn.currentPrompt) beginPreviewAnim(conn.currentPrompt, data);
     } else if (type === "progress") {
-      const pid = data?.prompt_id || comfyCurrentPrompt;
-      if (pid) comfyCurrentPrompt = pid; // the preview frame that follows belongs to this prompt
+      const pid = data?.prompt_id || conn.currentPrompt;
+      if (pid) conn.currentPrompt = pid; // the preview frame that follows belongs to this prompt
       if (pid && Number.isFinite(data?.value) && Number.isFinite(data?.max)) {
         comfyProgress.set(pid, {
           value: data.value,
@@ -2908,9 +3071,9 @@ function nvidiaSmi() {
 }
 
 // VRAM (in MiB) from ComfyUI when nvidia-smi is unavailable.
-async function comfyVram() {
+async function comfyVram(comfyUrl = activeComfyUrl()) {
   try {
-    const r = await fetch(`${COMFYUI_URL}/system_stats`);
+    const r = await comfyFetch(`${comfyUrl}/system_stats`, { signal: AbortSignal.timeout(4000) });
     const s = await r.json();
     const dev =
       (s.devices || []).find((d) => d.type !== "cpu" && d.vram_total) ||
@@ -2932,7 +3095,10 @@ async function comfyVram() {
 // client — especially mobile — can't drop between queue and history-create and
 // orphan the run).
 app.post("/api/comfy/generate", async (req, res) => {
-  ensureComfyWs(); // start listening for progress before the run begins
+  // The server picked next to Generate (the active one when the browser names none).
+  const comfy = comfyInstance(req.body?.comfyInstanceId);
+  const COMFYUI_URL = comfy.url;
+  ensureComfyWs(comfy); // start listening for progress before the run begins
   const {
     file,
     values,
@@ -3021,7 +3187,7 @@ app.post("/api/comfy/generate", async (req, res) => {
     if (swapped.size) {
       let info = null;
       try {
-        info = await getObjectInfo();
+        info = await getObjectInfo(false, COMFYUI_URL);
       } catch {
         /* ComfyUI unreachable — queueing will report that itself */
       }
@@ -3063,11 +3229,13 @@ app.post("/api/comfy/generate", async (req, res) => {
       });
   }
   // A prompt-building LLM on the GPU steps aside first (unloads), so the video
-  // model has the room. Bounded: a stuck LLM server never blocks a generation.
-  await Promise.race([
-    llm.yieldForGeneration("a generation started").catch(() => {}),
-    new Promise((r) => setTimeout(r, 30000)),
-  ]);
+  // model has the room. Bounded: a stuck LLM server never blocks a generation. A run
+  // on a ComfyUI elsewhere doesn't touch this PC's GPU, and leaves the LLM alone.
+  if (COMFYUI_URL === gpuComfyUrl())
+    await Promise.race([
+      llm.yieldForGeneration("a generation started").catch(() => {}),
+      new Promise((r) => setTimeout(r, 30000)),
+    ]);
   // Animated preview: any `previewEvery` above 0 asks for one (0 = the usual single
   // frame; which frames a tab shows is its own business). It always samples with
   // latent2rgb — VideoHelperSuite decodes every frame on each step, and its TAESD
@@ -3075,7 +3243,7 @@ app.post("/api/comfy/generate", async (req, res) => {
   const method = comfyPreviewMethod(previewMethod);
   const every = method !== "none" && Number(previewEveryReq) > 0;
   try {
-    const r = await fetch(`${COMFYUI_URL}/prompt`, {
+    const r = await comfyFetch(`${COMFYUI_URL}/prompt`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       // Ask for latent previews on this prompt. We deliberately send no client_id:
@@ -3106,6 +3274,7 @@ app.post("/api/comfy/generate", async (req, res) => {
         .json({ code: r.status || 502, msg: formatComfyPromptError(body) });
     }
     comfyProgressPasses.set(body.prompt_id, passes);
+    comfyPromptInstance.set(body.prompt_id, comfy.id);
     // Create the pending History entry now, so the server-side sweep can finish the
     // run even if the client never makes a second call.
     let historyId = null;
@@ -3133,6 +3302,7 @@ app.post("/api/comfy/generate", async (req, res) => {
         continuation,
         status: "pending",
       });
+      entry.comfyInstanceId = comfy.id; // which server to poll, cancel and fetch the output from
       if (passes > 1) entry.progressPasses = passes; // so a server restart mid-run still knows
       if (promptEcho && workflow[promptEcho]) entry.promptEchoNode = promptEcho;
       const entries = readJson(HISTORY_FILE);
@@ -3162,7 +3332,7 @@ app.post("/api/comfy/generate", async (req, res) => {
 
 // Collect a ComfyUI history entry's output files as viewable /view URLs (video/
 // animation first, then stills).
-function collectComfyOutputs(entry) {
+function collectComfyOutputs(entry, comfyUrl) {
   // Moving/still outputs are collected separately so a workflow that also saves a still
   // (e.g. a final-frame PNG for chaining) still reports the video as its result.
   const moving = [];
@@ -3174,7 +3344,7 @@ function collectComfyOutputs(entry) {
         // that's the source, not something the run made.
         if (f.type === "input") continue;
         (key === "images" ? stills : moving).push(
-          `${COMFYUI_URL}/view?filename=${encodeURIComponent(f.filename)}` +
+          `${comfyUrl}/view?filename=${encodeURIComponent(f.filename)}` +
             `&subfolder=${encodeURIComponent(f.subfolder || "")}&type=${encodeURIComponent(f.type || "output")}`,
         );
       }
@@ -3240,9 +3410,9 @@ function comfyExecStartTs(entry) {
 
 // Where a prompt is on ComfyUI: "running", "pending" (waiting behind others), false
 // (in neither list), or null if unknown (ComfyUI unreachable).
-async function comfyPromptQueueState(promptId) {
+async function comfyPromptQueueState(promptId, comfyUrl) {
   try {
-    const q = await fetch(`${COMFYUI_URL}/queue`).then((r) => r.json());
+    const q = await comfyFetch(`${comfyUrl}/queue`).then((r) => r.json());
     const inList = (list) => (list || []).some((it) => it[1] === promptId);
     if (inList(q.queue_running)) return "running";
     if (inList(q.queue_pending)) return "pending";
@@ -3257,7 +3427,9 @@ app.get("/api/comfy/status", async (req, res) => {
   const promptId = req.query.promptId;
   if (!promptId)
     return res.status(400).json({ code: 400, msg: "promptId is required" });
-  ensureComfyWs(); // keep the progress socket alive while a run is polled
+  const comfy = comfyForPrompt(promptId);
+  const COMFYUI_URL = comfy.url;
+  ensureComfyWs(comfy); // keep the progress socket alive while a run is polled
   pruneComfyProgress();
   const prog = comfyProgress.get(promptId);
   const progress =
@@ -3265,7 +3437,7 @@ app.get("/api/comfy/status", async (req, res) => {
       { value: prog.value, max: prog.max, passes: progressPassesFor(promptId) }
     : undefined;
   try {
-    const r = await fetch(
+    const r = await comfyFetch(
       `${COMFYUI_URL}/history/${encodeURIComponent(promptId)}`,
     );
     const hist = await r.json().catch(() => ({}));
@@ -3274,7 +3446,7 @@ app.get("/api/comfy/status", async (req, res) => {
       // Not in history. Still queued/running → keep waiting; otherwise ComfyUI has
       // no record of it (usually it was restarted) → "lost", so the UI can stop
       // polling forever instead of spinning on "Generating…".
-      const where = await comfyPromptQueueState(promptId);
+      const where = await comfyPromptQueueState(promptId, COMFYUI_URL);
       const state = where === false ? "lost" : "waiting";
       if (state === "lost") comfyProgress.delete(promptId);
       // Running but its execution_start went unheard (server restarted mid-run, or
@@ -3306,7 +3478,7 @@ app.get("/api/comfy/status", async (req, res) => {
       });
     }
 
-    const urls = collectComfyOutputs(entry);
+    const urls = collectComfyOutputs(entry, COMFYUI_URL);
     if (!urls.length)
       return res.json({
         code: 200,
@@ -3343,22 +3515,23 @@ app.post("/api/comfy/cancel", async (req, res) => {
   const promptId = req.body?.promptId;
   if (!promptId)
     return res.status(400).json({ code: 400, msg: "promptId is required" });
+  const COMFYUI_URL = comfyForPrompt(promptId).url;
   try {
-    const queue = await fetch(`${COMFYUI_URL}/queue`)
+    const queue = await comfyFetch(`${COMFYUI_URL}/queue`)
       .then((r) => r.json())
       .catch(() => ({}));
     const inList = (list) => (list || []).some((item) => item[1] === promptId);
     const running = inList(queue.queue_running);
     const pending = inList(queue.queue_pending);
     if (pending) {
-      await fetch(`${COMFYUI_URL}/queue`, {
+      await comfyFetch(`${COMFYUI_URL}/queue`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ delete: [promptId] }),
       });
     }
     if (running && !req.body?.onlyQueued)
-      await fetch(`${COMFYUI_URL}/interrupt`, { method: "POST" });
+      await comfyFetch(`${COMFYUI_URL}/interrupt`, { method: "POST" });
     res.json({ code: 200, msg: "cancelled", data: { running, pending } });
   } catch (err) {
     console.error("ComfyUI cancel error:", err);
@@ -3372,8 +3545,9 @@ app.post("/api/comfy/cancel", async (req, res) => {
 // POST /free). ComfyUI applies it between jobs — right away when idle, or once the
 // running job finishes — and the next run reloads its models from disk.
 app.post("/api/comfy/free", async (req, res) => {
+  const COMFYUI_URL = activeComfyUrl();
   try {
-    const r = await fetch(`${COMFYUI_URL}/free`, {
+    const r = await comfyFetch(`${COMFYUI_URL}/free`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ unload_models: true, free_memory: true }),
@@ -3456,15 +3630,20 @@ async function sweepPendingComfy() {
         (e.input?.model || "").startsWith("comfy:"),
     );
     if (!pending.length) return;
-    let queueSnapshot = undefined; // fetched once, lazily, only if a prompt is missing
+    const queueSnapshots = new Map(); // per server: fetched once, lazily, only if a prompt is missing
+    const down = new Set(); // servers that didn't answer this sweep
     for (const entry of pending) {
+      const COMFYUI_URL = comfyInstance(entry.comfyInstanceId).url;
+      if (down.has(COMFYUI_URL)) continue;
       let hist;
       try {
-        hist = await fetch(
+        hist = await comfyFetch(
           `${COMFYUI_URL}/history/${encodeURIComponent(entry.taskId)}`,
+          { signal: AbortSignal.timeout(10000) },
         ).then((r) => r.json());
       } catch {
-        return; // ComfyUI unreachable — leave entries pending, retry next sweep
+        down.add(COMFYUI_URL); // unreachable — leave its entries pending, retry next sweep
+        continue;
       }
       const h = hist?.[entry.taskId];
       if (h) {
@@ -3473,7 +3652,7 @@ async function sweepPendingComfy() {
             fail: formatComfyExecError(h),
           });
         } else {
-          const urls = collectComfyOutputs(h);
+          const urls = collectComfyOutputs(h, COMFYUI_URL);
           if (urls.length)
             await finalizePendingComfy(entry.id, {
               resultUrls: urls,
@@ -3491,13 +3670,16 @@ async function sweepPendingComfy() {
         COMFY_LOST_GRACE_MS
       )
         continue;
+      let queueSnapshot = queueSnapshots.get(COMFYUI_URL);
       if (queueSnapshot === undefined) {
         try {
-          queueSnapshot = await fetch(`${COMFYUI_URL}/queue`).then((r) =>
-            r.json(),
-          );
+          queueSnapshot = await comfyFetch(`${COMFYUI_URL}/queue`, {
+            signal: AbortSignal.timeout(10000),
+          }).then((r) => r.json());
+          queueSnapshots.set(COMFYUI_URL, queueSnapshot);
         } catch {
-          return; // can't tell — leave pending
+          down.add(COMFYUI_URL); // can't tell — leave pending
+          continue;
         }
       }
       const inQ = (list) => (list || []).some((it) => it[1] === entry.taskId);
@@ -3561,7 +3743,7 @@ async function finalizePendingKie(
 }
 
 async function sweepPendingKie() {
-  if (!API_KEY || kieWatchBusy) return;
+  if (kieWatchBusy || !kieKey()) return;
   kieWatchBusy = true;
   try {
     const pending = readJson(HISTORY_FILE).filter(
@@ -3576,7 +3758,7 @@ async function sweepPendingKie() {
         const r = await fetch(
           `${API_BASE}/recordInfo?taskId=${encodeURIComponent(entry.taskId)}`,
           {
-            headers: { Authorization: `Bearer ${API_KEY}` },
+            headers: { Authorization: `Bearer ${kieKey()}` },
           },
         );
         body = await r.json().catch(() => ({}));
@@ -3683,7 +3865,9 @@ app.get("/api/comfy/stats", async (req, res) => {
   };
   let gpu = null;
   let vram = null;
-  const gpus = await nvidiaSmi();
+  const COMFYUI_URL = activeComfyUrl();
+  // nvidia-smi reads this PC's GPU: with a ComfyUI elsewhere picked, ask that one instead.
+  const gpus = COMFYUI_URL === gpuComfyUrl() ? await nvidiaSmi() : null;
   if (gpus) {
     const g = gpus[0]; // primary GPU
     gpu = g.util;
@@ -3696,7 +3880,7 @@ app.get("/api/comfy/stats", async (req, res) => {
     vram = await comfyVram(); // GPU % unavailable without nvidia-smi
   }
   // The prompts waiting in ComfyUI's queue (not the running one), for Cancel all queued.
-  const queued = await fetch(`${COMFYUI_URL}/queue`)
+  const queued = await comfyFetch(`${COMFYUI_URL}/queue`, { signal: AbortSignal.timeout(4000) })
     .then((r) => r.json())
     .then((q) => (q.queue_pending || []).map((it) => it[1]))
     .catch(() => []);
@@ -4221,7 +4405,7 @@ app.get("/api/ping", (req, res) => {
 // --- account credit balance ---------------------------------------------
 app.get("/api/credits", (req, res) => {
   // No key: report "not configured" (the header hides the balance) instead of an error.
-  if (!API_KEY)
+  if (!kieKey())
     return res.json({
       code: 200,
       msg: "no api key",
@@ -4230,7 +4414,7 @@ app.get("/api/credits", (req, res) => {
     });
   forward(
     res,
-    fetch(CREDITS_URL, { headers: { Authorization: `Bearer ${API_KEY}` } }),
+    fetch(CREDITS_URL, { headers: { Authorization: `Bearer ${kieKey()}` } }),
   );
 });
 
@@ -5423,7 +5607,7 @@ async function downloadOutput(resultUrl, proj, id, suffix = "") {
   let lastErr = null;
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      const r = await fetch(resultUrl);
+      const r = await comfyFetch(resultUrl);
       if (!r.ok) {
         lastErr = new Error(`HTTP ${r.status}`);
       } else {
@@ -5650,8 +5834,8 @@ app.post("/api/history/:id/result", async (req, res) => {
   // A run whose prompt went through an enhancer: read the rewritten text back.
   if (entry.promptEchoNode && entry.taskId) {
     try {
-      const hist = await fetch(
-        `${COMFYUI_URL}/history/${encodeURIComponent(entry.taskId)}`,
+      const hist = await comfyFetch(
+        `${comfyInstance(entry.comfyInstanceId).url}/history/${encodeURIComponent(entry.taskId)}`,
       ).then((r) => r.json());
       const enhanced = comfyEnhancedPrompt(hist?.[entry.taskId], entry);
       if (typeof enhanced === "string") entry.enhancedPrompt = enhanced;
@@ -5904,6 +6088,114 @@ app.put("/api/settings", (req, res) => {
   res.json({ code: 200, msg: "updated", data: publicAppSettings(s) });
 });
 
+// --- image/video generation settings ----------------------------------------
+// The ComfyUI servers and the kie.ai key (settings/generation.json). The key itself
+// never goes to the browser — only whether there is one, and where it comes from.
+function publicGenSettings() {
+  const s = readGenSettings();
+  return {
+    comfy: {
+      activeId: s.comfy.activeId,
+      instances: s.comfy.instances.map(({ auth, ...rest }) => ({
+        ...rest,
+        auth: { type: auth?.type || "none", username: auth?.username || "", hasSecret: !!auth?.secret },
+      })),
+    },
+    kie: {
+      hasKey: !!s.kieApiKey,
+      viaLlm: !s.kieApiKey && !!llm.kieSourceKey(), // borrowed from a kie.ai LLM server
+    },
+  };
+}
+app.get("/api/generation/settings", (req, res) => {
+  res.json({ code: 200, msg: "success", data: publicGenSettings() });
+});
+// A PUT merges: `comfy.instances` replaces the list, `comfy.activeId` picks one, and
+// the key changes only when `kieApiKey` is sent non-empty (or `clearKieKey` is true).
+// A server's token / password likewise: sent blank, the saved one stays.
+function mergeComfyAuth(incoming, saved) {
+  const type = incoming?.auth?.type;
+  if (type !== "bearer" && type !== "basic") return undefined;
+  const typed = String(incoming.auth.secret || "");
+  const secret = typed || (saved?.auth?.type === type ? saved.auth.secret : "");
+  return { type, username: incoming.auth.username || "", secret };
+}
+app.put("/api/generation/settings", (req, res) => {
+  const cur = readGenSettings();
+  const next = { kieApiKey: cur.kieApiKey, comfy: { ...cur.comfy } };
+  const b = req.body || {};
+  if (Array.isArray(b.comfy?.instances)) {
+    const bad = b.comfy.instances.find((i) => !cleanComfyUrl(i?.url));
+    if (bad || !b.comfy.instances.length)
+      return res.status(400).json({
+        code: 400,
+        msg: bad ? `"${bad.name || "ComfyUI"}" needs an address.` : "Keep at least one ComfyUI server.",
+      });
+    next.comfy.instances = b.comfy.instances.map((i) => ({
+      ...i,
+      auth: mergeComfyAuth(i, cur.comfy.instances.find((x) => x.id === i?.id)),
+    }));
+  }
+  if (b.comfy?.activeId !== undefined) next.comfy.activeId = String(b.comfy.activeId);
+  if (b.clearKieKey) next.kieApiKey = "";
+  else if (typeof b.kieApiKey === "string" && b.kieApiKey.trim()) next.kieApiKey = b.kieApiKey.trim();
+  try {
+    writeGenSettings(next);
+  } catch (err) {
+    console.error("Failed to save generation settings:", err);
+    return res.status(500).json({ code: 500, msg: "Failed to save settings" });
+  }
+  closeStaleComfySockets();
+  res.json({ code: 200, msg: "saved", data: publicGenSettings() });
+});
+// The settings window's "Test": is there a ComfyUI at this address?
+app.post("/api/generation/test-comfy", async (req, res) => {
+  const url = cleanComfyUrl(req.body?.url);
+  if (!url) return res.status(400).json({ code: 400, msg: "Enter an address first." });
+  // The sign-in as it stands in the form — not saved yet, perhaps; a blank token or
+  // password means the saved one.
+  const auth = mergeComfyAuth(
+    req.body,
+    readGenSettings().comfy.instances.find((x) => x.id === req.body?.id),
+  );
+  const signedIn = !!auth?.secret || !!auth?.username;
+  try {
+    const r = await fetch(`${url}/system_stats`, {
+      headers: comfyAuthHeaders({ auth }),
+      signal: AbortSignal.timeout(8000),
+    });
+    const s = await r.json().catch(() => null);
+    if (r.status === 401 || r.status === 403)
+      return res.status(502).json({
+        code: 502,
+        msg:
+          signedIn ?
+            `${url} refused that sign-in (HTTP ${r.status}) — check the token or the username and password.`
+          : `${url} asks for a sign-in (HTTP ${r.status}) — choose one under "Sign-in" and enter it.`,
+      });
+    if (!r.ok || !s?.system)
+      return res.status(502).json({
+        code: 502,
+        msg: `Something answered at ${url}, but it isn't ComfyUI (HTTP ${r.status}).`,
+      });
+    const dev = (s.devices || []).find((d) => d.type !== "cpu") || (s.devices || [])[0];
+    res.json({
+      code: 200,
+      msg: "success",
+      data: {
+        version: s.system.comfyui_version || "",
+        device: String(dev?.name || "").replace(/^cuda:\d+\s*/i, "").replace(/\s*:\s*\w+$/, ""),
+        vramGb: dev?.vram_total ? +(dev.vram_total / 1024 ** 3).toFixed(1) : null,
+      },
+    });
+  } catch (err) {
+    res.status(502).json({
+      code: 502,
+      msg: `Couldn't reach ComfyUI at ${url} (${err.cause?.code || err.name || err.message}) — is it running?`,
+    });
+  }
+});
+
 // --- toggle an entry's tags (hidden / draft / favorite) -------------------
 app.post("/api/history/:id/tags", (req, res) => {
   const { hidden, draft, favorite } = req.body || {};
@@ -6061,13 +6353,15 @@ async function gpuMemory() {
     const g = gpus[0];
     return { freeMiB: g.memTotal - g.memUsed, totalMiB: g.memTotal };
   }
-  const v = await comfyVram();
+  const url = gpuComfyUrl();
+  const v = url ? await comfyVram(url) : null;
   return v ? { freeMiB: v.total - v.used, totalMiB: v.total } : null;
 }
 
 const llm = createLlm({
   settingsFile: path.join(path.dirname(APP_SETTINGS_FILE), "llm.json"),
-  comfyUrl: COMFYUI_URL,
+  comfyUrl: gpuComfyUrl, // the ComfyUI sharing this PC's GPU, or null
+  comfyFetch,
   inputDir: INPUT_DIR,
   imagesFile: IMAGES_FILE,
   readJson,
@@ -6077,8 +6371,11 @@ const llm = createLlm({
   sanitizePromptFields,
   withRefDetails,
   gpuMemory,
-  ensureComfyWs,
-  kieApiKey: API_KEY,
+  ensureComfyWs: () => {
+    const url = gpuComfyUrl();
+    if (url) ensureComfyWs(comfyInstances().find((i) => i.url === url));
+  },
+  kieApiKey: () => readGenSettings().kieApiKey, // a kie.ai server with no key of its own uses it
   builderFile: (proj) =>
     path.join(PROJECT_DATA_DIR, proj.slug, "llm-builder.json"),
   chatsDir: path.join(path.dirname(APP_SETTINGS_FILE), "chats"),

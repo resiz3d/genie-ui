@@ -65,28 +65,19 @@ This downloads the small libraries the app needs. It takes under a minute.
 properly — close the terminal, reinstall Node from Step 1, then open a new
 terminal and try again.)
 
-### Step 5 — Add your API key
+### Step 5 — Your API key (optional — do this once the app is open)
 
-The app talks to kie.ai, which requires an account and an API key (the key is
-like a password that also tracks your credit balance):
+There is no settings file to edit. The kie.ai **cloud** models need an account and an
+API key (the key is like a password that also tracks your credit balance); your own
+ComfyUI workflows don't. Once the app is open in your browser (Step 6):
 
 1. Go to <https://kie.ai/api-key>, create an account if needed, and copy your
    API key
-2. Back in the terminal, type these two commands (press **Enter** after each):
+2. In GENie, click **⚙ Settings** (top right), then **Online providers**
+3. Paste the key under **kie.ai** and click **Save**
 
-   ```
-   copy .env.example .env
-   notepad .env
-   ```
-
-3. Notepad opens a small settings file. Replace `your_api_key_here` with the
-   key you copied — the line should end up looking like:
-
-   ```
-   KIE_API_KEY=abc123yourrealkey
-   ```
-
-4. Save (Ctrl+S) and close Notepad.
+The same window is where you tell GENie about your ComfyUI (**Image / Video**) and
+your LLM servers (**LLM**).
 
 > ⚠️ Your key is money — anyone who has it can spend your kie.ai credits.
 > Don't share it or post screenshots of it.
@@ -146,14 +137,12 @@ Same four ideas, slightly different clicks:
 
    ```
    npm install
-   cp .env.example .env
-   open -e .env
    ```
 
-   TextEdit opens the settings file — replace `your_api_key_here` with your key
-   from <https://kie.ai/api-key>, then save and close.
 5. **Start it** — run `npm start`, then open <http://localhost:3000> in your
-   browser. Stop it later with **Ctrl+C** in the Terminal.
+   browser. Stop it later with **Ctrl+C** in the Terminal. To use the kie.ai cloud
+   models, click **⚙ Settings** (top right) → **Online providers** and paste your key
+   from <https://kie.ai/api-key>.
 6. **Optional: ffmpeg** — for the **✂ Video editor**, install
    [Homebrew](https://brew.sh) and run `brew install ffmpeg`, then start GENie
    again from a new Terminal window. See [docs/FFMPEG.md](docs/FFMPEG.md).
@@ -165,8 +154,8 @@ Same four ideas, slightly different clicks:
 | Problem | Fix |
 | --- | --- |
 | `'npm' is not recognized` / `command not found: npm` | Node.js isn't installed (or the terminal was open during install). Reinstall from <https://nodejs.org>, then open a **new** terminal. |
-| `No KIE_API_KEY set` when starting, and the kie.ai models say no key is configured | Step 5 didn't stick — make sure the file is named exactly `.env` (not `.env.txt`) and contains your real key. Redo the two commands in Step 5. (Without a key the app still runs ComfyUI workflows.) |
-| `EADDRINUSE: address already in use` | The app is already running in another window, or something else is using port 3000. Close other terminals, or edit `.env` and change `PORT=3000` to `PORT=3001` (then browse to localhost:3001). |
+| The kie.ai models are greyed out | No key has been saved yet — open **⚙ Settings → Online providers**, paste your key and Save. (Without a key the app still runs ComfyUI workflows.) |
+| `EADDRINUSE: address already in use` | The app is already running in another window, or something else is using port 3000. Close other terminals, or copy `.env.example` to `.env` and change `PORT=3000` to `PORT=3001` (then browse to localhost:3001). |
 | Red "Server not reachable" banner in the browser | The terminal running `npm start` was closed. Start it again (Everyday use, above). |
 | ✂ Video editor says "ffmpeg was not found" | ffmpeg isn't installed, or the app was started before you installed it. See [docs/FFMPEG.md](docs/FFMPEG.md), then start the app from a **new** terminal. |
 | A generation fails with "Insufficient credits" | Your kie.ai account is out of credits — top up at <https://kie.ai>. |
@@ -177,7 +166,7 @@ Easiest zero-git method: download the ZIP again and extract it to a **new**
 folder, then copy these items from your **old** folder into the new one so you
 keep your key, media, and history:
 
-- `.env`
+- `.env` (if you made one) and the `settings` folder
 - `history.json`, `images.json`, `projects.json` (whichever exist)
 - the `output`, `input` and `projects` folders
 

@@ -143,21 +143,15 @@
   </div>`;
   document.body.appendChild(buildModal);
 
-  const setModal = document.createElement("div");
-  setModal.id = "llmSettingsModal";
-  setModal.className = "modal hidden";
+  // The LLM settings form: the 💬 LLM tab of the ⚙ Settings window (settings-ui.js).
+  const setModal = window.GENie.settings.pane("llm");
   setModal.innerHTML = `
-  <div class="modal-box llm-box" role="dialog" aria-labelledby="llmSetHeading">
-    <div class="pe-head">
-      <h3 id="llmSetHeading">⚙ LLM settings</h3>
-      <button type="button" class="link-btn pe-close llm-s-close" title="Close (Esc)">×</button>
-    </div>
     <div class="llm-source-row">
       <label>Server
         <select class="llm-s-pick"></select>
       </label>
       <span class="llm-s-btns">
-        <button type="button" class="btn-secondary llm-s-add">＋ Add</button>
+        <select class="btn-secondary llm-s-add" title="Add another LLM server" aria-label="Add an LLM server"></select>
         <button type="button" class="btn-secondary llm-s-del">🗑 Remove</button>
       </span>
     </div>
@@ -175,6 +169,7 @@
         <input type="password" class="llm-s-key" autocomplete="new-password" placeholder="none" />
       </label>
       <label class="inline hidden llm-s-clearkey-wrap"><input type="checkbox" class="llm-s-clearkey" /> Remove the saved key</label>
+      <p class="muted hidden llm-s-kie-note"><span></span> <button type="button" class="link-btn llm-s-to-prov">☁ Online providers</button></p>
       <div class="llm-s-llama hidden">
         <label><span>llama-server program <span class="hint">— the full path to llama-server (llama-server.exe on Windows)</span></span>
           <input type="text" class="llm-s-exe" autocomplete="off" spellcheck="false" placeholder="C:\\llama.cpp\\llama-server.exe" />
@@ -257,9 +252,7 @@
     <div class="modal-actions">
       <button type="button" class="btn-secondary llm-s-close">Cancel</button>
       <button type="button" class="llm-s-save">💾 Save</button>
-    </div>
-  </div>`;
-  document.body.appendChild(setModal);
+    </div>`;
 
   // Entry point on the Saved Prompts tab, plus a progress line under the toolbar.
   const toolbar = savedPanel.querySelector(".sp-toolbar");
@@ -994,10 +987,12 @@
     tok: $(".llm-o-tok", setModal),
     instr: $(".llm-o-instr", setModal),
     err: $(".llm-s-err", setModal),
+    add: $(".llm-s-add", setModal),
   };
   let draft = null; // { activeSourceId, sources: [...] } being edited
   let editingId = null;
   let testModels = [];
+  let testSeq = 0; // the latest "Test & list models" — an earlier one's answer is dropped
 
   const ARGS_HINT = {
     lmstudio: 'JSON merged into LM Studio\'s load request, e.g. {"flash_attention": true, "offload_kv_cache_to_gpu": true}',
@@ -1029,10 +1024,18 @@
     $(".llm-s-url-hint", setModal).textContent =
       s.kind.value === "kieai" ? "— https://api.kie.ai" : "— the OpenAI-compatible address, with or without /v1";
     const src = draft?.sources.find((x) => x.id === editingId);
+    // kie.ai's key is entered once, in ☁ Online providers. A server that still has a
+    // key of its own (from before that tab existed) keeps showing it, to be removed.
+    const kie = s.kind.value === "kieai";
+    const sharedKey = kie && !src?.hasApiKey;
+    if (sharedKey) $(".llm-s-key-wrap", setModal).classList.add("hidden");
+    const kieNote = $(".llm-s-kie-note", setModal);
+    kieNote.classList.toggle("hidden", !sharedKey);
+    kieNote.firstElementChild.textContent =
+      cfg.kieSharedKey ? "Uses your kie.ai key from" : "⚠ No kie.ai key yet — add it in";
     s.keyhint.textContent =
-      src?.hasApiKey ? "— a key is saved; leave blank to keep it"
-      : s.kind.value === "kieai" && cfg.kieEnvKey ? "— leave blank to use KIE_API_KEY from .env"
-      : s.kind.value === "kieai" ? "— from kie.ai/api-key"
+      kie ? "— this server's own key; remove it to use the one in ☁ Online providers"
+      : src?.hasApiKey ? "— a key is saved; leave blank to keep it"
       : "— only if the server requires one";
     s.clearWrap.classList.toggle("hidden", on || !src?.hasApiKey);
     s.test.textContent = on ? "🔌 Check the files" : "🔌 Test & list models";
@@ -1074,7 +1077,10 @@
   }
 
   function fillForm() {
-    fillSourceSelect(s.pick, editingId);
+    // From the list being edited, so a server just added (not saved yet) is in it.
+    s.pick.innerHTML = "";
+    for (const x of draft.sources) s.pick.appendChild(new Option(x.name, x.id));
+    s.pick.value = editingId;
     fillAnalyzePick();
     const src = draft.sources.find((x) => x.id === editingId);
     const on = !!src;
@@ -1143,8 +1149,12 @@
     const src = draft.sources.find((x) => x.id === editingId);
     s.testOut.textContent = "Connecting…";
     s.test.disabled = true;
+    const seq = ++testSeq;
+    // Another server was picked (or added) while this one answered: its result is stale.
+    const stale = () => seq !== testSeq || editingId !== src.id;
     try {
       const d = await api("/api/llm/models", "POST", { source: src });
+      if (stale()) return;
       testModels = d.models || [];
       const sorted = [...testModels].sort((a, b) => (b.vision === true) - (a.vision === true) || a.id.localeCompare(b.id));
       fillModelPick(sorted);
@@ -1158,11 +1168,14 @@
       if (!s.model.value && sorted[0]) s.model.value = sorted.find((m) => m.vision)?.id || "";
       renderModelInfo();
     } catch (err) {
+      if (stale()) return;
       testModels = [];
       s.testOut.textContent = `✕ ${err.message}`;
     } finally {
-      s.test.disabled = false;
-      showUnload();
+      if (seq === testSeq) {
+        s.test.disabled = false;
+        showUnload();
+      }
     }
   }
 
@@ -1184,12 +1197,13 @@
     s.modelPick.value = [...s.modelPick.options].some((o) => o.value === v) ? v : "";
   }
 
-  async function openSettings() {
+  // ⚙ Settings shows this tab: fill the form from what's saved.
+  async function loadSettingsForm() {
     showErr(s.err, "");
     try {
       await loadCfg();
     } catch (err) {
-      return alert(err.message);
+      return showErr(s.err, err.message);
     }
     draft = {
       activeSourceId: cfg.activeSourceId,
@@ -1198,6 +1212,9 @@
     editingId = cfg.activeSourceId;
     s.kind.innerHTML = "";
     for (const [k, v] of Object.entries(cfg.kinds)) s.kind.appendChild(new Option(v.label, k));
+    s.add.innerHTML = "";
+    s.add.appendChild(new Option("＋ Add…", ""));
+    for (const [k, v] of Object.entries(cfg.kinds)) s.add.appendChild(new Option(v.label, k));
     const o = cfg.options;
     s.free.checked = o.freeComfyVram;
     s.unload.checked = o.unloadWhenDone;
@@ -1210,11 +1227,15 @@
     s.asize.value = cfg.analyzeImageSize;
     fillAnalyzePick(cfg.analyzeSourceId);
     fillForm();
-    setModal.classList.remove("hidden");
     const cur = draft.sources.find((x) => x.id === editingId);
     if (cur?.kind === "llamacpp" ? cur.exePath && cur.modelPath : cur?.baseUrl) testSource();
   }
-  const closeSettings = () => setModal.classList.add("hidden");
+  let formReady = Promise.resolve(); // the form's latest fill
+  window.GENie.settings.onShow("llm", () => (formReady = loadSettingsForm()));
+  function openSettings() {
+    return window.GENie.settings.open("llm");
+  }
+  const closeSettings = () => window.GENie.settings.close();
 
   s.pick.addEventListener("change", () => {
     readForm();
@@ -1254,23 +1275,35 @@
   s.name.addEventListener("change", () => {
     readForm();
     fillAnalyzePick();
+    const opt = [...s.pick.options].find((o) => o.value === editingId);
+    if (opt) opt.text = s.name.value.trim() || opt.text;
   });
   s.test.addEventListener("click", testSource);
   s.unloadBtn.addEventListener("click", unloadSource);
-  $(".llm-s-add", setModal).addEventListener("click", () => {
+  // ＋ Add…: a new server of the chosen type, with that type's usual address.
+  function addSource(kind) {
+    if (!draft) return;
     readForm();
+    const k = cfg.kinds[kind] ? kind : "lmstudio";
+    const port = cfg.kinds[k].port;
     const id = `src-${Date.now().toString(36)}`;
     draft.sources.push({
       id,
-      name: "New server",
-      kind: "lmstudio",
-      baseUrl: "http://127.0.0.1:1234",
+      name:
+        k === "kieai" ? "kie.ai"
+        : k === "openai" ? "New server"
+        : cfg.kinds[k].label.replace(/\s*\(.*$/, ""),
+      kind: k,
+      baseUrl:
+        k === "kieai" ? "https://api.kie.ai"
+        : port ? `http://127.0.0.1:${port}`
+        : "",
       apiKey: "",
       model: "",
       vramGb: 0,
       contextLength: 8192,
       loadArgs: "",
-      cpuOnly: false,
+      cpuOnly: k === "kieai",
       exePath: "",
       modelPath: "",
       mmprojPath: "",
@@ -1280,6 +1313,40 @@
     editingId = id;
     fillForm();
     s.name.select();
+    if (k === "kieai" && cfg.kieSharedKey) testSource(); // lists its models to pick from
+  }
+  s.add.addEventListener("change", () => {
+    const kind = s.add.value;
+    s.add.value = "";
+    if (kind) addSource(kind);
+  });
+  // From ☁ Online providers: show the kie.ai (or other) server, adding one if needed.
+  window.GENie.addLlmServer = async (kind) => {
+    await formReady;
+    if (!draft) return;
+    try {
+      await loadCfg(); // a key saved a moment ago: know about it before testing
+    } catch {
+      /* offline — carry on with what's loaded */
+    }
+    const have = draft.sources.find((x) => x.kind === kind);
+    if (!have) return addSource(kind);
+    readForm();
+    editingId = have.id;
+    fillForm();
+    testSource();
+  };
+  $(".llm-s-to-prov", setModal).addEventListener("click", () =>
+    window.GENie.settings.select("providers"),
+  );
+  // The kie.ai key changed in ☁ Online providers: the form's kie.ai note follows.
+  document.addEventListener("genie:gen-settings", async () => {
+    try {
+      await loadCfg();
+      if (draft) showKindFields();
+    } catch {
+      /* offline — it reloads the next time the tab opens */
+    }
   });
   $(".llm-s-del", setModal).addEventListener("click", () => {
     if (draft.sources.length <= 1) return alert("Keep at least one server.");
@@ -1324,6 +1391,7 @@
       });
       showRevModel();
       document.dispatchEvent(new CustomEvent("genie:llm-cfg", { detail: cfg }));
+      if (typeof loadCredits === "function") loadCredits(); // a kie.ai server's own key counts
       closeSettings();
       if (!buildModal.classList.contains("hidden")) {
         fillSourceSelect(b.source, cfg.activeSourceId);
@@ -1333,30 +1401,11 @@
       showErr(s.err, err.message);
     }
   });
-  // A way in from the page header, under the credits pill (which is hidden without a
-  // kie.ai key — the link stays).
-  const credits = document.getElementById("credits");
-  if (credits) {
-    const col = document.createElement("div");
-    col.className = "llm-head-col";
-    credits.before(col);
-    const link = document.createElement("button");
-    link.type = "button";
-    link.className = "link-btn llm-head-settings";
-    link.textContent = "⚙ LLM settings";
-    link.title = "The LLM servers GENie uses for ✨ Build with AI, Revise and Analyze";
-    link.addEventListener("click", openSettings);
-    col.append(credits, link);
-  }
   setModal.querySelectorAll(".llm-s-close").forEach((x) => x.addEventListener("click", closeSettings));
-  setModal.addEventListener("click", (e) => {
-    if (e.target === setModal) closeSettings();
-  });
 
+  // (⚙ Settings closes itself on Esc, before this is reached.)
   document.addEventListener("keydown", (e) => {
-    if (e.key !== "Escape") return;
-    if (!setModal.classList.contains("hidden")) closeSettings();
-    else if (!buildModal.classList.contains("hidden")) closeBuilder();
+    if (e.key === "Escape" && !buildModal.classList.contains("hidden")) closeBuilder();
   });
 
   // Switching projects changes what the builder shows.

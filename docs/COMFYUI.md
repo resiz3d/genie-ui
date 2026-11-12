@@ -8,11 +8,9 @@ nodes in it and builds a form automatically.
 ## Setup
 
 1. Have ComfyUI running. By default the app looks for it at
-   `http://127.0.0.1:8188`. Point elsewhere with `COMFYUI_URL` in `.env`:
-
-   ```
-   COMFYUI_URL=http://127.0.0.1:8188
-   ```
+   `http://127.0.0.1:8188`. To point elsewhere — or to use more than one ComfyUI —
+   open **⚙ Settings → Image / Video**, where each server has a name and an address
+   (and a **Test** button). See [Several ComfyUI servers](#several-comfyui-servers).
 
 2. **Bring a workflow in.** The quick way is **Import a workflow from ComfyUI…** under
    the Model picker, which copies one you've saved in ComfyUI's editor — see
@@ -496,3 +494,42 @@ tune the frame count, the image size and a cheaper one-tile-per-step mode — se
   attention, keep target + reference duration under roughly 22 combined seconds at
   0.5 MP, halving that per doubling of megapixels. On an install without comfy-kitchen
   attention the dropdown offers only `pytorch attention`, where the same ceiling applies.
+
+## Several ComfyUI servers
+
+**⚙ Settings → Image / Video** lists the ComfyUI servers GENie can use: one on this PC,
+one on RunPod (the pod's `https://<pod-id>-8188.proxy.runpod.net` link), one on another
+machine. With more than one, a 🖥 picker next to **Generate** chooses which runs the next
+job. The choice is saved, so it's the last one used on every device.
+
+- The workflow form's model, LoRA and sampler lists come from the picked server, and
+  reference images are uploaded to it when a run is queued. Each server needs the models
+  and custom nodes its workflows use.
+- A run is tied to the server it was queued on: progress, previews, cancel and the
+  finished file all go back to that one, even after you pick another. Runs can be in
+  flight on several servers at once.
+- A local LLM (see [LLM.md](LLM.md)) takes turns on the GPU only with the ComfyUI on
+  this PC (a `127.0.0.1` / `localhost` address). A run on a server elsewhere doesn't
+  interrupt it.
+- **Import a workflow from ComfyUI…**, **Free VRAM** and the stats line act on the
+  picked server.
+
+### A server that asks for a sign-in
+
+ComfyUI has no password of its own, so an address that's reachable is open to anyone who
+has it — a RunPod proxy link included. People protect one in two usual ways, and each
+server's **Sign-in** setting covers them:
+
+- **Access token** — for a login custom node such as ComfyUI-Login. GENie sends it as
+  `Authorization: Bearer <token>` (and as `?token=` on the progress socket).
+- **Username & password** — for a reverse proxy (nginx, Caddy…) with basic
+  authentication in front of ComfyUI.
+
+**Test** tries the sign-in as typed, before you save, and says whether the server wants
+one or refused it. The token or password is kept in `settings/generation.json` on the
+GENie machine and never sent back to the browser; leave the field blank to keep the saved
+one. A service that needs its own special headers (Cloudflare Access service tokens, for
+example) isn't covered.
+
+The list is kept in `settings/generation.json`. A `COMFYUI_URL` from an older `.env` is
+copied there the first time and not read again.

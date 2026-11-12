@@ -441,7 +441,7 @@ const ACTIVE_STATES = new Set(["queued", "waiting", "loading", "generating"]);
 export function createLlm(deps) {
   const {
     settingsFile,
-    comfyUrl,
+    comfyUrl: comfyUrlDep, // the ComfyUI sharing this PC's GPU: a URL, or () => URL | null
     inputDir,
     readJson,
     imagesFile,
@@ -456,9 +456,13 @@ export function createLlm(deps) {
     ensureComfyWs = () => {},
     spawn = spawnProcess, // (file, args, options) => ChildProcess — the tests' way in
     llamaStartMs = 10 * 60 * 1000, // how long a llama-server may take to load its model
-    kieApiKey = "", // KIE_API_KEY from .env: a kie.ai server with no key of its own uses it
+    comfyFetch = fetch, // fetch for ComfyUI: adds the sign-in a protected server asks for
+    kieApiKey: kieKeyDep = "", // the key from ☁ Online providers (or () => it): a kie.ai server uses it
     log = console,
   } = deps;
+  // Both can change while GENie runs (⚙ Settings), so they're read when needed.
+  const comfyUrl = () => (typeof comfyUrlDep === "function" ? comfyUrlDep() : comfyUrlDep) || null;
+  const sharedKieKey = () => (typeof kieKeyDep === "function" ? kieKeyDep() : kieKeyDep) || "";
 
   // ---------------------------------------------------------------- settings
   function readSettings() {
@@ -561,8 +565,13 @@ export function createLlm(deps) {
         Object.entries(SOURCE_KINDS).map(([k, v]) => [k, v]),
       ),
       defaultInstructions: DEFAULT_INSTRUCTIONS,
-      kieEnvKey: !!kieApiKey,
+      kieSharedKey: !!sharedKieKey(),
     };
+  }
+  // A kie.ai server's own key, if one has it — the cloud image/video models fall back
+  // to it when ☁ Online providers has none.
+  function kieSourceKey() {
+    return readSettings().sources.find((x) => x.kind === "kieai" && x.apiKey)?.apiKey || "";
   }
 
   // A PUT from the browser. A source's key is replaced only when `apiKey` is sent
@@ -639,7 +648,7 @@ export function createLlm(deps) {
 
   function headers(src) {
     const h = { "Content-Type": "application/json" };
-    const key = src.apiKey || (src.kind === "kieai" ? kieApiKey : "");
+    const key = src.apiKey || (src.kind === "kieai" ? sharedKieKey() : "");
     if (key) h.Authorization = `Bearer ${key}`;
     return h;
   }
@@ -647,7 +656,7 @@ export function createLlm(deps) {
   async function call(src, method, p, body, { timeoutMs = 15000, signal } = {}) {
     if (!rootUrl(src)) throw new Error(`${src.name}: no server URL set`);
     if (src.kind === "kieai" && !headers(src).Authorization)
-      throw new Error(`${src.name}: no API key — enter one here, or set KIE_API_KEY in .env`);
+      throw new Error(`${src.name}: no kie.ai API key yet — add it in ⚙ Settings → Online providers`);
     const signals = [AbortSignal.timeout(timeoutMs)];
     if (signal) signals.push(signal);
     let r;
@@ -1150,8 +1159,10 @@ export function createLlm(deps) {
 
   // ------------------------------------------------------------ ComfyUI + GPU
   async function comfyQueueBusy() {
+    const url = comfyUrl();
+    if (!url) return false; // no ComfyUI on this PC's GPU — nothing to wait for
     try {
-      const r = await fetch(`${comfyUrl}/queue`, { signal: AbortSignal.timeout(4000) });
+      const r = await comfyFetch(`${url}/queue`, { signal: AbortSignal.timeout(4000) });
       const q = await r.json();
       return (q.queue_running || []).length + (q.queue_pending || []).length > 0;
     } catch {
@@ -1160,8 +1171,10 @@ export function createLlm(deps) {
   }
 
   async function comfyFree() {
+    const url = comfyUrl();
+    if (!url) return false;
     try {
-      const r = await fetch(`${comfyUrl}/free`, {
+      const r = await comfyFetch(`${url}/free`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ unload_models: true, free_memory: true }),
@@ -3121,6 +3134,7 @@ export function createLlm(deps) {
   return {
     readSettings,
     publicSettings,
+    kieSourceKey,
     updateSettings,
     getSource,
     listModels,

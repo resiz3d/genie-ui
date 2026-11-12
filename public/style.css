@@ -3641,8 +3641,183 @@ textarea.wc-hl-on {
 }
 
 /* --- ✨ Build with AI (public/llm.js) --- */
-#llmBuildModal .modal-box.llm-box,
-#llmSettingsModal .modal-box.llm-box {
+/* --- ⚙ Settings: one window, tabs down the left (public/settings-ui.js) --- */
+#settingsModal .modal-box.settings-box {
+  width: min(980px, 96vw);
+  height: min(820px, 92vh);
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.settings-head {
+  padding: 0.9rem 1.25rem;
+  border-bottom: 1px solid var(--border);
+}
+.settings-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+.settings-tabs {
+  flex: 0 0 12.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.75rem 0.6rem;
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+}
+.settings-tab {
+  background: none;
+  color: var(--muted);
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 0.55rem 0.7rem;
+  font: inherit;
+  font-size: 0.92rem;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.settings-tab:hover {
+  background: var(--bg);
+  color: var(--text);
+}
+.settings-tab.on {
+  background: var(--bg);
+  border-color: var(--border);
+  color: var(--text);
+  font-weight: 600;
+}
+.settings-tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.settings-panes {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+.settings-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin: 0; /* the page's own <section>s are spaced apart */
+  padding: 1rem 1.25rem 1.25rem;
+}
+.settings-pane.hidden {
+  display: none;
+}
+.settings-pane > p {
+  margin: 0;
+}
+.settings-pane .settings-h4 {
+  margin: 0;
+}
+.settings-intro {
+  margin: 0;
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+.settings-intro code {
+  overflow-wrap: anywhere;
+}
+/* The "＋ Add…" dropdown, drawn as the button it replaced. */
+select.llm-s-add {
+  padding: 0.45rem 0.7rem;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.llm-s-kie-note {
+  margin: 0;
+  font-size: 0.85rem;
+}
+/* One ComfyUI server: name, address, Test / Remove, and the test's answer beneath. */
+.gs-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.gs-row {
+  display: grid;
+  grid-template-columns: minmax(8rem, 1fr) minmax(12rem, 2fr) auto;
+  align-items: end;
+  gap: 0.5rem 0.75rem;
+  padding: 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.gs-row label,
+.gs-row input {
+  min-width: 0;
+  width: 100%;
+}
+.gs-row-btns {
+  display: flex;
+  gap: 0.5rem;
+}
+.gs-row-btns .btn-secondary {
+  padding: 0.6rem 0.7rem;
+  border-radius: 8px;
+  white-space: nowrap;
+}
+/* The sign-in line: its kind, then the fields that kind needs. */
+.gs-auth {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: end;
+  gap: 0.5rem 0.75rem;
+}
+.gs-auth select {
+  width: 100%;
+}
+.gs-out {
+  grid-column: 1 / -1;
+  font-size: 0.85rem;
+  overflow-wrap: anywhere;
+}
+.gs-out:empty {
+  display: none;
+}
+/* The ComfyUI server picker beside Generate. */
+.comfy-instance-pick {
+  max-width: 12rem;
+  padding: 0.4rem 0.5rem;
+}
+@media (max-width: 700px) {
+  #settingsModal .modal-box.settings-box {
+    height: 92vh;
+  }
+  .settings-body {
+    flex-direction: column;
+  }
+  /* The tabs become a row across the top, scrolling sideways if they don't fit. */
+  .settings-tabs {
+    flex: 0 0 auto;
+    flex-direction: row;
+    padding: 0.5rem 0.6rem;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+  .settings-tab {
+    padding: 0.45rem 0.55rem;
+    font-size: 0.85rem;
+  }
+  .settings-pane {
+    padding: 0.9rem 0.9rem 1.1rem;
+  }
+  .gs-row,
+  .gs-auth {
+    grid-template-columns: 1fr;
+  }
+}
+
+#llmBuildModal .modal-box.llm-box {
   width: min(760px, 96vw);
   max-height: 92vh;
   overflow-y: auto;

@@ -19,8 +19,9 @@ It talks to any **OpenAI-compatible** server, so one setup covers:
 ### kie.ai
 
 kie.ai's chat models don't share one format, so they have a type of their own. Pick
-**kie.ai (cloud: Claude, GPT, Gemini…)**, leave the API key blank to use `KIE_API_KEY`
-from `.env` (or enter another key), **Test & list models**, and choose a model. One
+**＋ Add… → kie.ai (cloud: Claude, GPT, Gemini…)**, **Test & list models**, and choose a
+model. It uses the kie.ai key from **⚙ Settings → Online providers** — the same one the
+cloud image/video models use, entered once. One
 server covers every model: GENie works out where to send each request from the model
 name.
 

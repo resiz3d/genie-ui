@@ -262,6 +262,11 @@
 
         <div class="submit-row">
           <button type="submit" id="submitBtn">Generate</button>
+          <!-- Which ComfyUI server runs the job: shown once ⚙ Settings lists more than one. -->
+          <label class="queue-count hidden" id="comfyInstanceField" title="Which ComfyUI server runs this — add or change them in ⚙ Settings → Image / Video">
+            🖥
+            <select id="comfyInstance" class="comfy-instance-pick" aria-label="ComfyUI server"></select>
+          </label>
           <label class="queue-count" id="queueCountField" title="Queue this many generations (kie.ai: reference media is uploaded once for the whole batch)">
             ×<input id="queueCount" type="number" min="1" max="20" step="1" value="1" />
           </label>
@@ -638,7 +643,8 @@
 
     <script src="settings.js"></script>
     <script src="app.js"></script>
-    <script src="llm.js?v=13"></script>
+    <script src="settings-ui.js?v=1"></script>
+    <script src="llm.js?v=14"></script>
     <script src="video-fx.js?v=1"></script>
     <script src="video-editor.js?v=7"></script>
     <script src="image-editor.js?v=7"></script>
