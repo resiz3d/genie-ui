@@ -69,8 +69,7 @@ the form adapts to it.
 ### Prompts
 
 - **Saved Prompts** — save a prompt with its reference media, per project or 🌐 global,
-  and generate straight from the card. **Prompt groups** string saved prompts into a
-  sequence for longer videos.
+  and generate straight from the card.
 - **Structured prompt formats** — besides plain text, a MiniMax H3 editor with
   subjects, shots (each with a length, re-orderable), retention and sound, for
   reference-to-video and text-to-video.

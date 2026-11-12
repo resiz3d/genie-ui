@@ -26,6 +26,10 @@ heading for that version with the date, commit, then tag the commit `vX.Y.Z`.
   applied, not applied, discarded, stopped or failed. Open one for the before → after
   diff, to ask the same thing again, or to put either text back in the prompt box
   (with ↶ Undo). The newest 200 are kept, in `projects/<project>/revisions.json`.
+- **💬 Chat.** *💬 Chat* in the page header opens a conversation with the LLM chosen in
+  ⚙ Settings → LLM. Attach pictures (up to 10 a message), a video (sent as a handful of
+  its frames) or a text file; the reply appears as it's written. Chats are kept on the
+  server, so one started on the desktop carries on from the phone.
 
 - **One ⚙ Settings window, and no `.env` editing to get started.** *⚙ Settings* in the
   page header opens a single window with a tab per section: **Image / Video** (your
