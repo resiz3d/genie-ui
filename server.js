@@ -6474,18 +6474,31 @@ const MIME_BY_EXT = {
 };
 
 // --- copy a generation's saved output into the gallery (same project) -----
+// Body `{ index }` picks one of a multi-output card's files (default the first). An
+// output already copied in (and still there) is returned as it is, not copied again.
 app.post("/api/history/:id/to-gallery", (req, res) => {
   const entries = readJson(HISTORY_FILE);
   const entry = entries.find((e) => e.id === req.params.id);
   if (!entry)
     return res.status(404).json({ code: 404, msg: "history entry not found" });
-  if (!entry.localVideo?.startsWith("/output/")) {
+  const index = Number.isInteger(req.body?.index) ? req.body.index : 0;
+  const outUrl =
+    entry.outputs?.length ? entry.outputs[index]?.localVideo
+    : index === 0 ? entry.localVideo
+    : null;
+  if (!outUrl?.startsWith("/output/")) {
     return res
       .status(400)
       .json({ code: 400, msg: "no saved output file for this entry" });
   }
+  const already = readJson(IMAGES_FILE).find(
+    (i) =>
+      i.fromOutput === outUrl &&
+      fs.existsSync(path.join(INPUT_DIR, i.storedName || "")),
+  );
+  if (already) return res.json({ code: 200, msg: "already in gallery", image: already });
 
-  const rel = entry.localVideo.slice("/output/".length); // <slug>/<file>
+  const rel = outUrl.slice("/output/".length); // <slug>/<file>
   const src = path.join(OUTPUT_DIR, rel);
   if (!fs.existsSync(src)) {
     return res
@@ -6516,9 +6529,10 @@ app.post("/api/history/:id/to-gallery", (req, res) => {
     kind,
     projectId: proj.id,
     storedName,
-    name: `generated-${entry.id}.${ext}`,
+    name: `generated-${entry.id}${index > 0 ? `-${index + 1}` : ""}.${ext}`,
     mime,
     localUrl: `/input/${storedName}`,
+    fromOutput: outUrl, // the History output it was copied from (see `already`)
     createdAt: new Date().toISOString(),
   };
   const images = readJson(IMAGES_FILE);

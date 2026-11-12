@@ -2083,6 +2083,61 @@ function makeEditVideoControl(videos, { name, projectId, kind, id }, { iconOnly 
   return sel;
 }
 
+// "＋ Video ref": puts one of a History card's videos into the form's reference-video
+// field. The field takes gallery files, so the video is copied into the card's
+// project gallery first (once — a second click reuses that copy). `videos` lists the
+// card's videos as { url, index }; with several, the control is a menu.
+function makeVideoRefControl(entry, videos) {
+  if (!videos.length) return null;
+  const label = '<span class="btn-ico">＋</span> Video ref';
+  const title = "Add this video to the form's reference-video field (it's saved to the gallery too)";
+  const add = async ({ index }, el) => {
+    el.disabled = true;
+    try {
+      const res = await fetch(`/api/history/${entry.id}/to-gallery`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ index }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.image) throw new Error(data.msg || "Couldn't add it to the gallery");
+      await loadGallery();
+      const why = addVideoToRefField(data.image);
+      if (why) throw new Error(why);
+      if (el.tagName === "BUTTON") {
+        el.innerHTML = "Added!";
+        setTimeout(() => (el.innerHTML = label), 1200);
+      }
+    } catch (err) {
+      alert(err.message || String(err));
+    } finally {
+      el.disabled = false;
+    }
+  };
+  if (videos.length === 1) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "btn-secondary";
+    btn.innerHTML = label;
+    btn.title = title;
+    btn.addEventListener("click", () => add(videos[0], btn));
+    return btn;
+  }
+  const sel = document.createElement("select");
+  sel.className = "hist-project";
+  sel.title = title;
+  const ph = new Option("＋ Video ref…", "", true, true);
+  ph.disabled = true;
+  sel.appendChild(ph);
+  videos.forEach((vid, i) => sel.appendChild(new Option(`Video ${vid.index + 1}`, String(i))));
+  sel.addEventListener("change", () => {
+    const vid = videos[Number(sel.value)];
+    sel.value = "";
+    if (vid) add(vid, sel);
+  });
+  return sel;
+}
+
 // "✂ Crop": opens the image editor on one image of a History card or on a Gallery
 // image; saving there adds the crop to the card (or replaces its image). `images` lists
 // the card's images as { url, index }; with several, the control is a menu.
@@ -12955,6 +13010,30 @@ function addRefToPictureField(r) {
   return true;
 }
 
+// Add a gallery video to the current form's reference-video field: the workflow's
+// video field in ComfyUI mode, else the kie.ai Reference videos list when the model
+// takes reference videos. Returns "" on success, or why it couldn't.
+function addVideoToRefField(g) {
+  const item = { id: g.id, localUrl: g.localUrl, name: g.name };
+  if (isComfy()) {
+    const f = comfyFields.find(
+      (x) => x.mediaKind === "video" && typeof x.addMedia === "function",
+    );
+    if (!f) return "This workflow has no reference-video field.";
+    if (f.peekMedia().some((m) => m.id === g.id)) return "";
+    return f.addMedia({ id: g.id, url: g.localUrl, name: g.name }) ?
+        ""
+      : `The reference-video field is full (${f.capacity}).`;
+  }
+  if (!usesRefMedia())
+    return `${videoModelLabel(modelSelect.value)} doesn't take reference videos — pick a reference-to-video model first.`;
+  const ready = () => lists.video.items.filter((i) => i.status === "ready");
+  if (ready().some((i) => i.localId === g.id)) return "";
+  const before = ready().length;
+  lists.video.addFromGallery(item);
+  return ready().length > before ? "" : "The Reference videos list is full.";
+}
+
 // ✨ Revise with AI's reference images (gallery entries; the LLM saw them as <Picture 1>,
 // <Picture 2> … in that order) → the form's picture field: each one not already there
 // is added, and the revised text's <Picture k> is renumbered to where image k sits in
@@ -13612,6 +13691,9 @@ function renderHistory(entries) {
         id: entry.id,
       });
       if (edit) main.appendChild(edit);
+      // …and go into the form's reference-video field (copied to the gallery first)
+      const toRef = makeVideoRefControl(entry, editVideos);
+      if (toRef) main.appendChild(toRef);
       // its saved images open in the 🖼 image editor, to crop
       const cropImages = entryOutputs(entry)
         .map((o, index) => ({ url: o.localVideo, index }))
