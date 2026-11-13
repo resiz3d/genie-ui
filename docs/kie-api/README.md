@@ -11,6 +11,7 @@ re-check the web. One file per model family:
 - [kling-4-0.md](kling-4-0.md) — `kling-4.0/reference-to-video`,
   `kling-4.0/keyframe-to-video`
 - [wan-3-0.md](wan-3-0.md) — `wan/3-0-video`, `wan/3-0-video-prime`
+- [video-upscale.md](video-upscale.md) — `video/upscale` (Video Upscaler)
 
 Seedream (image) models are used by the tool too but aren't documented here yet.
 

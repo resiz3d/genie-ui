@@ -1,4 +1,6 @@
 import express from "express";
+import { WebSocket } from "ws";
+import { blankPersonalContent } from "./comfy-blank.js";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -742,6 +744,7 @@ const ALLOWED_MODELS = new Set([
   "kling-4.0/keyframe-to-video",
   "wan/3-0-video",
   "wan/3-0-video-prime",
+  "video/upscale", // kie.ai Video Upscaler (History card "⇧ Upscale")
 ]);
 
 app.post("/api/create", requireKieKey, (req, res) => {
@@ -887,12 +890,17 @@ function controlModel(workflow, text) {
   }
   // Node types GENie doesn't customize — they run exactly as saved. Value-provider
   // primitives are plumbing, not "run as-is" content, so they're left off the list.
+  // `unhandledNodes` lists them one by one, so each can get a Bypass box in the form
+  // (two samplers wired side by side, one switched off).
   const unknownTypes = [];
+  const unhandledNodes = [];
   const seenTypes = new Set();
   for (const [id, node] of Object.entries(workflow)) {
     const cls = node?.class_type;
-    if (!cls || handledNodeIds.has(String(id)) || seenTypes.has(cls)) continue;
+    if (!cls || handledNodeIds.has(String(id))) continue;
     if (nodeTypes.get(cls)?.value_source) continue;
+    unhandledNodes.push({ id: String(id), classType: cls, title: node._meta?.title || cls });
+    if (seenTypes.has(cls)) continue;
     seenTypes.add(cls);
     unknownTypes.push(cls);
   }
@@ -928,6 +936,7 @@ function controlModel(workflow, text) {
     tokens: recTokens,
     nodeMap,
     unknownTypes,
+    unhandledNodes,
     references,
     bypassable: bypassable || [],
   };
@@ -1234,6 +1243,12 @@ app.post("/api/comfy/import-workflow", async (req, res) => {
       warnings: result.warnings,
     });
 
+  // `blank`: start the copy clean — no media file names, prompt text or LoRA picks
+  // from the last run in ComfyUI (see comfy-blank.js).
+  let cleared = null;
+  if (req.body?.blank === true)
+    cleared = blankPersonalContent(result.prompt, loadNodeTypes(NODE_TYPES_DIR));
+
   try {
     const dir = path.dirname(target.abs);
     fs.mkdirSync(dir, { recursive: true });
@@ -1254,6 +1269,7 @@ app.post("/api/comfy/import-workflow", async (req, res) => {
       name: target.file.replace(/\.json$/i, ""),
       nodes: Object.keys(result.prompt).length,
       warnings: result.warnings,
+      cleared,
     },
   });
 });
@@ -1556,7 +1572,7 @@ app.get("/api/comfy/workflow-meta", async (req, res) => {
   const wfPath = workflowPath(req.query.file);
   if (!wfPath || !fs.existsSync(wfPath))
     return res.status(400).json({ code: 400, msg: "Unknown workflow file" });
-  let workflow, tokens, nodeMap, unknownTypes, references, libraryBypassable;
+  let workflow, tokens, nodeMap, unknownTypes, unhandledNodes, references, libraryBypassable;
   try {
     const text = fs.readFileSync(wfPath, "utf8");
     workflow = JSON.parse(text);
@@ -1564,6 +1580,7 @@ app.get("/api/comfy/workflow-meta", async (req, res) => {
       tokens,
       nodeMap,
       unknownTypes,
+      unhandledNodes,
       references,
       bypassable: libraryBypassable,
     } = controlModel(workflow, text));
@@ -1616,8 +1633,10 @@ app.get("/api/comfy/workflow-meta", async (req, res) => {
         workflowMedia: workflowMedia(workflow, references),
         mediaOptions: { image: [], audio: [], video: [] },
         bypassable,
+        passable: passableIds(workflow, bypassable),
         refLabelScheme: scheme,
         unknownTypes: unknownTypes || [],
+        unhandledNodes: unhandledNodes || [],
         references: references || [],
       },
     });
@@ -1647,8 +1666,10 @@ app.get("/api/comfy/workflow-meta", async (req, res) => {
       workflowMedia: workflowMedia(workflow, references),
       mediaOptions: mediaOptionsFrom(objectInfo),
       bypassable,
+      passable: passableIds(workflow, bypassable),
       refLabelScheme: scheme,
       unknownTypes: unknownTypes || [],
+      unhandledNodes: unhandledNodes || [],
       references: references || [],
     },
   });
@@ -2420,7 +2441,7 @@ function injectLoras(workflow, loras) {
 // passthrough, so it can be disabled for users who don't have that custom node
 // installed. The passthrough source is the node's `model` link input (or its sole
 // link input); consumers of the node's output are rewired to that source.
-function bypassNode(workflow, id) {
+function bypassNode(workflow, id, objectInfo = null) {
   const node = workflow[id];
   if (!node) return;
   const linkInputs = Object.entries(node.inputs || {}).filter(
@@ -2429,9 +2450,12 @@ function bypassNode(workflow, id) {
   // Which input carries the signal that should survive the node's removal. Inferring it
   // works for single-in/single-out patches (a `model` input, or the only link input), but
   // a node with several link inputs has to name it: `_meta.bypass_passthrough: "positive"`.
+  // Without a name, /object_info's types settle it per output, as ComfyUI's own bypass
+  // does (a Bypass box on any section — see passthroughPlan).
   const libEntry = loadNodeTypes(NODE_TYPES_DIR).get(node.class_type);
   applyBypassSets(workflow, id, libEntry?.bypass_sets);
   const named = node._meta?.bypass_passthrough || libEntry?.bypass_passthrough;
+  const plan = named ? null : passthroughPlan(workflow, id, objectInfo);
   const src =
     (named && Array.isArray(node.inputs?.[named]) && node.inputs[named]) ||
     (Array.isArray(node.inputs?.model) && node.inputs.model) ||
@@ -2439,12 +2463,57 @@ function bypassNode(workflow, id) {
   for (const n of Object.values(workflow)) {
     for (const [k, v] of Object.entries(n.inputs || {})) {
       if (Array.isArray(v) && v.length === 2 && String(v[0]) === String(id)) {
-        if (src) n.inputs[k] = src;
+        // Known types decide per output (unmatched → disconnected); else the guess.
+        const via = plan ? plan.get(Number(v[1])) : src;
+        if (via) n.inputs[k] = via;
         else delete n.inputs[k];
       }
     }
   }
   delete workflow[id];
+}
+
+// Every node's section gets a "Bypass" box in the form, except the patch nodes that
+// already have their own enable/disable toggle.
+function passableIds(workflow, bypassable) {
+  const own = new Set((bypassable || []).map((b) => String(b.id)));
+  return Object.keys(workflow || {}).filter((id) => !own.has(id));
+}
+
+// How a bypassed node is wired around, by ComfyUI's bypass rule: each of its outputs
+// the workflow uses is fed instead from one of the node's own link inputs of the same
+// type ("*" matches anything). Returns Map(output slot → that input's link); an output
+// with no such input is left out, so whatever it fed is disconnected (a bypassed
+// loader or sampler has nothing to pass on — ComfyUI then reports what's missing).
+// null when the node's types aren't known (ComfyUI offline): the caller guesses.
+function passthroughPlan(workflow, id, objectInfo) {
+  const node = workflow?.[id];
+  const info = objectInfo?.[node?.class_type];
+  if (!node || !info) return null;
+  const outTypes = Array.isArray(info.output) ? info.output : [];
+  const declared = { ...(info.input?.required || {}), ...(info.input?.optional || {}) };
+  const order = [
+    ...(info.input_order?.required || []),
+    ...(info.input_order?.optional || []),
+    ...Object.keys(declared),
+  ];
+  const links = [...new Set(order)]
+    .filter((k) => Array.isArray(node.inputs?.[k]) && node.inputs[k].length === 2)
+    .map((k) => ({ type: declared[k]?.[0], link: node.inputs[k] }))
+    .filter((l) => typeof l.type === "string");
+  const used = new Set();
+  for (const n of Object.values(workflow))
+    for (const v of Object.values(n?.inputs || {}))
+      if (Array.isArray(v) && v.length === 2 && String(v[0]) === String(id))
+        used.add(Number(v[1]));
+  const plan = new Map();
+  for (const slot of used) {
+    const t = outTypes[slot];
+    if (typeof t !== "string") continue;
+    const match = links.find((l) => l.type === t || l.type === "*" || t === "*");
+    if (match) plan.set(slot, match.link);
+  }
+  return plan;
 }
 
 // What a node's removal changes further down the graph: `bypass_sets` in its node_types
@@ -2886,6 +2955,31 @@ function capturePreview(data, conn) {
   broadcastPreview(pid, previewSeq);
 }
 
+// KJNodes' Model Preview Override (ModelPreviewOverrideKJ) draws its own preview —
+// optionally decoded with a tiny VAE, at a higher resolution, and with preview_frames
+// > 1 as a whole looping clip (MP4 when NVENC is there, else animated WebP) — and, with
+// suppress_default_preview, silences the stock frames while its model samples. It sends
+// each one as a JSON `kj_preview_override` event with the image base64-encoded. Like
+// the binary frames it names no prompt, and it goes to the prompt's client_id — none
+// for an ordinary GENie run, so it's broadcast and reaches this socket. Each replaces
+// the prompt's still (a clip is one still to us); a later stock or VHS frame (a second
+// sampler without the override) takes over again.
+const KJ_PREVIEW_MIME = new Set(["image/jpeg", "image/png", "image/webp", "video/mp4"]);
+const KJ_PREVIEW_MAX_B64 = 48 * 1024 * 1024; // ~36 MB decoded — a sanity ceiling
+function captureKjPreview(data, conn) {
+  const pid = conn.currentPrompt;
+  const b64 = data?.image;
+  if (!pid || typeof b64 !== "string" || !b64 || b64.length > KJ_PREVIEW_MAX_B64)
+    return;
+  // The step-0 noise frame names no mime; it's always a JPEG.
+  const mime = KJ_PREVIEW_MIME.has(data.mime) ? data.mime : "image/jpeg";
+  const buf = Buffer.from(b64, "base64");
+  if (!buf.length) return;
+  comfyPreview.set(pid, { buf, mime, seq: ++previewSeq, updatedAt: Date.now() });
+  if (comfyPreview.size > PREVIEW_MAX_PROMPTS) pruneComfyPreview(true);
+  broadcastPreview(pid, previewSeq);
+}
+
 // Frames go stale far faster than progress, hence the shorter TTL. `force` also
 // evicts the oldest prompt so a burst of abandoned runs can't pile up.
 function pruneComfyPreview(force) {
@@ -2914,13 +3008,21 @@ function ensureComfyWs(inst = comfyInstance()) {
   conn.connecting = true;
   let ws;
   try {
-    // Node's WebSocket takes request headers as an option (browsers' can't). A login
+    // The `ws` package, not Node's built-in WebSocket: that one always negotiates
+    // permessage-deflate and drops the connection on any message over 4 MB
+    // decompressed — and Model Preview Override sends each preview clip as one
+    // base64 JSON message of several MB. Without compression `maxPayload` is the only
+    // cap. Request headers are an option here (browsers can't send them); a login
     // node such as ComfyUI-Login also reads the token from the address, for sockets.
     const auth = comfyAuthHeaders(inst);
     const token = inst.auth?.type === "bearer" ? `&token=${encodeURIComponent(inst.auth.secret)}` : "";
     ws = new WebSocket(
       url.replace(/^http/i, "ws") + `/ws?clientId=${COMFY_CLIENT_ID}${token}`,
-      auth.Authorization ? { headers: auth } : undefined,
+      {
+        perMessageDeflate: false,
+        maxPayload: 256 * 1024 * 1024,
+        ...(auth.Authorization ? { headers: auth } : {}),
+      },
     );
     // Preview frames then arrive as ArrayBuffers, in order. The default ("blob")
     // would force an await per frame and let two frames land out of order.
@@ -2973,6 +3075,8 @@ function ensureComfyWs(inst = comfyInstance()) {
     } else if (type === "VHS_latentpreview") {
       // Names no prompt, like the frames that follow it.
       if (conn.currentPrompt) beginPreviewAnim(conn.currentPrompt, data);
+    } else if (type === "kj_preview_override") {
+      captureKjPreview(data, conn);
     } else if (type === "progress") {
       const pid = data?.prompt_id || conn.currentPrompt;
       if (pid) conn.currentPrompt = pid; // the preview frame that follows belongs to this prompt
@@ -3234,8 +3338,12 @@ app.post("/api/comfy/generate", async (req, res) => {
     for (const [slot, id] of Object.entries(injected)) tokenNodes.set(slot, { id });
     tailResult = await applyTails(workflow, tokenNodes, tails); // trim references to their last N seconds
     const bypassIds = (Array.isArray(bypass) ? bypass : []).map(String);
+    // Types for the per-output rewiring of a bypassed node (cached; none when offline,
+    // and the old single-passthrough guess is used).
+    const bypassInfo =
+      bypassIds.length ? await getObjectInfo(false, COMFYUI_URL).catch(() => null) : null;
     for (const id of [...bypassIds, ...bypassDependents(workflow, bypassIds)])
-      bypassNode(workflow, id); // disabled patch nodes, and the nodes that go with them
+      bypassNode(workflow, id, bypassInfo); // disabled patch nodes, and the nodes that go with them
     applyWorkflowMedia(workflow, mediaState); // the workflow's own media loaders: re-pointed, or removed when off
     applyWorkflowLoras(workflow, loras); // the workflow's own LoRA nodes: edited, or removed when off
     workflow = injectLoras(
@@ -3921,11 +4029,16 @@ const previewClients = new Set();
 const PREVIEW_CLIENT_MAX = 20; // a runaway tab/proxy can't grow this without bound
 
 // What a tab is told about one frame. An animated run's ping also carries the frame's
-// index and the clip's shape, so a tab that joins mid-run needs nothing else.
+// index and the clip's shape, so a tab that joins mid-run needs nothing else. A still
+// that is really a clip (Model Preview Override's MP4) says so, for a <video>.
 function previewPing(promptId, seq, index) {
-  const anim = index == null ? null : comfyPreview.get(promptId)?.anim;
+  const entry = comfyPreview.get(promptId);
+  const anim = index == null ? null : entry?.anim;
+  const video = index == null && /^video\//.test(entry?.mime || "");
   return `data: ${JSON.stringify(
-    anim ? { promptId, seq, index, length: anim.length } : { promptId, seq },
+    anim ? { promptId, seq, index, length: anim.length }
+    : video ? { promptId, seq, video: true }
+    : { promptId, seq },
   )}\n\n`;
 }
 
@@ -4145,6 +4258,7 @@ function modelLabel(model) {
     return `Kling 4.0 (${m.slice("kling-4.0/".length)})`;
   if (m === "wan/3-0-video") return "Wan 3.0";
   if (m === "wan/3-0-video-prime") return "Wan 3.0 Prime";
+  if (m === "video/upscale") return "Video Upscaler";
   const family = m.includes("5-pro") ? "Seedream 5.0 Pro" : "Seedream 5.0 Lite";
   if (m.includes("text-to-image")) return `${family} (text-to-image)`;
   if (m.includes("image-to-image")) return `${family} (image-to-image)`;
@@ -4823,6 +4937,75 @@ app.post("/api/reupload", requireKieKey, async (req, res) => {
   } catch (err) {
     console.error("Re-upload failed:", err);
     res.status(502).json({ code: 502, msg: err.message?.startsWith("Trim") || err.message?.startsWith("ffmpeg") ? err.message : "Failed to re-host file" });
+  } finally {
+    if (trimmed) fs.rmSync(trimmed, { force: true });
+  }
+});
+
+// --- host a History video for the kie.ai Video Upscaler -------------------
+// Checks kie.ai's input limits first (MP4/MOV/MKV, ≤50 MB, ≤60 s) — it would
+// otherwise accept the task and fail it later. Returns the hosted URL and the
+// clip's length (the upscaler bills per second of input).
+const UPSCALE_MAX_BYTES = 50 * 1024 * 1024;
+const UPSCALE_MAX_SEC = 60;
+app.post("/api/upscale/host", requireKieKey, async (req, res) => {
+  // The video is a History output (`outputUrl`) or a Gallery file (`id`, optionally
+  // trimmed to its last `tailSec` seconds like a reference video).
+  const { outputUrl, id } = req.body || {};
+  let file = null;
+  let name = null;
+  if (outputUrl) file = outputFileFromUrl(outputUrl);
+  else if (id) {
+    const g = readJson(IMAGES_FILE).find((i) => i.id === id);
+    if (g) {
+      const f = path.join(INPUT_DIR, g.storedName);
+      if (fs.existsSync(f)) {
+        file = f;
+        name = g.name;
+      }
+    }
+  }
+  if (!file)
+    return res.status(404).json({ code: 404, msg: "That video file is no longer there" });
+  let trimmed = null;
+  try {
+    const tailSec = id ? Number(req.body?.tailSec) || 0 : 0;
+    if (tailSec > 0) {
+      const probe = await probeVideo(file);
+      if (!probe || tailSec < probe.duration - 0.05) {
+        trimmed = await trimVideoTail(file, tailSec, probe);
+        file = trimmed;
+      }
+    }
+    const ext = path.extname(file).slice(1).toLowerCase();
+    if (!["mp4", "mov", "mkv"].includes(ext))
+      return res.status(400).json({ code: 400, msg: `The upscaler takes MP4, MOV or MKV — this is .${ext}.` });
+    const size = fs.statSync(file).size;
+    if (size > UPSCALE_MAX_BYTES)
+      return res.status(400).json({
+        code: 400,
+        msg: `This video is ${(size / 1048576).toFixed(1)} MB — the upscaler takes at most 50 MB.`,
+      });
+    const probe = await probeVideo(file);
+    const duration = probe?.duration || null;
+    if (duration && duration > UPSCALE_MAX_SEC + 0.05)
+      return res.status(400).json({
+        code: 400,
+        msg: `This video is ${duration.toFixed(1)} s long — the upscaler takes at most 60 s.`,
+      });
+    const mime = { mp4: "video/mp4", mov: "video/quicktime", mkv: "video/x-matroska" }[ext];
+    const upName = trimmed ?
+        `${String(name || "video").replace(/\.[^.]+$/, "")}-last${tailSec}s.mp4`
+      : name || path.basename(file);
+    const up = await uploadToKie(fs.readFileSync(file), mime, upName);
+    if (!up.downloadUrl) throw new Error(up.body?.msg || "upload failed");
+    res.json({ code: 200, msg: "ok", hostedUrl: up.downloadUrl, duration });
+  } catch (err) {
+    console.error("Upscale upload failed:", err);
+    res.status(502).json({
+      code: 502,
+      msg: /^(Trim|ffmpeg)/.test(err.message || "") ? err.message : "Failed to upload the video to kie.ai",
+    });
   } finally {
     if (trimmed) fs.rmSync(trimmed, { force: true });
   }

@@ -73,6 +73,7 @@
               <option value="kling-4.0/keyframe-to-video">Kling 4.0 (keyframe-to-video)</option>
               <option value="wan/3-0-video">Wan 3.0</option>
               <option value="wan/3-0-video-prime">Wan 3.0 Prime (faster)</option>
+              <option value="video/upscale">Video Upscaler (1080p / 2K / 4K)</option>
             </optgroup>
           </select>
         </label>
@@ -159,7 +160,7 @@
 
         <div class="field" id="videoField">
           <div class="field-head">
-            <span>Reference videos <span class="hint" id="videoHint">(up to 3, total ≤ 15s, ≤ 50MB each)</span></span>
+            <span><span id="videoLabel">Reference videos</span> <span class="hint" id="videoHint">(up to 3, total ≤ 15s, ≤ 50MB each)</span></span>
             <button type="button" id="clear-video" class="link-btn hidden">Clear all</button>
           </div>
           <div id="dz-video" class="dropzone">
@@ -535,6 +536,10 @@
         <div class="lora-browser-bar">
           <input type="search" id="comfyImportSearch" placeholder="Filter by name…" autocomplete="off" />
         </div>
+        <label class="inline comfy-import-blank" title="Empties the copy's media file names, its prompt text and its LoRA picks, so it starts clean. The workflow in ComfyUI is never changed.">
+          <input type="checkbox" id="comfyImportBlank" checked />
+          Clear media, prompt and LoRAs in the copy
+        </label>
         <div class="lora-browser-list" id="comfyImportList"></div>
         <div class="modal-actions">
           <button type="button" id="comfyImportClose" class="btn-secondary">Done</button>

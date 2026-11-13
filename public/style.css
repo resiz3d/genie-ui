@@ -1851,6 +1851,42 @@ img.zoomable {
   float: right;
   font-weight: normal;
 }
+/* Floated after Reset, so it sits to Reset's left. */
+.comfy-node-group > summary .comfy-group-bypass {
+  float: right;
+  margin-right: 0.9rem;
+  font-weight: normal;
+  font-size: 0.9rem;
+  display: inline-flex;
+  flex-direction: row; /* GENie's label style stacks its content */
+  white-space: nowrap;
+  margin-bottom: 0;
+  align-items: center;
+  gap: 0.3rem;
+  cursor: pointer;
+}
+.comfy-unknown-list .comfy-group-bypass {
+  margin-left: 0.75rem;
+  font-size: 0.85rem;
+  display: inline-flex;
+  flex-direction: row;
+  white-space: nowrap;
+  margin-bottom: 0;
+  align-items: center;
+  gap: 0.3rem;
+  cursor: pointer;
+}
+.comfy-unknown-list li.comfy-bypassed > span {
+  text-decoration: line-through;
+  opacity: 0.6;
+}
+/* A bypassed node's settings don't apply to the run: dimmed, still editable. */
+.comfy-node-group.comfy-bypassed > .comfy-node-group-body {
+  opacity: 0.45;
+}
+.comfy-node-group.comfy-bypassed > summary {
+  color: var(--muted, inherit);
+}
 .comfy-node-group[open] > summary {
   border-bottom: 1px solid var(--border);
 }
@@ -6300,6 +6336,10 @@ textarea.hidden + .llm-qrev {
 }
 .comfy-import-note {
   font-size: 0.85rem;
+}
+.comfy-import-blank {
+  margin: 0.5rem 0;
+  font-size: 0.9rem;
 }
 .comfy-import-empty {
   margin: 0.5rem 0;

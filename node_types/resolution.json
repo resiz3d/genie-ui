@@ -1,5 +1,5 @@
 {
-  "_comment": "ResolutionSelector (a common custom node) sets output size from an aspect-ratio preset + a megapixel budget, emitting width/height. `multiple` is a rounding constraint left baked. aspect_ratio populates from /object_info when the node is installed; otherwise it stays an editable text field.",
+  "_comment": "ImageScaleToTotalPixels (core) resizes frames to a megapixel budget keeping their aspect, rounded to resolution_steps; MiniMax H3 Video Upscale uses it to pick the size the source video is encoded at. ResolutionSelector (a common custom node) sets output size from an aspect-ratio preset + a megapixel budget, emitting width/height. `multiple` is the rounding step for width/height (e.g. 16 allows 1280×720; some models need 32). aspect_ratio populates from /object_info when the node is installed; otherwise it stays an editable text field.",
   "nodes": {
     "ResolutionSelector": {
       "display_name": "Resolution Selector",
@@ -10,7 +10,24 @@
             "group": "Resolution",
             "expose": {
               "aspect_ratio": { "name": "aspect_ratio", "label": "Aspect ratio", "control": "combo",  "width": "1/2", "order": 20 },
-              "megapixels":   { "name": "megapixels",   "label": "Megapixels",   "control": "number", "width": "1/2", "order": 21 }
+              "megapixels":   { "name": "megapixels",   "label": "Megapixels",   "control": "number", "width": "1/2", "order": 21 },
+              "multiple":     { "name": "multiple",     "label": "Round to multiple of", "control": "number", "width": "1/2", "order": 22 }
+            }
+          }
+        ]
+      }
+    },
+    "ImageScaleToTotalPixels": {
+      "display_name": "Scale Image to Total Pixels",
+      "recognize": {
+        "variants": [
+          {
+            "match": [{ "when": "any" }],
+            "group": "Encode Size",
+            "expose": {
+              "megapixels":       { "name": "scale_megapixels",       "label": "Megapixels",          "control": "number", "width": "1/3", "order": 21.5 },
+              "resolution_steps": { "name": "scale_resolution_steps", "label": "Round to multiple of", "control": "number", "width": "1/3", "order": 21.6 },
+              "upscale_method":   { "name": "scale_method",           "label": "Method",              "control": "combo",  "width": "1/3", "order": 21.7 }
             }
           }
         ]

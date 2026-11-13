@@ -50,6 +50,12 @@ the editor's graph format to API format, and saves the result as
 `workflows/comfyui/<name>.json` — it then appears in the Model dropdown as
 `comfyui/<name>` and behaves like any other workflow.
 
+**Clear media, prompt and LoRAs in the copy** (a checkbox in the import window, on by
+default and remembered) empties what your last run in ComfyUI left baked in. It clears
+the file names on image/video/audio loaders, the text of the Prompt box (a negative
+prompt stays), and each LoRA loader's file. The LoRA nodes stay, so pick a file in the
+LoRA section or uncheck the row before running. Untick it to copy everything as saved.
+
 **It is a one-way copy.**
 
 - GENie never writes to ComfyUI. Your saved workflow is read, not changed.

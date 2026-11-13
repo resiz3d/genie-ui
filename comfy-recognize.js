@@ -446,6 +446,8 @@ export function recognizeWorkflow(workflow, nodeTypes) {
     const node = workflow[nodeId];
     const vs = nodeTypes.get(node?.class_type)?.value_source;
     if (!vs?.input || handledNodeIds.has(String(nodeId))) continue;
+    // Wired to nothing (a spare value parked in the export) — editing it does nothing.
+    if (!(fwd.get(String(nodeId)) || []).length) continue;
     const val = node.inputs?.[vs.input];
     if (val === undefined || asLink(val) || (val && typeof val === "object")) continue; // not an editable literal
     const label = node._meta?.title || node.class_type;
@@ -480,7 +482,7 @@ export function recognizeWorkflow(workflow, nodeTypes) {
     if (!entry?.bypassable) continue;
     bypassable.push({
       id: String(nodeId),
-      title: node._meta?.title || entry.display_name || node.class_type,
+      title: entry.bypass_label || node._meta?.title || entry.display_name || node.class_type,
       off: entry.bypassed_by_default === true,
     });
     handledNodeIds.add(String(nodeId));

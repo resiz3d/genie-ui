@@ -2237,6 +2237,35 @@ function makeCardRefControl(items, { label, menuLabel, noun, title, add: addOne 
   return sel;
 }
 
+// "⇧ Upscale": a menu of the kie.ai Video Upscaler's resolution tiers for a History
+// card's videos (Video N → tier when the card has several).
+function makeUpscaleControl(entry, videos) {
+  if (!videos.length) return null;
+  const sel = document.createElement("select");
+  sel.className = "hist-project";
+  sel.title = "Upscale with kie.ai's Video Upscaler (MP4/MOV/MKV, up to 50 MB and 60 s)";
+  const ph = new Option("⇧ Upscale…", "", true, true);
+  ph.disabled = true;
+  sel.appendChild(ph);
+  videos.forEach((vid, i) =>
+    UPSCALE_TIERS.forEach((t) =>
+      sel.appendChild(
+        new Option(
+          `${videos.length > 1 ? `Video ${vid.index + 1} → ` : ""}${t.label} (${t.perSec} cr/s)`,
+          `${i}|${t.value}`,
+        ),
+      ),
+    ),
+  );
+  sel.addEventListener("change", () => {
+    const [i, tier] = sel.value.split("|");
+    sel.value = "";
+    const vid = videos[Number(i)];
+    if (vid) upscaleVideo(entry, vid, tier);
+  });
+  return sel;
+}
+
 // "✂ Crop": opens the image editor on one image of a History card or on a Gallery
 // image; saving there adds the crop to the card (or replaces its image). `images` lists
 // the card's images as { url, index }; with several, the control is a menu.
@@ -2646,6 +2675,20 @@ function ratePerSec(model, resolution, audioOn) {
 function updateEstimate() {
   const model = modelSelect.value;
 
+  // Video Upscaler: a fixed rate per second of the input video.
+  if (isUpscale()) {
+    const t =
+      UPSCALE_TIERS.find((x) => x.value === resolutionSelect.value) || UPSCALE_TIERS[1];
+    const item = lists.video.items.find((i) => i.status === "ready");
+    const secs = item ? sentSeconds(item) : null;
+    estimateEl.innerHTML =
+      secs ?
+        `Est. cost: ~<b>${Math.round(secs * t.perSec * 10) / 10}</b> credits (${secs.toFixed(1)} s × ${t.perSec}/s)`
+      : `Cost: ${t.perSec} credits per second of video`;
+    estimateEl.title = "kie.ai Video Upscaler pricing, billed on the exact clip length";
+    return;
+  }
+
   // Image models: flat per-generation cost, learned per model + quality tier.
   if (isSeedream()) {
     const quality = qualitySelect.value;
@@ -2931,6 +2974,8 @@ const isKlingKey = () => modelSelect.value === "kling-4.0/keyframe-to-video";
 // Wan 3.0 (standard and the faster Prime) — one model id for every mode, Seedance-style
 // field names, and the same references-or-frames choice as Seedance 2.5.
 const isWan = () => modelSelect.value.startsWith("wan/3-0-video");
+// kie.ai Video Upscaler — the form shrinks to one video plus a resolution tier.
+const isUpscale = () => modelSelect.value === UPSCALE_MODEL;
 // Local ComfyUI workflows are selected as `comfy:<file.json>`.
 const isComfy = () => modelSelect.value.startsWith("comfy:");
 const comfyFile = () => modelSelect.value.slice("comfy:".length);
@@ -3088,6 +3133,14 @@ function refFileProblems() {
 const seedanceDraftEl = document.getElementById("seedance_draft");
 const seedanceDraft = () => is25() && seedanceDraftEl.checked;
 const DRAFT_FINAL_MODEL = "bytedance/seedance-2-5-draft";
+// kie.ai Video Upscaler: one video in, the same clip out at a target resolution box
+// (1080P / 2K / 4K; aspect, fps and length kept). Billed per second of input.
+const UPSCALE_MODEL = "video/upscale";
+const UPSCALE_TIERS = [
+  { value: "1080P", label: "1080p", perSec: 1.5 },
+  { value: "2K", label: "2K", perSec: 3 },
+  { value: "4K", label: "4K", perSec: 6 },
+];
 const DRAFT_VALID_MS = 7 * 24 * 60 * 60 * 1000;
 
 // Seedance 2 Fast and Mini only accept web_search for text-to-video, so it is left
@@ -3120,6 +3173,7 @@ const VIDEO_VARIANT_LABEL = {
   "wan/3-0-video": "Wan 3",
   "wan/3-0-video-prime": "Wan 3 Prime",
   "bytedance/seedance-2-5-draft": "2.5 from draft",
+  "video/upscale": "Upscaled",
 };
 
 // Full display name for a video model id.
@@ -3134,6 +3188,7 @@ function videoModelLabel(model) {
   if (model === "wan/3-0-video-prime") return "Wan 3.0 Prime";
   if (model === "bytedance/seedance-2-5") return "Seedance 2.5";
   if (model === DRAFT_FINAL_MODEL) return "Seedance 2.5 (from draft)";
+  if (model === UPSCALE_MODEL) return "Video Upscaler";
   if (model === "bytedance/seedance-2-fast") return "Seedance 2 Fast";
   if (model === "bytedance/seedance-2-mini") return "Seedance 2 Mini";
   return "Seedance 2";
@@ -3289,6 +3344,10 @@ function applyModelUI() {
     .getElementById("previewMethodField")
     .classList.toggle("hidden", !comfy);
   renderComfyInstancePick();
+  // One video in, one out — a batch count means nothing to the upscaler.
+  document.getElementById("queueCountField").classList.toggle("hidden", isUpscale());
+  document.getElementById("videoLabel").textContent =
+    isUpscale() ? "Video to upscale" : "Reference videos";
   if (comfy) {
     // Swap the whole kie.ai form for the recognized workflow controls.
     for (const id of KIE_FIELDS)
@@ -3304,6 +3363,28 @@ function applyModelUI() {
   for (const id of KIE_FIELDS)
     document.getElementById(id).classList.remove("hidden");
   estimateEl.classList.remove("hidden");
+
+  if (isUpscale()) {
+    for (const id of KIE_FIELDS)
+      document
+        .getElementById(id)
+        .classList.toggle("hidden", id !== "videoField" && id !== "optionsRow");
+    for (const id of ["qualityField", "formatField", "aspectField", "durationField"])
+      document.getElementById(id).classList.add("hidden");
+    document.getElementById("resolutionField").classList.remove("hidden");
+    document.getElementById("videoHint").textContent =
+      "(one video — MP4, MOV or MKV, ≤ 50MB, ≤ 60s; aspect, fps and length are kept)";
+    setResolutionOptions(
+      UPSCALE_TIERS.map((t) => [t.value, `${t.label} (${t.perSec} credits/s)`]),
+      "2K",
+    );
+    resolutionSelect.disabled = false;
+    restoreKieForm();
+    updateEstimate();
+    updateModelChrome();
+    syncPromptTabs();
+    return;
+  }
 
   const seedream = isSeedream();
   const maxResIdx = maxResolutionIndex();
@@ -3454,6 +3535,14 @@ function updateModelChrome() {
       `Run ${label} on your local ComfyUI`;
     document.title = `GENie — ${label}`;
     submitBtn.textContent = "Generate";
+    return;
+  }
+  if (isUpscale()) {
+    document.getElementById("pageTitle").textContent = "Video Upscaler";
+    document.getElementById("pageSub").textContent =
+      "Upscale a video to 1080p, 2K or 4K with kie.ai";
+    document.title = "GENie — Video Upscaler";
+    submitBtn.textContent = "Upscale Video";
     return;
   }
   const image = isSeedream();
@@ -4342,9 +4431,12 @@ async function renderComfyControls() {
   // Enable/disable toggles for optional patch nodes (e.g. Sage Attention). A
   // recognized node's toggle sits at the top of its own section, above the controls it
   // hides; the rest land in the Settings drawer below.
+  // Sections whose node can be passed through (meta.passable) get a "Bypass" box in
+  // their header, held by the same control so it saves, restores and runs alike.
+  const passableIds = new Set((meta.passable || []).map(String));
   comfyBypassControl =
-    (meta.bypassable || []).length ?
-      makeComfyBypassControl(meta.bypassable)
+    (meta.bypassable || []).length || passableIds.size ?
+      makeComfyBypassControl(meta.bypassable || [])
     : null;
   // Loader swaps (Load Diffusion Model ↔ Unet Loader GGUF): each side's controls get
   // their own slot in the section, and the section's toggle shows one or the other.
@@ -4394,6 +4486,12 @@ async function renderComfyControls() {
       groupResets.set(key, reset);
       body = document.createElement("div");
       body.className = "comfy-node-group-body comfy-grid";
+      if (passableIds.has(String(key)) && !bypassIds.has(String(key)))
+        summary.appendChild(
+          comfyBypassControl.headerToggle(key, (off) => {
+            details.classList.toggle("comfy-bypassed", off);
+          }),
+        );
       details.append(summary, body);
       details.dataset.groupKey = String(key);
       comfyControlsEl.appendChild(details);
@@ -4537,25 +4635,41 @@ async function renderComfyControls() {
   comfyControlsEl.appendChild(autoTagsControl.el);
   if (body.childElementCount) comfyControlsEl.appendChild(details);
 
-  // Transparency: node types GENie has no controls for. They run exactly as saved
-  // in the export. Collapsed by default; recognized (raw) workflows only.
+  // Transparency: nodes GENie has no controls for. They run exactly as saved in the
+  // export — or, each with its own Bypass box, not at all (two samplers side by side,
+  // one switched off). Collapsed by default; recognized (raw) workflows only. An older
+  // server sends only the type names.
+  const unhandled = meta.unhandledNodes || [];
   const unknownTypes = meta.unknownTypes || [];
-  if (unknownTypes.length) {
+  if (unhandled.length || unknownTypes.length) {
     const info = document.createElement("details");
     info.className = "comfy-node-group comfy-unknown";
     info.style.gridColumn = "span 12";
     const sum = document.createElement("summary");
-    sum.textContent = `Other nodes — run as-is (${unknownTypes.length})`;
+    sum.textContent = `Other nodes — run as-is (${unhandled.length || unknownTypes.length})`;
     const b = document.createElement("div");
     b.className = "comfy-node-group-body";
     b.innerHTML =
-      `<p class="muted">GENie has no editable controls for these node types, so they run ` +
-      `exactly as saved in the workflow's JSON export:</p>`;
+      `<p class="muted">GENie has no editable controls for these nodes, so they run ` +
+      `exactly as saved in the workflow's JSON export. Bypass one to skip it.</p>`;
     const ul = document.createElement("ul");
     ul.className = "comfy-unknown-list";
-    for (const t of unknownTypes) {
+    const canBypass = (id) =>
+      comfyBypassControl && passableIds.has(String(id)) && !bypassIds.has(String(id));
+    for (const n of unhandled.length ? unhandled : unknownTypes.map((t) => ({ classType: t }))) {
       const li = document.createElement("li");
-      li.textContent = t;
+      const name = document.createElement("span");
+      name.textContent =
+        n.id == null ? n.classType
+        : n.title && n.title !== n.classType ? `${n.title} (${n.classType}, #${n.id})`
+        : `${n.classType} #${n.id}`;
+      li.appendChild(name);
+      if (n.id != null && canBypass(n.id))
+        li.appendChild(
+          comfyBypassControl.headerToggle(n.id, (off) =>
+            li.classList.toggle("comfy-bypassed", off),
+          ),
+        );
       ul.appendChild(li);
     }
     b.appendChild(ul);
@@ -4608,6 +4722,7 @@ function resetComfyGroup(key, label) {
 // optional custom node (e.g. Sage Attention) can be turned off if you don't have it.
 function makeComfyBypassControl(bypassable) {
   const nodes = new Map(); // nodeId -> { checkbox, controlsEl, wrapper, mounted }
+  const headers = new Map(); // nodeId -> { checkbox, sync } for sections' Bypass boxes
   for (const b of bypassable) {
     const wrapper = document.createElement("div");
     wrapper.className = "comfy-bypass-group";
@@ -4660,14 +4775,42 @@ function makeComfyBypassControl(bypassable) {
         n.sync(); // the dependents' sections exist now
       }
     },
-    // Ids of nodes to bypass (the unchecked ones).
-    getDisabled: () =>
-      [...nodes].filter(([, n]) => !n.checkbox.checked).map(([id]) => id),
+    // A "Bypass" box for a section's header: checked skips the node for the run, its
+    // input handed straight on to whatever came after it. `onChange(off)` restyles the
+    // section. A checkbox inside <summary> would also open/close the section, so the
+    // click is handled here and the box flipped by hand.
+    headerToggle(id, onChange) {
+      const label = document.createElement("label");
+      label.className = "comfy-group-bypass";
+      label.title =
+        "Skip this node for the run: what goes into it is handed straight to whatever comes after it.";
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      label.append(cb, document.createTextNode(" Bypass"));
+      const sync = () => onChange(cb.checked);
+      label.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        cb.checked = !cb.checked;
+        sync();
+      });
+      headers.set(String(id), { checkbox: cb, sync });
+      return label;
+    },
+    // Ids of nodes to bypass: unchecked patch toggles and checked header boxes.
+    getDisabled: () => [
+      ...[...nodes].filter(([, n]) => !n.checkbox.checked).map(([id]) => id),
+      ...[...headers].filter(([, h]) => h.checkbox.checked).map(([id]) => id),
+    ],
     setDisabled: (ids) => {
       const off = new Set((ids || []).map(String));
       for (const [id, n] of nodes) {
         n.checkbox.checked = !off.has(id);
         n.sync();
+      }
+      for (const [id, h] of headers) {
+        h.checkbox.checked = off.has(id);
+        h.sync();
       }
     },
   };
@@ -5114,6 +5257,14 @@ loraBrowserModal.addEventListener("keydown", (e) => {
 const comfyImportModal = document.getElementById("comfyImportModal");
 const comfyImportList = document.getElementById("comfyImportList");
 const comfyImportSearch = document.getElementById("comfyImportSearch");
+// Clear the copy's media file names, prompt text and LoRA picks. On unless turned off;
+// remembered (server-side, like every other choice).
+const COMFY_IMPORT_BLANK_KEY = "genie_import_blank";
+const comfyImportBlank = document.getElementById("comfyImportBlank");
+comfyImportBlank.checked = getPref(COMFY_IMPORT_BLANK_KEY, "1") !== "0";
+comfyImportBlank.addEventListener("change", () =>
+  setPref(COMFY_IMPORT_BLANK_KEY, comfyImportBlank.checked ? "1" : "0"),
+);
 let comfySavedWorkflows = [];
 // path → { ok, lines[] } from this session's import attempts, so a re-render (typing
 // in the filter) keeps each row's outcome on screen.
@@ -5746,15 +5897,30 @@ async function importComfyWorkflow(w, btn) {
     const res = await fetch("/api/comfy/import-workflow", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ path: w.path, overwrite: !!w.imported }),
+      body: JSON.stringify({
+        path: w.path,
+        overwrite: !!w.imported,
+        blank: comfyImportBlank.checked,
+      }),
     });
     const json = await res.json();
     if (res.ok) {
       const warnings = json.data.warnings || [];
+      const c = json.data.cleared;
+      const plural = (n, one) => `${n} ${one}${n === 1 ? "" : "s"}`;
+      const clearedParts =
+        c ?
+          [
+            c.media && plural(c.media, "media file"),
+            c.prompt && "the prompt",
+            c.loras && plural(c.loras, "LoRA"),
+          ].filter(Boolean)
+        : [];
       result = {
         ok: true,
         lead:
           `Imported as “${json.data.name}” (${json.data.nodes} nodes).` +
+          (clearedParts.length ? ` Cleared ${clearedParts.join(", ")}.` : "") +
           (warnings.length ? " Worth checking before you run it:" : ""),
         lines: warnings,
       };
@@ -11538,6 +11704,10 @@ function createLiveStatus(job) {
 
   let previewImg = null;
   let previewToken = 0;
+  // A preview that arrives as a whole clip (Model Preview Override's MP4) plays in a
+  // <video> beside the <img>; only one of the two shows at a time.
+  let previewVid = null;
+  let previewVidBlob = null;
   // Animated preview: decoded frames by latent-frame index, looped by a timer.
   const animFrames = new Map(); // index -> { img, seq }
   let animTimer = null;
@@ -11572,7 +11742,15 @@ function createLiveStatus(job) {
       .sort((a, b) => a - b);
     if (!order.length) return;
     animAt = order.find((i) => i > animAt) ?? order[0];
+    showPreviewKind("img");
     previewImg.src = animFrames.get(animAt).img.src;
+  };
+  const showPreviewKind = (kind) => {
+    previewImg?.classList.toggle("hidden", kind !== "img");
+    if (previewVid) {
+      previewVid.classList.toggle("hidden", kind !== "video");
+      if (kind !== "video") previewVid.pause();
+    }
   };
   let baseStatus = "Generating…";
   let progInfo = null; // { value, max, pass, passes, perPass, stepInPass, anchorT, anchorValue }
@@ -11699,6 +11877,43 @@ function createLiveStatus(job) {
       };
       img.src = blobUrl;
     },
+    // A preview clip: fetched whole and looped. A newer one replaces it in place.
+    async setPreviewVideo(url) {
+      const token = ++previewToken;
+      let blob;
+      try {
+        const res = await fetch(url);
+        if (!res.ok) return;
+        blob = await res.blob();
+      } catch {
+        return;
+      }
+      if (token !== previewToken) return; // a newer frame or clip got here first
+      if (!previewImg) this.setPreview(null);
+      if (!previewVid) {
+        previewVid = document.createElement("video");
+        previewVid.className = "hist-preview-img zoomable hidden";
+        previewVid.muted = true;
+        previewVid.loop = true;
+        previewVid.autoplay = true;
+        previewVid.playsInline = true;
+        previewVid.title = "Click to see this preview full size";
+        // A fresh URL for the lightbox: the card's own is revoked by the next clip.
+        previewVid.addEventListener("click", () => {
+          if (previewVidBlob)
+            openLightbox("video", URL.createObjectURL(previewVidBlob), "Live preview");
+        });
+        previewImg.after(previewVid);
+      }
+      // An animated-frame loop from an earlier sampler stops: this clip replaces it.
+      dropAnim();
+      const old = previewVid.src;
+      previewVidBlob = blob;
+      previewVid.src = URL.createObjectURL(blob);
+      if (old) URL.revokeObjectURL(old);
+      showPreviewKind("video");
+      previewVid.play().catch(() => {});
+    },
     setPreview(url) {
       if (!previewImg) {
         previewImg = document.createElement("img");
@@ -11730,12 +11945,15 @@ function createLiveStatus(job) {
         el.prepend(wrap);
         el.classList.add("has-preview");
       }
+      if (!url) return; // just mounting the slot (for a clip)
       // Decode off-screen and swap only on load — assigning src directly can blank
       // the card between frames. A frame that lands after a newer one is dropped.
       const token = ++previewToken;
       const pre = new Image();
       pre.onload = () => {
-        if (token === previewToken) previewImg.src = pre.src;
+        if (token !== previewToken) return;
+        previewImg.src = pre.src;
+        showPreviewKind("img");
       };
       pre.src = url;
     },
@@ -11759,6 +11977,13 @@ function createLiveStatus(job) {
       this.running = false;
       clearInterval(progTicker);
       progTicker = null;
+      // A preview clip is megabytes: let it go once the finished card replaces it.
+      if (previewVid)
+        setTimeout(() => {
+          if (previewVid.isConnected) return;
+          URL.revokeObjectURL(previewVid.src);
+          previewVidBlob = null;
+        }, 15000);
     },
   };
 }
@@ -11847,6 +12072,7 @@ function ensurePreviewStream() {
     // moving the nth-frame selector mid-run has them all to choose from.
     if (Number.isInteger(d.index))
       live.setPreviewFrame(d.index, d.seq, `${url}&index=${d.index}`);
+    else if (d.video) live.setPreviewVideo(url);
     else live.setPreview(url);
   });
   es.addEventListener("error", () => {
@@ -12033,6 +12259,10 @@ form.addEventListener("submit", async (e) => {
   // Local ComfyUI workflows have their own submit path (no kie.ai uploads/credits).
   if (isComfy()) {
     submitComfy();
+    return;
+  }
+  if (isUpscale()) {
+    submitUpscaleForm();
     return;
   }
   saveKieForm(); // also what a Re-import or a saved prompt filled in, not just edits
@@ -12347,6 +12577,155 @@ async function finalizeSeedanceDraft(entry) {
   } catch (err) {
     await failJob(job, err.message || String(err));
   }
+}
+
+// Upscale one of a History card's videos with kie.ai's Video Upscaler. The result is
+// a new card beside the source, keeping its prompt and settings (input.sourceInput
+// is the source's own input, which Re-import / Re-run use).
+async function upscaleVideo(entry, { url, index }, tier) {
+  const t = UPSCALE_TIERS.find((x) => x.value === tier);
+  if (!t) return;
+  const secs = await mediaDuration(url);
+  if (
+    !confirm(
+      `Upscale this video to ${t.label} with kie.ai's Video Upscaler?\n\nCost: ${upscaleCostText(secs, t)}.`,
+    )
+  )
+    return;
+  const src = entry.input || {};
+  const { sourceInput: _nested, ...sourceInput } =
+    src.model === UPSCALE_MODEL ? src.sourceInput || {} : src;
+  await runUpscaleJob({
+    input: {
+      ...sourceInput,
+      model: UPSCALE_MODEL,
+      resolution: t.value,
+      upscaleOf: entry.id,
+      upscaleOfOutput: index,
+      sourceInput,
+    },
+    mediaLocalIds: entry.mediaLocalIds || { image: entry.imageLocalIds || [] },
+    projectId: entry.projectId || activeProjectId,
+    tier: t,
+    source: { outputUrl: url },
+  });
+}
+
+// "about 45 credits (15.1 s × 3/s)", or the per-second rate when the length is unknown.
+function upscaleCostText(secs, t) {
+  return secs ?
+      `about ${Math.round(secs * t.perSec * 10) / 10} credits (${secs.toFixed(1)} s × ${t.perSec}/s)`
+    : `${t.perSec} credits per second of video`;
+}
+
+// The Video Upscaler picked in the model list: upscale the form's one video (the
+// video field, which takes uploads, Gallery picks and History "＋ Video ref").
+async function submitUpscaleForm() {
+  const items = lists.video.items;
+  if (items.some((i) => i.status === "saving"))
+    return setError("The video is still saving — wait a moment and try again.");
+  if (items.some((i) => i.status === "error"))
+    return setError("Remove the failed file before upscaling.");
+  const ready = items.filter((i) => i.status === "ready");
+  if (ready.length !== 1)
+    return setError(
+      ready.length ?
+        "The upscaler takes one video at a time — remove the others."
+      : "Add a video to upscale.",
+    );
+  hide(errorEl);
+  saveKieForm();
+  const item = ready[0];
+  const t =
+    UPSCALE_TIERS.find((x) => x.value === resolutionSelect.value) || UPSCALE_TIERS[1];
+  const tail = item.localId && item.tailSec > 0 ? item.tailSec : 0;
+  const source =
+    item.remoteUrl ? { remoteUrl: item.remoteUrl }
+    : item.outputUrl ? { outputUrl: item.outputUrl }
+    : { id: item.localId, ...(tail ? { tailSec: tail } : {}) };
+  const name = item.name && !/^https?:/.test(item.name) ? item.name : "video";
+  submitBtn.disabled = true;
+  try {
+    await runUpscaleJob({
+      input: {
+        model: UPSCALE_MODEL,
+        resolution: t.value,
+        prompt: `Upscale ${name}${tail ? ` (last ${tail}s)` : ""} to ${t.label}`,
+      },
+      mediaLocalIds: { video: item.localId ? [item.localId] : [] },
+      projectId: activeProjectId,
+      tier: t,
+      source,
+    });
+  } finally {
+    submitBtn.disabled = false;
+  }
+}
+
+// Create the pending History entry, host the video on kie.ai (a public URL goes as
+// is), and start the upscale task. `source` is { outputUrl } | { id, tailSec? } |
+// { remoteUrl }.
+async function runUpscaleJob({ input, mediaLocalIds, projectId, tier, source }) {
+  const job = {
+    jobId: nextJobId++,
+    taskId: null,
+    input,
+    mediaLocalIds,
+    balanceBefore: null,
+    projectId,
+    refSecs: 0,
+    startedAt: Date.now(),
+  };
+  job.historyId = await createHistoryEntry(input, null, mediaLocalIds, projectId, 0);
+  job.live = createLiveStatus(job);
+  if (job.historyId) liveStatus.set(job.historyId, job.live);
+  loadHistory();
+  try {
+    let videoUrl = source.remoteUrl;
+    if (!videoUrl) {
+      job.live.setStatus("Uploading the video to kie.ai…");
+      const res = await fetch("/api/upscale/host", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(source),
+      });
+      const host = await res.json().catch(() => ({}));
+      if (!res.ok || !host.hostedUrl)
+        throw new Error(host.msg || `Upload failed (${res.status})`);
+      videoUrl = host.hostedUrl;
+    }
+    job.balanceBefore = await loadCredits();
+    job.live.setStatus("Submitting…");
+    job.taskId = await createTask(
+      { model: UPSCALE_MODEL, video_url: videoUrl, resolution: tier.value },
+      job.live,
+    );
+    job.live.setStatus(`Upscaling to ${tier.label}… this can take several minutes.`);
+    await persistEntryTask(job);
+    pollJob(job);
+  } catch (err) {
+    await failJob(job, err.message || String(err));
+  }
+}
+
+// A video file's length in seconds from its metadata (null if it can't be read).
+function mediaDuration(url) {
+  return new Promise((resolve) => {
+    const v = document.createElement("video");
+    v.preload = "metadata";
+    let settled = false;
+    const done = (d) => {
+      if (settled) return;
+      settled = true;
+      v.removeAttribute("src");
+      v.load();
+      resolve(d);
+    };
+    v.onloadedmetadata = () => done(Number.isFinite(v.duration) ? v.duration : null);
+    v.onerror = () => done(null);
+    setTimeout(() => done(null), 8000);
+    v.src = url;
+  });
 }
 
 const BATCH_CREATE_SPACING_MS = 400; // ~2.5 creates/s — well inside 20 per 10s
@@ -12895,6 +13274,7 @@ function creditCategory(model) {
   if (m === "wan/3-0-video-prime") return "Wan 3.0 Prime";
   if (m === "bytedance/seedance-2-5" || m === DRAFT_FINAL_MODEL)
     return "Seedance 2.5";
+  if (m === UPSCALE_MODEL) return "Video Upscaler";
   if (m === "bytedance/seedance-2-fast") return "Seedance 2 Fast";
   if (m === "bytedance/seedance-2-mini") return "Seedance 2 Mini";
   if (m === "bytedance/seedance-2") return "Seedance 2";
@@ -13701,6 +14081,8 @@ function renderHistory(entries) {
       meta.textContent =
         `${date}${variant} · ${input.resolution || "?"}${ratio} · ` +
         `${input.duration === -1 ? "auto" : `${input.duration || "?"}s`}${cost}${rt}${proj}`;
+      if (input.model === UPSCALE_MODEL && !input.duration)
+        meta.textContent = `${date}${variant} · ${input.resolution}${ratio}${cost}${rt}${proj}`;
     }
 
     // Controls, grouped by purpose:
@@ -13873,6 +14255,9 @@ function renderHistory(entries) {
       // …and go into the form's reference-video field (copied to the gallery first)
       const toRef = makeVideoRefControl(entry, editVideos);
       if (toRef) main.appendChild(toRef);
+      // …and be upscaled by kie.ai's Video Upscaler (a new card)
+      const upscale = makeUpscaleControl(entry, editVideos);
+      if (upscale) main.appendChild(upscale);
       // its saved images open in the 🖼 image editor, to crop
       const cropImages = entryOutputs(entry)
         .map((o, index) => ({ url: o.localVideo, index }))
@@ -14123,7 +14508,9 @@ function renderHistory(entries) {
 // Populate the form from a saved history entry (local files re-host at generate).
 async function applyEntry(entry) {
   disarmContinuation(); // Re-import/Re-run start clean; Continue re-arms after this
-  const input = entry.input || {};
+  // An upscaled video re-imports as the run it was upscaled from.
+  const input =
+    entry.input?.model === UPSCALE_MODEL ? entry.input.sourceInput || {} : entry.input || {};
 
   // ComfyUI entries: reselect the workflow and prefill its controls (images can't
   // be restored from a saved ref, so they're left empty).

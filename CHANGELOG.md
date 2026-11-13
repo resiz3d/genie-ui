@@ -12,6 +12,52 @@ heading for that version with the date, commit, then tag the commit `vX.Y.Z`.
 
 ### Added
 
+- **Two-stage MiniMax H3 with the latent upscaler.** Workflows that sample small,
+  upscale the latent (Minimax H3 Latent Upscaler 3D) and refine get a **Latent
+  Upscale** section (model, scale, precision, align, temporal chunking, unload after
+  use), **Split Sigmas** (the step stage 1 stops at), the stage-2 **Manual Sigmas**
+  list, and **Sigma Shift** (video/audio shift). Spare sigma lists and values that
+  aren't wired to anything stay out of the form.
+- **Live previews from KJNodes' Model Preview Override.** When a workflow has the
+  node, its section has a **Use Model Preview Override for live previews** checkbox
+  plus its settings (tiny VAE, max size, quality, clip fps, frames per preview, hide
+  the stock preview). Checked, the run card shows that node's sharper preview, and a
+  whole looping clip when it sends one; unchecked, the node is left out and the usual
+  👁 preview is used.
+- **MiniMax H3 Video Upscale workflow.** Upscales a video you already have with the
+  same Latent Upscale node and stage-2 refine as the two-stage workflow. The clip is
+  trimmed to H3's frame grid (capped by **Max Duration**), encoded at the **Encode
+  Size** megapixels in its own aspect, upscaled in latent space, and refined from
+  **Refine Sigmas**. The first value sets how much changes; 0.63 keeps faces and
+  motion. It keeps the clip's original audio, cut to match. The core *Scale Image to
+  Total Pixels* node now shows its settings in the form.
+- **Bypass any node.** Every node section has a **Bypass** box beside Reset, and so
+  does every node listed under *Other nodes — run as-is*. A bypassed node is skipped
+  for the run, the way ComfyUI's own bypass works: whatever went into it is handed to
+  whatever came after it, matched by type. That way you can switch one of two
+  samplers off, or skip the latent upscaler. A node with nothing of its type to pass
+  on (a loader, say) just disconnects what it fed, and ComfyUI says if something
+  needed it. The choice is saved with the workflow's settings, like everything else.
+- **Import from ComfyUI can start the copy clean.** A new checkbox, on by default,
+  clears the imported copy's media file names, prompt text and LoRA picks. The import
+  message says what it cleared. Untick it to copy the workflow exactly as saved.
+
+### Fixed
+
+- **GENie's connection to ComfyUI no longer drops on big messages.** Node's built-in
+  WebSocket hung up on anything over 4 MB, which a preview clip easily is, so the card
+  stuck on the first (noise) frame. GENie now uses the `ws` package for that socket,
+  so run `npm install` after updating.
+
+- **"⇧ Upscale" on video History cards (kie.ai Video Upscaler).** Pick 1080p, 2K or
+  4K; GENie checks kie.ai's limits (MP4/MOV/MKV, ≤50 MB, ≤60 s), shows the cost
+  (1.5 / 3 / 6 credits per second of video) and asks first, then uploads the clip and
+  adds the upscaled result as a new card beside the source. The new card keeps the
+  source's prompt and settings, so Re-import / Re-run bring back the original run.
+- **Video Upscaler in the model list.** Pick it and the form shrinks to one video
+  (upload it, pick it from the Gallery, or send it from a History card with "＋ Video
+  ref"; "use last N sec" works too) plus a 1080p / 2K / 4K choice, with the cost
+  shown before you press **Upscale Video**.
 - **"Use last N sec" on reference videos, local and kie.ai.** Each reference video
   gets a box to send only the end of the clip — handy for continuing a shot, and
   cheaper.

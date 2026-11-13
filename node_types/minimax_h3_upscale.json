@@ -1,0 +1,90 @@
+{
+  "_comment": "The two-stage MiniMax H3 pipeline (MiniMax_H3_Latent_Upscaler): stage 1 samples at low resolution on the first steps of a BasicScheduler split by SplitSigmas, the video latent is upscaled in latent space (Comfyui_Minimax_h3_latent_Upscaler), then stage 2 refines it on a short ManualSigmas schedule. LTXVConcatAVLatent / LTXVSeparateAVLatent / VAEDecode* / BasicGuider / SamplerCustomAdvanced are all-link plumbing and expose nothing. ManualSigmas is exposed only where it feeds the output, so spare schedules parked in the graph stay out of the form; its section takes the node's title ('3 step Sigmas'). The upscaler's `mode` is a DynamicCombo — only 'scale by multiplier' (mode.scale) is exposed; another mode keeps the export's values. Its force_unload is a BOOLEAN (an export can carry a stray string there, e.g. 'cuda' — the toggle writes a real true/false). The LoRA loader is covered by the LoRA section; MiniMaxH3SigmaShift's shifts are exposed. ModelPreviewOverrideKJ (KJNodes) is a MODEL patch that sends its own live preview: tiny-VAE decoded, larger, and with preview_frames > 1 a looping clip. It's `bypassable` under the label 'Use Model Preview Override for live previews' — unchecked, it's removed and the stock preview (GENie's 👁 setting) is used. preview_frames is usually wired from the frame-count math, so it stays as wired.",
+  "nodes": {
+    "MinimaxH3LatentUpscaler3D": {
+      "display_name": "Minimax H3 Latent Upscaler (3D)",
+      "package": "Comfyui_Minimax_h3_latent_Upscaler",
+      "recognize": {
+        "variants": [
+          {
+            "match": [{ "when": "any" }],
+            "group": "Latent Upscale",
+            "expose": {
+              "model_name":               { "name": "upscale_model",            "label": "Upscale model",       "control": "combo",  "width": "full", "order": 30.01 },
+              "mode.scale":               { "name": "upscale_scale",            "label": "Scale ×",             "control": "number", "width": "1/3",  "order": 30.02 },
+              "precision":                { "name": "upscale_precision",        "label": "Precision",           "control": "combo",  "width": "1/3",  "order": 30.03 },
+              "align":                    { "name": "upscale_align",            "label": "Align (px)",          "control": "number", "width": "1/3",  "order": 30.04 },
+              "enable_temporal_chunking": { "name": "upscale_temporal_chunking","label": "Temporal chunking",   "control": "toggle", "width": "1/2",  "order": 30.05 },
+              "force_unload":             { "name": "upscale_force_unload",     "label": "Unload after use",    "control": "toggle", "width": "1/2",  "order": 30.06 }
+            }
+          }
+        ]
+      }
+    },
+    "SplitSigmas": {
+      "display_name": "SplitSigmas",
+      "recognize": {
+        "variants": [
+          {
+            "match": [{ "when": "feeds_output" }],
+            "group": "Split Sigmas",
+            "expose": {
+              "step": { "name": "split_step", "label": "Stage 1 stops at step", "control": "number", "width": "1/3", "order": 16.5 }
+            }
+          }
+        ]
+      }
+    },
+    "ManualSigmas": {
+      "recognize": {
+        "variants": [
+          {
+            "match": [{ "when": "feeds_output" }],
+            "expose": {
+              "sigmas": { "name": "manual_sigmas", "label": "Sigmas (comma-separated, high → 0)", "control": "text", "width": "full", "order": 31 }
+            }
+          }
+        ]
+      }
+    },
+    "MiniMaxH3SigmaShift": {
+      "display_name": "ModelSamplingMiniMaxH3",
+      "recognize": {
+        "variants": [
+          {
+            "match": [{ "when": "any" }],
+            "group": "Sigma Shift",
+            "collapsed": true,
+            "expose": {
+              "shift_video": { "name": "shift_video", "label": "Video shift", "control": "number", "width": "1/2", "order": 17.1 },
+              "shift_audio": { "name": "shift_audio", "label": "Audio shift", "control": "number", "width": "1/2", "order": 17.2 }
+            }
+          }
+        ]
+      }
+    },
+    "ModelPreviewOverrideKJ": {
+      "display_name": "Model Preview Override",
+      "package": "ComfyUI-KJNodes",
+      "bypassable": true,
+      "bypass_label": "Use Model Preview Override for live previews",
+      "recognize": {
+        "variants": [
+          {
+            "match": [{ "when": "any" }],
+            "group": "Live Preview (Model Preview Override)",
+            "collapsed": true,
+            "expose": {
+              "tiny_vae":                 { "name": "kjpreview_tiny_vae",       "label": "Tiny VAE (true-colour decode)", "control": "combo",  "width": "full", "order": 65.01 },
+              "max_resolution":           { "name": "kjpreview_max_resolution", "label": "Max size (px, 0 = full)",       "control": "number", "width": "1/3",  "order": 65.02 },
+              "jpeg_quality":             { "name": "kjpreview_jpeg_quality",   "label": "JPEG quality",                  "control": "number", "width": "1/3",  "order": 65.03 },
+              "preview_fps":              { "name": "kjpreview_fps",            "label": "Clip fps",                      "control": "number", "width": "1/3",  "order": 65.04 },
+              "preview_frames":           { "name": "kjpreview_frames",         "label": "Frames per preview (1 = still)", "control": "number", "width": "1/2", "order": 65.05 },
+              "suppress_default_preview": { "name": "kjpreview_suppress",       "label": "Hide the stock preview",        "control": "toggle", "width": "1/2",  "order": 65.06 }
+            }
+          }
+        ]
+      }
+    }
+  }
+}
