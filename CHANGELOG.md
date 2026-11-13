@@ -10,6 +10,41 @@ heading for that version with the date, commit, then tag the commit `vX.Y.Z`.
 
 ## [Unreleased]
 
+### Added
+
+- **"Use last N sec" on reference videos, local and kie.ai.** Each reference video
+  gets a box to send only the end of the clip — handy for continuing a shot, and
+  cheaper.
+  - *Local MiniMax H3 workflows:* the video loader skips the start of the clip, so
+    nothing is re-encoded and its sound stays in sync. The kept part rounds down to
+    H3's frame grid (5, 22, 39, 56 … frames), and the hint beside the box shows what
+    will be kept.
+  - *kie.ai models that take reference videos:* GENie cuts the clip with ffmpeg
+    before uploading it. The cut keeps one spare frame, so "last 2 sec" clears
+    kie.ai's 2-second minimum.
+
+  The trim is recorded on the History card and Re-import puts it back. Trims stored
+  with saved prompts now apply on kie.ai runs too.
+- **＋ Video ref on History cards.** Puts the card's video into the form's
+  reference-video field: a workflow's Reference Videos box, or kie.ai's Reference
+  videos list. The video is copied into the project Gallery once, and clicking again
+  reuses that copy.
+- **＋ Img ref on History cards.** Puts the card's image into the form's reference
+  images (or the first frame for H3 image-to-video), using the card's own file — no
+  Gallery copy. It stays when you switch models, and Re-run / Re-import bring it back.
+  Saved prompts only keep Gallery files, so it's left out of a prompt you save.
+- **Video editor: ±24 frame steps and 🖼 Save to Gallery.** −24 / +24 buttons (or
+  Page Up / Page Down) step one second at 24 fps — e.g. ⏭ then −24 twice to keep a
+  clip's last two seconds. On a phone the step buttons sit on their own row. *Save to
+  Gallery* re-encodes the result and adds it to the project Gallery as a new video,
+  ready to use as a reference.
+- **Per-file checks on kie.ai references.** Before sending, each reference video and
+  audio file is checked against the model's limits: length per clip (e.g. 2–15s for
+  MiniMax H3), file size, and frame size where the model has one (H3, Wan). A file
+  that breaks a limit stops the run with a message naming it, and the first problem
+  shows beside the cost estimate as soon as the file is added. Before, kie.ai only
+  refused it after sending.
+
 ## [1.6.0] - 2026-11-12
 
 ### Added
