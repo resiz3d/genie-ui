@@ -594,7 +594,7 @@ export function registerVideoEditor(
       updatedAt: now,
       clips,
       sizeFrom,
-      fit: body.fit === "fill" ? "fill" : "fit",
+      fit: ["fill", "stretch"].includes(body.fit) ? body.fit : "fit",
       fx: cleanFx(body.fx, clips.length),
       exports: old?.exports || [],
     };
@@ -649,7 +649,8 @@ export function registerVideoEditor(
   // body: { clips: [{ id, keep: [[startFrame, endFrame), …] }, …], base, fit, fx } —
   // the clips in playing order, each with the frame ranges of it to keep; `base` is
   // the id of the clip whose size and frame rate the result takes (default: the
-  // first), `fit` says how the others meet that size: "fit" (bars) or "fill" (crop),
+  // first), `fit` says how the others meet that size: "fit" (bars), "fill" (crop) or
+  // "stretch" (squash/pull to the size, out of shape),
   // and `fx` the effects (see cleanFx). → { args (ffmpeg's, writing to `out`), total
   // (frames), sourceIds } or { error: [status, msg, id?] }.
   async function planExport(body, out) {
@@ -693,8 +694,8 @@ export function registerVideoEditor(
 
     // Video is cut by frame number (exact), audio by the matching times. With several
     // clips, every piece is first brought to the base clip's size and frame rate —
-    // never stretched: either shrunk inside it with black bars, or grown to cover it
-    // and cropped — and to one audio format (silence for a clip that has no sound),
+    // shrunk inside it with black bars, grown to cover it and cropped, or (if asked)
+    // stretched to it out of shape — and to one audio format (silence for a clip that has no sound),
     // because the join needs them all alike. The colour effects and a clip's own overlay
     // layers go on each piece; the resize and whole-video layers on the joined result,
     // so a layer is drawn at the size it ends up and never loses its colour.
@@ -707,10 +708,10 @@ export function registerVideoEditor(
       return { error: [422, "Couldn't read that clip's size"] };
     const fit =
       !multi ? ""
-      : `,fps=${first.rate},scale=${W}:${H}:force_original_aspect_ratio=` +
-        (body.fit === "fill" ?
-          `increase,crop=${W}:${H}`
-        : `decrease,pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2`) +
+      : `,fps=${first.rate},scale=${W}:${H}` +
+        (body.fit === "stretch" ? ""
+        : body.fit === "fill" ? `:force_original_aspect_ratio=increase,crop=${W}:${H}`
+        : `:force_original_aspect_ratio=decrease,pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2`) +
         ",setsar=1,format=yuv420p";
     // Brightness then contrast, as the preview's CSS filter does them (scale, then
     // stretch round mid-grey), then saturation and hue; back to one format for the join.

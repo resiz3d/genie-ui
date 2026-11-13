@@ -94,9 +94,10 @@
           <select class="ve-size" title="Which clip the result takes its size and frame rate from"></select>
         </label>
         <label>Other clips
-          <select class="ve-fit" title="How a clip of a different shape meets that size — it is never stretched">
+          <select class="ve-fit" title="How a clip of a different shape meets that size">
             <option value="fit">Fit — keep everything, add black bars</option>
             <option value="fill">Fill — no bars, crop the edges</option>
+            <option value="stretch">Stretch — no bars, no crop, distort the shape</option>
           </select>
         </label>
       </div>
@@ -206,7 +207,7 @@
   let seeking = false;
   let addWhere = "append";
   let sizeFrom = null; // the clip the result takes its size from; null = the largest
-  let fit = "fit"; // how clips of another shape meet that size: "fit" | "fill"
+  let fit = "fit"; // how clips of another shape meet that size: "fit" | "fill" | "stretch"
   // Where Save puts the result when the editor was opened from a card:
   // { kind: "history" | "gallery", id, index, projectId } — null for the plain tool.
   let target = null;
@@ -459,6 +460,10 @@
       const shape = c.width / c.height / (base.width / base.height);
       const scaled = c.width * c.height < base.width * base.height ? "enlarged" : "shrunk";
       if (Math.abs(shape - 1) < 0.01) out.push(`${scaled} to ${sizeOf(base)}`);
+      else if (fit === "stretch")
+        out.push(
+          `stretched to ${sizeOf(base)}, ${shape > 1 ? "squeezed from side to side" : "squashed from top to bottom"} out of shape`,
+        );
       else if (fit === "fill")
         out.push(
           `${scaled} to fill ${sizeOf(base)}, cropping off its ${shape > 1 ? "left and right edges" : "top and bottom"}`,
@@ -1529,7 +1534,7 @@
     editId = edit.id;
     editName = edit.name;
     editExports = edit.exports || [];
-    fit = edit.fit === "fill" ? "fill" : "fit";
+    fit = ["fill", "stretch"].includes(edit.fit) ? edit.fit : "fit";
     if (added.length) {
       addClips(added, "append");
       const base = edit.clips[edit.sizeFrom];
