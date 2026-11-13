@@ -1845,12 +1845,34 @@ function applyAutoTags(entry) {
 // Upload one image into ComfyUI's input folder; returns the LoadImage-ready name.
 // Source is either a base64 data URL or a saved gallery item `id` (so ComfyUI
 // inputs are the same locally-stored files the API side uses).
+// A History output's file on disk from its `/output/<slug>/…` URL, or null when the
+// URL is anything else, points outside the output folder, or the file is gone. Lets
+// a card's image go straight into a reference field without a gallery copy.
+function outputFileFromUrl(url) {
+  if (typeof url !== "string" || !url.startsWith("/output/")) return null;
+  let rel;
+  try {
+    rel = decodeURIComponent(url.slice("/output/".length).split("?")[0]);
+  } catch {
+    return null;
+  }
+  const file = path.resolve(OUTPUT_DIR, rel);
+  if (!file.startsWith(path.resolve(OUTPUT_DIR) + path.sep)) return null;
+  return fs.existsSync(file) ? file : null;
+}
+
 app.post("/api/comfy/upload", async (req, res) => {
-  const { base64Data, fileName, id } = req.body || {};
+  const { base64Data, fileName, id, outputUrl } = req.body || {};
   const comfyUrl = comfyInstance(req.body?.comfyInstanceId).url;
   let buf, name;
   try {
-    if (id) {
+    if (outputUrl) {
+      const file = outputFileFromUrl(outputUrl);
+      if (!file)
+        return res.status(404).json({ code: 404, msg: "That output file is no longer there" });
+      buf = fs.readFileSync(file);
+      name = path.basename(file);
+    } else if (id) {
       const entry = readJson(IMAGES_FILE).find((i) => i.id === id);
       if (!entry)
         return res
@@ -4721,21 +4743,88 @@ app.post("/api/upload", (req, res) => {
   res.json({ code: 200, msg: "ok", image: entry });
 });
 
+// The last `seconds` of a video, re-encoded to a temp .mp4 (frame-exact, unlike a
+// stream copy, which can only start on a keyframe) → its path, or throws. The
+// caller deletes it. With `probe` ({ fps, frames }) it starts on an exact frame and
+// keeps one frame more than asked: seeking back from the end (-sseof) lands a frame
+// late, so "last 2 sec" came out 1.958s and kie.ai's 2s minimum refused it.
+async function trimVideoTail(src, seconds, probe = null) {
+  const out = path.join(os.tmpdir(), `genie-tail-${randomUUID()}.mp4`);
+  let seek;
+  if (probe?.fps > 0 && probe.frames > 0) {
+    const keep = Math.min(probe.frames, Math.ceil(seconds * probe.fps) + 1);
+    // Half a frame early, so rounding the time can't drop the first frame kept.
+    seek = ["-ss", Math.max(0, (probe.frames - keep - 0.5) / probe.fps).toFixed(6)];
+  } else {
+    seek = ["-sseof", `-${seconds + 0.1}`]; // length unknown: a little extra instead
+  }
+  const r = await videoEditor.ffmpeg([
+    "-hide_banner", "-y", "-v", "error",
+    ...seek, "-i", src,
+    "-map", "0:v:0", "-map", "0:a:0?",
+    "-c:v", "libx264", "-preset", "veryfast", "-crf", "16", "-pix_fmt", "yuv420p",
+    "-c:a", "aac", "-b:a", "192k",
+    "-movflags", "+faststart", out,
+  ]);
+  if (r.code !== 0) {
+    fs.rmSync(out, { force: true });
+    throw new Error(
+      r.missing ? "ffmpeg isn't installed, so the clip can't be trimmed"
+      : `Trimming failed: ${r.tail.trim().split(/\r?\n/).pop() || "ffmpeg error"}`,
+    );
+  }
+  return out;
+}
+
 // --- host a saved local file on kie.ai, return a fresh URL (at generate) ---
+// `tailSec` (videos only) hosts just the clip's last N seconds instead of all of it.
+// `outputUrl` (in place of `id`) hosts a History output file as it is.
 app.post("/api/reupload", requireKieKey, async (req, res) => {
-  const { id } = req.body || {};
+  const { id, outputUrl } = req.body || {};
+  if (outputUrl) {
+    const file = outputFileFromUrl(outputUrl);
+    if (!file)
+      return res.status(404).json({ code: 404, msg: "That output file is no longer there" });
+    try {
+      const ext = path.extname(file).slice(1).toLowerCase();
+      const up = await uploadToKie(fs.readFileSync(file), MIME_BY_EXT[ext] || "image/png", path.basename(file));
+      if (!up.downloadUrl) throw new Error(up.body?.msg || "upload failed");
+      return res.json({ code: 200, msg: "ok", hostedUrl: up.downloadUrl });
+    } catch (err) {
+      console.error("Re-upload of output failed:", err);
+      return res.status(502).json({ code: 502, msg: "Failed to re-host file" });
+    }
+  }
+  const tailSec = Number(req.body?.tailSec) || 0;
   const images = readJson(IMAGES_FILE);
   const entry = images.find((i) => i.id === id);
   if (!entry) return res.status(404).json({ code: 404, msg: "file not found" });
 
+  let trimmed = null;
   try {
-    const buf = fs.readFileSync(path.join(INPUT_DIR, entry.storedName));
-    const up = await uploadToKie(buf, entry.mime, entry.name);
+    const src = path.join(INPUT_DIR, entry.storedName);
+    let file = src;
+    let mime = entry.mime;
+    let name = entry.name;
+    if (tailSec > 0 && (entry.kind === "video" || entry.mime?.startsWith("video/"))) {
+      const probe = await probeVideo(src);
+      // A tail as long as the clip (or an unreadable length) sends the whole file.
+      if (!probe || tailSec < probe.duration - 0.05) {
+        trimmed = await trimVideoTail(src, tailSec, probe);
+        file = trimmed;
+        mime = "video/mp4";
+        name = `${String(entry.name || "video").replace(/\.[^.]+$/, "")}-last${tailSec}s.mp4`;
+      }
+    }
+    const buf = fs.readFileSync(file);
+    const up = await uploadToKie(buf, mime, name);
     if (!up.downloadUrl) throw new Error(up.body?.msg || "upload failed");
-    res.json({ code: 200, msg: "ok", hostedUrl: up.downloadUrl });
+    res.json({ code: 200, msg: "ok", hostedUrl: up.downloadUrl, trimmed: !!trimmed });
   } catch (err) {
     console.error("Re-upload failed:", err);
-    res.status(502).json({ code: 502, msg: "Failed to re-host file" });
+    res.status(502).json({ code: 502, msg: err.message?.startsWith("Trim") || err.message?.startsWith("ffmpeg") ? err.message : "Failed to re-host file" });
+  } finally {
+    if (trimmed) fs.rmSync(trimmed, { force: true });
   }
 });
 

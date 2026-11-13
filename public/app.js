@@ -488,6 +488,12 @@ function makeMediaList(kind, opts = {}) {
     thumbs = document.getElementById(`thumbs-${kind}`);
     fileInput = document.getElementById(`file-${kind}`);
     clearBtn = document.getElementById(`clear-${kind}`);
+    if (opts.tail) {
+      // The kie.ai Reference videos list: its "use last N sec" rows go under the dropzone.
+      tailsEl = document.createElement("div");
+      tailsEl.className = "media-tails";
+      dropzone.after(tailsEl);
+    }
   }
   const reorderType = `${REORDER_TYPE}-${kind}`; // reorder stays within one list
   const roomFor = (n = 1) => list.items.length + n <= max;
@@ -578,7 +584,8 @@ function makeMediaList(kind, opts = {}) {
       tailsEl.innerHTML = "";
       if (!opts.tail || !ready.length) return;
       ready.forEach((item, i) => {
-        if (item.localId && item.probe === undefined) {
+        if (!item.localId) return; // a hosted URL can't be trimmed (numbering still counts it)
+        if (item.probe === undefined) {
           item.probe = null; // probe once per file; null until it lands
           probeGalleryVideo(item.localId).then((p) => {
             item.probe = p;
@@ -593,6 +600,7 @@ function makeMediaList(kind, opts = {}) {
             grid: tailGrid,
             onInput: (v) => {
               item.tailSec = v;
+              opts.onTail?.(); // e.g. the kie.ai cost estimate and length checks
             },
           }),
         );
@@ -697,6 +705,26 @@ function makeMediaList(kind, opts = {}) {
         probeRefMedia(entry, item.localUrl);
     },
 
+    // A History card's saved output (`/output/…`), used where it is — no gallery copy.
+    // Hosted on kie.ai / uploaded to ComfyUI from that file at generate time.
+    addOutput({ url, name }) {
+      if (!url) return false;
+      if (list.items.some((i) => i.outputUrl === url)) return true; // already here
+      if (single) list.items = [];
+      else if (!roomFor()) return false;
+      list.items.push({
+        uid: nextUid++,
+        localId: null,
+        remoteUrl: null,
+        outputUrl: url,
+        thumb: url,
+        name: name || urlBasename(url),
+        status: "ready",
+      });
+      list.render();
+      return true;
+    },
+
     addFiles(fileList) {
       let files = single ? [...fileList].slice(0, 1) : [...fileList];
       if (Number.isFinite(max))
@@ -718,16 +746,32 @@ function makeMediaList(kind, opts = {}) {
           urls.push(item.remoteUrl);
           continue;
         }
+        if (item.outputUrl) {
+          const res = await fetch("/api/reupload", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ outputUrl: item.outputUrl }),
+          });
+          const data = await res.json();
+          if (!res.ok || !data.hostedUrl)
+            throw new Error(`${item.name || kind}: ${data.msg || "upload failed"}`);
+          urls.push(data.hostedUrl);
+          continue;
+        }
         if (!item.localId)
           throw new Error(`${item.name || kind}: missing source`);
         const res = await fetch("/api/reupload", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ id: item.localId }),
+          // A video with "use last N sec" is trimmed on the server before hosting.
+          body: JSON.stringify({
+            id: item.localId,
+            ...(opts.tail && item.tailSec > 0 ? { tailSec: item.tailSec } : {}),
+          }),
         });
         const data = await res.json();
         if (!res.ok || !data.hostedUrl)
-          throw new Error(`${item.name || kind}: upload failed`);
+          throw new Error(`${item.name || kind}: ${data.msg || "upload failed"}`);
         urls.push(data.hostedUrl);
       }
       return urls;
@@ -859,7 +903,15 @@ function probeRefMedia(entry, src, knownBytes = null) {
 function refVideoSeconds() {
   return lists.video.items
     .filter((i) => i.status === "ready")
-    .reduce((sum, i) => sum + (i.durationSec || 0), 0);
+    .reduce((sum, i) => sum + (sentSeconds(i) || 0), 0);
+}
+
+// How long a reference clip is as sent: its "use last N sec" trim when that's
+// shorter than the clip, else the whole clip (null while its length is unknown).
+function sentSeconds(i) {
+  const d = i.durationSec;
+  if (!(i.tailSec > 0) || !i.localId) return d ?? null;
+  return d > 0 ? Math.min(d, i.tailSec) : i.tailSec;
 }
 
 // Build the preview element for a thumb by kind.
@@ -894,7 +946,9 @@ function makeThumbContent(kind, item) {
 
 const lists = {
   image: makeMediaList("image"),
-  video: makeMediaList("video"),
+  // Reference videos can be trimmed to their last N seconds (cut on the server
+  // before they're hosted on kie.ai).
+  video: makeMediaList("video", { tail: true, onTail: () => updateEstimate() }),
   audio: makeMediaList("audio"),
   // Seedance 2.5 start/end keyframes — single image each, rendered like images.
   firstFrame: makeMediaList("firstFrame", { mediaType: "image", single: true }),
@@ -2088,12 +2142,12 @@ function makeEditVideoControl(videos, { name, projectId, kind, id }, { iconOnly 
 // project gallery first (once — a second click reuses that copy). `videos` lists the
 // card's videos as { url, index }; with several, the control is a menu.
 function makeVideoRefControl(entry, videos) {
-  if (!videos.length) return null;
-  const label = '<span class="btn-ico">＋</span> Video ref';
-  const title = "Add this video to the form's reference-video field (it's saved to the gallery too)";
-  const add = async ({ index }, el) => {
-    el.disabled = true;
-    try {
+  return makeCardRefControl(videos, {
+    label: '<span class="btn-ico">＋</span> Video ref',
+    menuLabel: "＋ Video ref…",
+    noun: "Video",
+    title: "Add this video to the form's reference-video field (it's saved to the gallery too)",
+    async add({ index }) {
       const res = await fetch(`/api/history/${entry.id}/to-gallery`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -2102,7 +2156,52 @@ function makeVideoRefControl(entry, videos) {
       const data = await res.json();
       if (!res.ok || !data.image) throw new Error(data.msg || "Couldn't add it to the gallery");
       await loadGallery();
-      const why = addVideoToRefField(data.image);
+      return addVideoToRefField(data.image);
+    },
+  });
+}
+
+// "＋ Img ref": puts one of a History card's images into the form's picture field,
+// using the card's own file — nothing is added to the gallery.
+function makeImageRefControl(entry, images) {
+  return makeCardRefControl(images, {
+    label: '<span class="btn-ico">＋</span> Img ref',
+    menuLabel: "＋ Img ref…",
+    noun: "Image",
+    title: "Add this image to the form's reference images (not saved to the gallery)",
+    add: async ({ url, index }) =>
+      addOutputToPictureField({
+        url,
+        name: `generated-${entry.id}${index > 0 ? `-${index + 1}` : ""}${(url.match(/\.[a-z0-9]+$/i) || [""])[0]}`,
+      }),
+  });
+}
+
+// Where a History image goes: the workflow's first image field in ComfyUI mode, the
+// first frame for H3 image-to-video, else the Reference images list when the model
+// takes them. Returns "" on success, or why it couldn't.
+function addOutputToPictureField(o) {
+  if (isComfy()) {
+    const f = comfyFields.find(
+      (x) => x.mediaKind === "image" && typeof x.addOutput === "function",
+    );
+    if (!f) return "This workflow has no reference-image field.";
+    return f.addOutput(o) ? "" : `The reference-image field is full (${f.capacity}).`;
+  }
+  if (isH3I2V()) return lists.firstFrame.addOutput(o) ? "" : "Couldn't set the first frame.";
+  if (!usesRefImages())
+    return `${videoModelLabel(modelSelect.value)} doesn't take reference images here.`;
+  return lists.image.addOutput(o) ? "" : "The Reference images list is full.";
+}
+
+// The button (one item) or menu (several) behind ＋ Video ref / ＋ Img ref. `add`
+// resolves to "" when it worked, or a reason to show.
+function makeCardRefControl(items, { label, menuLabel, noun, title, add: addOne }) {
+  if (!items.length) return null;
+  const add = async (item, el) => {
+    el.disabled = true;
+    try {
+      const why = await addOne(item);
       if (why) throw new Error(why);
       if (el.tagName === "BUTTON") {
         el.innerHTML = "Added!";
@@ -2114,26 +2213,26 @@ function makeVideoRefControl(entry, videos) {
       el.disabled = false;
     }
   };
-  if (videos.length === 1) {
+  if (items.length === 1) {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "btn-secondary";
     btn.innerHTML = label;
     btn.title = title;
-    btn.addEventListener("click", () => add(videos[0], btn));
+    btn.addEventListener("click", () => add(items[0], btn));
     return btn;
   }
   const sel = document.createElement("select");
   sel.className = "hist-project";
   sel.title = title;
-  const ph = new Option("＋ Video ref…", "", true, true);
+  const ph = new Option(menuLabel, "", true, true);
   ph.disabled = true;
   sel.appendChild(ph);
-  videos.forEach((vid, i) => sel.appendChild(new Option(`Video ${vid.index + 1}`, String(i))));
+  items.forEach((it, i) => sel.appendChild(new Option(`${noun} ${it.index + 1}`, String(i))));
   sel.addEventListener("change", () => {
-    const vid = videos[Number(sel.value)];
+    const it = items[Number(sel.value)];
     sel.value = "";
-    if (vid) add(vid, sel);
+    if (it) add(it, sel);
   });
   return sel;
 }
@@ -2949,14 +3048,21 @@ function refFileProblems() {
       .filter((i) => i.status === "ready")
       .forEach((i, n) => {
         const name = `${kind === "video" ? "Video" : "Audio"} ${n + 1}${i.name && !/^https?:/.test(i.name) ? ` (${i.name})` : ""}`;
-        const s = i.durationSec;
+        // A trimmed video is judged by the part that's sent.
+        const s = kind === "video" ? sentSeconds(i) : i.durationSec;
+        const trimmed = kind === "video" && i.durationSec > 0 && s < i.durationSec;
         if (lim.clipSecs && s > 0) {
           const [lo, hi] = lim.clipSecs;
           if (s < lo || s > hi)
-            out.push(`${name} is ${fmtSecs(s)}s long — this model takes ${lo}–${hi}s per clip.`);
+            out.push(
+              trimmed ?
+                `${name} is trimmed to its last ${fmtSecs(s)}s — this model takes ${lo}–${hi}s per clip.`
+              : `${name} is ${fmtSecs(s)}s long — this model takes ${lo}–${hi}s per clip.`,
+            );
         }
         const capMB = kind === "video" ? lim.videoMB : lim.audioMB;
-        if (capMB && i.bytes > capMB * 1024 * 1024)
+        // A trimmed clip is re-encoded, so its size is only known after the cut — skip it.
+        if (capMB && !trimmed && i.bytes > capMB * 1024 * 1024)
           out.push(`${name} is ${(i.bytes / 1024 / 1024).toFixed(1)}MB — this model takes at most ${capMB}MB per file.`);
         if (kind === "video" && i.width > 0 && i.height > 0) {
           const dims = `${i.width}×${i.height}`;
@@ -3471,7 +3577,14 @@ function snapshotCarry() {
         typeof f.peekMedia !== "function"
       )
         continue;
-      const files = f.peekMedia();
+      const peek = f.peekMedia();
+      // In field order, History outputs (＋ Img ref) included — peekMedia has gallery files only.
+      const files =
+        typeof f.sources === "function" ?
+          f.sources()
+            .map((s) => (s.outputUrl ? s : peek.find((m) => m.id === s.id)))
+            .filter(Boolean)
+        : peek;
       if (files.length) (media[f.mediaKind] ||= []).push(...files);
     }
     const p = comfyFields.find((f) => f.isPrompt);
@@ -3488,15 +3601,14 @@ function snapshotCarry() {
     if (document.getElementById(fieldFor[kind]).classList.contains("hidden"))
       continue;
     const ready = lists[kind].items.filter((i) => i.status === "ready");
-    urlOnly += ready.filter((i) => !i.localId).length;
+    urlOnly += ready.filter((i) => !i.localId && !i.outputUrl).length;
     const files = ready
-      .filter((i) => i.localId)
-      .map((i) => ({
-        id: i.localId,
-        url: i.thumb,
-        name: i.name,
-        tail: i.tailSec || 0,
-      }));
+      .filter((i) => i.localId || i.outputUrl)
+      .map((i) =>
+        i.outputUrl ?
+          { outputUrl: i.outputUrl, url: i.thumb, name: i.name } // a History output (＋ Img ref)
+        : { id: i.localId, url: i.thumb, name: i.name, tail: i.tailSec || 0 },
+      );
     if (files.length) media[kind] = files;
   }
   return { prompt: promptEl.value, media, urlOnly };
@@ -3538,12 +3650,14 @@ function applyCarry(snap) {
     if (!snap.media[kind]) continue;
     lists[kind].items = [];
     for (const m of snap.media[kind]) {
-      lists[kind].addFromGallery({
-        id: m.id,
-        localUrl: m.url,
-        name: m.name,
-        tail: m.tail,
-      });
+      if (m.outputUrl) lists[kind].addOutput({ url: m.outputUrl, name: m.name });
+      else
+        lists[kind].addFromGallery({
+          id: m.id,
+          localUrl: m.url,
+          name: m.name,
+          tail: m.tail,
+        });
     }
     lists[kind].render();
   }
@@ -6311,6 +6425,7 @@ function makeComfyMediaMulti(
             name: it.name,
             tail: it.tail,
           });
+        else if (it?.outputUrl) list.addOutput({ url: it.outputUrl, name: it.name });
       }
       list.render();
     },
@@ -6333,6 +6448,18 @@ function makeComfyMediaMulti(
       list.addFromGallery({ id: item.id, localUrl: item.url, name: item.name });
       return true;
     },
+    // A History card's output file, used in place (see makeMediaList's addOutput).
+    addOutput: (o) => list.addOutput(o),
+    // The filled files in order, gallery ones by id and History outputs by URL — what a
+    // run records when it has any of the latter (they aren't in its gallery ids).
+    sources: () =>
+      ready()
+        .map((i) =>
+          i.outputUrl ? { outputUrl: i.outputUrl, name: i.name }
+          : i.localId ? { id: i.localId, name: i.name }
+          : null,
+        )
+        .filter(Boolean),
     peekMedia: () =>
       ready()
         .filter((i) => i.localId)
@@ -6360,7 +6487,7 @@ function makeComfyMediaMulti(
           prune.push(tokenNames[i]);
           continue;
         }
-        if (!it.localId)
+        if (!it.localId && !it.outputUrl)
           throw new Error(
             `${label}: drop a file (URL inputs aren't supported for local workflows).`,
           );
@@ -6368,7 +6495,10 @@ function makeComfyMediaMulti(
           const res = await fetch("/api/comfy/upload", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ id: it.localId, comfyInstanceId: comfyInstanceId() }),
+            body: JSON.stringify({
+              ...(it.outputUrl ? { outputUrl: it.outputUrl } : { id: it.localId }),
+              comfyInstanceId: comfyInstanceId(),
+            }),
           });
           const data = await res.json();
           if (!res.ok || !data.data?.filename)
@@ -6465,7 +6595,8 @@ function prefillComfyControls(values) {
 async function restoreComfyMedia(entry) {
   const localIds = entry.mediaLocalIds || { image: entry.imageLocalIds || [] };
   const kinds = ["image", "video", "audio"];
-  if (!kinds.some((k) => (localIds[k] || []).length)) return;
+  const refSources = entry.input?.refSources || null; // fields that held History outputs
+  if (!kinds.some((k) => (localIds[k] || []).length) && !refSources) return;
   let saved = [];
   try {
     saved = await fetch("/api/images")
@@ -6485,6 +6616,21 @@ async function restoreComfyMedia(entry) {
       if (f.mediaKind !== kind || typeof f.setMedia !== "function") continue;
       f.setMedia(queue.slice(0, f.capacity || 1));
       queue = queue.slice(f.capacity || 1);
+    }
+  }
+  // A field that held History outputs gets its exact files back, in order.
+  if (refSources) {
+    for (const f of comfyFields) {
+      if (typeof f.setMedia !== "function" || !(f.mediaKey in refSources)) continue;
+      f.setMedia(
+        refSources[f.mediaKey]
+          .map((s) => {
+            if (s.outputUrl) return s;
+            const g = byId.get(s.id);
+            return g ? { id: g.id, url: g.localUrl, name: g.name } : null;
+          })
+          .filter(Boolean),
+      );
     }
   }
   // Re-apply the run's per-reference tails (absent on entries from before the
@@ -6620,6 +6766,14 @@ async function submitComfy() {
       if (allLoras.length) input.loras = allLoras; // store the full loadout (incl. disabled) for re-import
       if (wfMedia.length) input.workflowMedia = wfMedia; // the workflow's own media, as this run had it
       if (bypass.length) input.bypass = bypass;
+      // Fields holding a History output (＋ Img ref) record their files in order, since
+      // those aren't among the gallery ids Re-run / Re-import restore from.
+      const refSources = {};
+      for (const f of comfyFields) {
+        const s = typeof f.sources === "function" ? f.sources() : [];
+        if (s.some((x) => x.outputUrl)) refSources[f.mediaKey] = s;
+      }
+      if (Object.keys(refSources).length) input.refSources = refSources;
       if (Object.keys(templates).length) input.valueTemplates = templates; // Re-import restores the %tokens%
       if (typeof values.prompt === "string" && values.prompt.trim())
         input.prompt = values.prompt.trim();
@@ -9396,8 +9550,9 @@ function setCurrentDuration(seconds) {
 // What Save would store, read from the form on screen.
 function currentPromptDraft() {
   const snap = snapshotCarry();
+  // (A saved prompt keeps gallery files only — not History outputs used in place.)
   const refs = CARRY_KINDS.flatMap((kind) =>
-    (snap.media[kind] || []).map((m) => ({
+    (snap.media[kind] || []).filter((m) => m.id).map((m) => ({
       id: m.id,
       kind,
       name: m.name,
@@ -12048,6 +12203,21 @@ async function submitKieRuns(fromSaved, plan) {
     const s = fillRefs(sends[i], null);
     if (fromSaved) s.savedPrompt = savedPromptStamp(fromSaved); // History only, not sent to kie.ai
     if (hasPromptTokens(runs[i].text)) s.promptTemplate = runs[i].text; // History only: Re-import restores the %tokens%
+    // History only: each reference video's "use last N sec" (0 = whole clip), in order.
+    const vt = refItems.video.map((it) => (it.localId && it.tailSec > 0 ? it.tailSec : 0));
+    if (vt.some((t) => t > 0)) s.videoTails = vt;
+    // History only: a list holding a History output (＋ Img ref) records its files in
+    // order — those aren't among the gallery ids Re-run / Re-import restore from.
+    const srcs = {};
+    for (const [kind, items] of Object.entries(refItems)) {
+      if (!items.some((it) => it.outputUrl)) continue;
+      srcs[kind] = items.map((it) =>
+        it.outputUrl ? { outputUrl: it.outputUrl, name: it.name }
+        : it.localId ? { id: it.localId }
+        : { url: it.remoteUrl },
+      );
+    }
+    if (Object.keys(srcs).length) s.refSources = srcs;
     return s;
   };
   const projectId = activeProjectId; // pin now so a mid-run project switch can't misfile it
@@ -12981,6 +13151,14 @@ function historyRefMedia(entry) {
   );
   each(mli.video, input.reference_video_urls, "video");
   each(mli.audio, input.reference_audio_urls, "audio");
+  // History outputs used in place (＋ Img ref): not among the gallery ids above.
+  for (const list of Object.values(input.refSources || {})) {
+    for (const s of list || []) {
+      if (!s?.outputUrl) continue;
+      const kind = /\.(mp4|webm|mov|mkv)$/i.test(s.outputUrl) ? "video" : "image";
+      out.push({ kind, id: null, outputUrl: s.outputUrl, thumb: s.outputUrl, name: s.name || urlBasename(s.outputUrl) });
+    }
+  }
   return out;
 }
 
@@ -12990,6 +13168,7 @@ function historyRefMedia(entry) {
 // true on success, false if the field is full or a local file was required but the
 // reference is a remote-only URL.
 function addRefToPictureField(r) {
+  if (r.outputUrl) return !addOutputToPictureField({ url: r.outputUrl, name: r.name });
   const comfyActive =
     comfyControlsEl && !comfyControlsEl.classList.contains("hidden");
   const comfyImg =
@@ -13705,6 +13884,9 @@ function renderHistory(entries) {
         id: entry.id,
       });
       if (crop) main.appendChild(crop);
+      // …and go into the form's reference images, as the card's own file
+      const toImgRef = makeImageRefControl(entry, cropImages);
+      if (toImgRef) main.appendChild(toImgRef);
       menu.append(rerun, reimport);
     } else {
       main.append(rerun, reimport); // nothing to open: running it again is the point
@@ -14028,7 +14210,16 @@ async function applyEntry(entry) {
   for (const kind of ["image", "video", "audio", "firstFrame", "lastFrame"]) {
     lists[kind].items = [];
     const ids = localIds[kind] || [];
-    if (ids.length) {
+    const srcs = input.refSources?.[kind]; // the list held History outputs: exact files, in order
+    if (srcs) {
+      for (const s of srcs) {
+        if (s.outputUrl) lists[kind].addOutput({ url: s.outputUrl, name: s.name });
+        else if (s.id) {
+          const item = saved.find((i) => i.id === s.id);
+          if (item) lists[kind].addFromGallery(item);
+        } else if (s.url) lists[kind].addUrl(s.url);
+      }
+    } else if (ids.length) {
       // Prefer locally-saved files (their old hosted URLs may have expired).
       for (const id of ids) {
         const item = saved.find((i) => i.id === id);
@@ -14037,6 +14228,14 @@ async function applyEntry(entry) {
       }
     } else {
       for (const url of urlsByKind[kind]) lists[kind].addUrl(url);
+    }
+    // The run's per-video "use last N sec", by position (see storedInputFor).
+    if (kind === "video" && Array.isArray(input.videoTails) && ids.length) {
+      const byId = new Map(lists.video.items.map((it) => [it.localId, it]));
+      ids.forEach((id, i) => {
+        const it = byId.get(id);
+        if (it && input.videoTails[i] > 0) it.tailSec = Number(input.videoTails[i]);
+      });
     }
     lists[kind].render();
   }
