@@ -4510,12 +4510,89 @@ function makeComfyMedia(token, mediaKind) {
   };
 }
 
+// Live readouts a node section's `preview` asks for (node_types: group.preview), worked
+// out from that section's own controls and redrawn as they change. One so far:
+// "resolution" — the width × height a Resolution Selector outputs, shown in the
+// section and beside its title (so it reads while collapsed).
+function attachComfyPreviews(tokens) {
+  const specs = new Map(); // group key → { spec, names: { inputKey → control name } }
+  for (const t of tokens) {
+    const spec = t.group?.preview;
+    if (!spec) continue;
+    const key = String(t.group.key);
+    const s = specs.get(key) || { spec, names: {} };
+    if (t.inputKey) s.names[t.inputKey] = t.name;
+    specs.set(key, s);
+  }
+  for (const [key, { spec, names }] of specs) {
+    const details = comfyControlsEl.querySelector(`details[data-group-key="${CSS.escape(key)}"]`);
+    const body = details?.querySelector(".comfy-node-group-body");
+    // Offline tokens carry no input keys, so there's nothing to compute from.
+    if (!body || spec.kind !== "resolution" || !names[spec.megapixels]) continue;
+    const read = (input, fallback) => {
+      const f = comfyFields.find((x) => x.name === names[spec[input]]);
+      const v = f && typeof f.peek === "function" ? f.peek() : undefined;
+      return v === undefined || v === "" ? fallback : v;
+    };
+    const line = document.createElement("p");
+    line.className = "comfy-preview";
+    line.style.gridColumn = "span 12";
+    body.appendChild(line);
+    const badge = document.createElement("span");
+    badge.className = "comfy-preview-badge";
+    details.querySelector("summary")?.firstChild?.after(badge);
+    const update = () => {
+      const r = resolutionSelectorSize(
+        read("aspect_ratio", "1:1"),
+        Number(read("megapixels", 1)),
+        Number(read("multiple", 8)),
+      );
+      line.textContent =
+        r ? `Output: ${r.width} × ${r.height} (${((r.width * r.height) / 1048576).toFixed(2)} MP)`
+        : "Output: pick an aspect ratio and megapixels";
+      badge.textContent = r ? ` · ${r.width} × ${r.height}` : "";
+    };
+    body.addEventListener("input", update);
+    body.addEventListener("change", update);
+    details.addEventListener("click", (e) => {
+      if (e.target.closest(".comfy-group-reset")) setTimeout(update, 0); // Reset rewrites the fields
+    });
+    update();
+    comfyPreviewUpdaters.push(update);
+  }
+}
+// Redrawn after saved settings / a re-import fill the fields (prefillComfyControls).
+let comfyPreviewUpdaters = [];
+
+// ComfyUI's Resolution Selector (comfy_extras/nodes_resolution.py): the ratio scaled
+// to `megapixels` × 1024², each side rounded to the nearest `multiple` with Python's
+// round (halves go to the even number). null when the ratio can't be read.
+function resolutionSelectorSize(aspect, megapixels, multiple) {
+  const m = String(aspect).match(/(\d+(?:\.\d+)?)\s*:\s*(\d+(?:\.\d+)?)/);
+  if (!m || !(megapixels > 0)) return null;
+  const w = Number(m[1]);
+  const h = Number(m[2]);
+  const step = multiple > 0 ? multiple : 8;
+  const scale = Math.sqrt((megapixels * 1024 * 1024) / (w * h));
+  const roundHalfEven = (x) => {
+    const f = Math.floor(x);
+    const d = x - f;
+    if (Math.abs(d - 0.5) < 1e-9) return f % 2 === 0 ? f : f + 1;
+    return Math.round(x);
+  };
+  return {
+    width: roundHalfEven((w * scale) / step) * step,
+    height: roundHalfEven((h * scale) / step) * step,
+  };
+}
+
 // Render the controls for the selected workflow.
 let comfyRenderSeq = 0;
 async function renderComfyControls() {
   const seq = ++comfyRenderSeq;
   comfyControlsEl.innerHTML = "";
   comfyFields = [];
+  comfyPreviewUpdaters = [];
   comfyDefaultNotes.clear();
   comfyLoraControl = null;
   comfyMediaControl = null;
@@ -4810,6 +4887,7 @@ async function renderComfyControls() {
   for (const [key, btn] of groupResets) {
     btn.hidden = !comfyFields.some((f) => f.groupKey === key && f.reset);
   }
+  attachComfyPreviews(tokens);
 
   // "ComfyUI Settings" drawer (collapsed): the installed-file/choice pickers from
   // /object_info (model, VAE, CLIP, sampler…) plus the dynamic LoRA section — kept
@@ -6978,6 +7056,7 @@ function prefillComfyControls(values) {
     if (after && typeof f.setAfter === "function" && f.name in after)
       f.setAfter(after[f.name]);
   }
+  for (const update of comfyPreviewUpdaters) update(); // the values just changed under them
 }
 
 // Re-populate a ComfyUI workflow's media fields from a saved History entry's

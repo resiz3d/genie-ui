@@ -348,6 +348,9 @@ export function recognizeWorkflow(workflow, nodeTypes) {
       key: String(nodeId),
       label: variant.group || entry.display_name || node._meta?.title || node.class_type,
       collapsed: variant.collapsed === true, // section starts closed (loaders, save node, …)
+      // A live readout the UI computes from this section's controls (the size a
+      // Resolution Selector will output) — `{ kind, …input keys }`, see node_types/README.
+      ...(variant.preview ? { preview: variant.preview } : {}),
     };
 
     for (const [inputKey, spec] of Object.entries(variant.expose)) {

@@ -6586,3 +6586,15 @@ button.wf-danger:not(.btn-secondary) {
   align-items: center;
   gap: 0.3rem;
 }
+/* A node section's live readout (Resolution Selector's output size). */
+.comfy-preview {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--muted, inherit);
+  font-variant-numeric: tabular-nums;
+}
+.comfy-preview-badge {
+  font-weight: normal;
+  opacity: 0.75;
+  font-variant-numeric: tabular-nums;
+}

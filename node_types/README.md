@@ -78,6 +78,13 @@ user drop-in can override a shipped entry — the same shipped-vs-yours idea as
   label falls back to the entry's `display_name`, then the node's `_meta.title`,
   then the `class_type`. (Grouped sections are shown only for recognized/raw
   workflows; tokenized workflows keep the flat form.)
+- **`preview`** (optional, per variant) adds a live readout to the section, worked
+  out in the browser from the section's own controls and redrawn as they change; it
+  also shows beside the section's title, so it reads while collapsed. Its `kind`
+  picks the calculation and the other keys name the inputs it reads. The one kind so
+  far is `"resolution"` — `{ "kind": "resolution", "aspect_ratio": "…", "megapixels":
+  "…", "multiple": "…" }` — the width × height a Resolution Selector will output (see
+  `resolution.json`).
 - **`expose`** maps a node **input key** → a control. Only listed inputs become
   controls; everything else is left alone. If an exposed input is wired from
   another node, recognition follows the link to the editable value (see

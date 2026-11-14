@@ -1,5 +1,5 @@
 {
-  "_comment": "ImageScaleToTotalPixels (core) resizes frames to a megapixel budget keeping their aspect, rounded to resolution_steps; MiniMax H3 Video Upscale uses it to pick the size the source video is encoded at. ResolutionSelector (a common custom node) sets output size from an aspect-ratio preset + a megapixel budget, emitting width/height. `multiple` is the rounding step for width/height (e.g. 16 allows 1280×720; some models need 32). aspect_ratio populates from /object_info when the node is installed; otherwise it stays an editable text field.",
+  "_comment": "ImageScaleToTotalPixels (core) resizes frames to a megapixel budget keeping their aspect, rounded to resolution_steps; MiniMax H3 Video Upscale uses it to pick the size the source video is encoded at. ResolutionSelector (a common custom node) sets output size from an aspect-ratio preset + a megapixel budget, emitting width/height. `multiple` is the rounding step for width/height (e.g. 16 allows 1280×720; some models need 32). aspect_ratio populates from /object_info when the node is installed; otherwise it stays an editable text field. Its `preview` shows the width × height the node will output under the section's controls, worked out the node's way (the ratio scaled to the megapixels, each side rounded to the nearest multiple), updating as they change.",
   "nodes": {
     "ResolutionSelector": {
       "display_name": "Resolution Selector",
@@ -8,6 +8,7 @@
           {
             "match": [{ "when": "any" }],
             "group": "Resolution",
+            "preview": { "kind": "resolution", "aspect_ratio": "aspect_ratio", "megapixels": "megapixels", "multiple": "multiple" },
             "expose": {
               "aspect_ratio": { "name": "aspect_ratio", "label": "Aspect ratio", "control": "combo",  "width": "1/2", "order": 20 },
               "megapixels":   { "name": "megapixels",   "label": "Megapixels",   "control": "number", "width": "1/2", "order": 21 },
