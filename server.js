@@ -300,6 +300,70 @@ const COMFY_PREVIEW_METHOD = (
 ).toLowerCase();
 const PREVIEW_METHODS = new Set(["none", "auto", "latent2rgb", "taesd"]);
 
+// "Preview: HQ" (👁 "kj") on a video run: KJNodes' Model Preview Override goes on the
+// model wire into every sampler / guider (one per distinct model source), so the run
+// card shows its preview — larger, true-colour with a tiny VAE, and a looping clip
+// when the 👁 frames menu asks for one — even though the workflow doesn't carry the
+// node. Only for a graph that saves a video and has a sampler, and only when ComfyUI
+// has KJNodes; otherwise nothing changes and the stock preview is used. The tiny VAE
+// is taeh3 for MiniMax H3 (the one video tiny VAE that matches a model GENie runs),
+// else none, which previews with the model's own latent colours. Returns whether it
+// added any.
+const KJ_SAMPLER_CLASSES = /^(KSampler|KSamplerAdvanced|SamplerCustom)$|Guider$/;
+const KJ_VIDEO_OUTPUTS = new Set([
+  "SaveVideo",
+  "CreateVideo",
+  "VHS_VideoCombine",
+  "SaveWEBM",
+  "SaveAnimatedWEBP",
+  "SaveAnimatedPNG",
+]);
+async function injectKjPreview(workflow, comfyUrl, { animated = false, fps = 12 } = {}) {
+  const nodes = Object.values(workflow);
+  if (!nodes.some((n) => KJ_VIDEO_OUTPUTS.has(n?.class_type))) return false;
+  let info = null;
+  try {
+    info = await getObjectInfo(false, comfyUrl);
+  } catch {
+    return false; // unreachable — queueing reports that itself
+  }
+  const spec = info?.ModelPreviewOverrideKJ;
+  if (!spec) return false;
+  const tinyChoices = spec.input?.optional?.tiny_vae?.[1]?.options || [];
+  const isH3 = nodes.some((n) => /minimax_?h3/i.test(n?.class_type || ""));
+  const tinyVae =
+    isH3 && tinyChoices.includes("taeh3.safetensors") ? "taeh3.safetensors" : "none";
+  let next = Math.max(0, ...Object.keys(workflow).map(Number).filter(Number.isFinite)) + 1;
+  const bySource = new Map(); // "id:slot" of the model feeding a sampler → override id
+  for (const n of nodes) {
+    if (!KJ_SAMPLER_CLASSES.test(n?.class_type || "")) continue;
+    const m = n.inputs?.model;
+    if (!Array.isArray(m) || m.length !== 2) continue;
+    const key = `${m[0]}:${m[1]}`;
+    let id = bySource.get(key);
+    if (!id) {
+      while (workflow[String(next)]) next++;
+      id = String(next++);
+      workflow[id] = {
+        class_type: "ModelPreviewOverrideKJ",
+        inputs: {
+          model: [m[0], m[1]],
+          max_resolution: 1024,
+          jpeg_quality: 80,
+          suppress_default_preview: true,
+          preview_frames: animated ? 1024 : 1, // it spreads that many over the latent's frames
+          preview_fps: Math.min(60, Math.max(1, Math.round(fps) || 12)),
+          tiny_vae: tinyVae,
+        },
+        _meta: { title: "Model Preview Override (GENie HQ preview)" },
+      };
+      bySource.set(key, id);
+    }
+    n.inputs.model = [id, 0];
+  }
+  return bySource.size > 0;
+}
+
 function comfyPreviewMethod(requested) {
   if (COMFY_PREVIEW_METHOD === "off" || COMFY_PREVIEW_METHOD === "none")
     return "none";
@@ -3263,6 +3327,7 @@ app.post("/api/comfy/generate", async (req, res) => {
     refVideoSeconds,
     previewMethod,
     previewEvery: previewEveryReq,
+    previewFps: previewFpsReq,
     continueFrom,
     references: providedRefs,
     workflowMedia: mediaState,
@@ -3277,9 +3342,14 @@ app.post("/api/comfy/generate", async (req, res) => {
   let continuationValues = null; // just the role tokens GENie filled, for the record
   let runValues = values || {};
   let promptEcho = null; // the node that reports the prompt as used (see comfyEnhancedPrompt)
+  let kjInjected = false; // "Preview: HQ" added a Model Preview Override (injectKjPreview)
   try {
     const wfText = fs.readFileSync(wfPath, "utf8");
     workflow = JSON.parse(wfText);
+    // A workflow with its own Model Preview Override keeps it — and its on/off box.
+    const ownsKjPreview = Object.values(workflow).some(
+      (n) => n?.class_type === "ModelPreviewOverrideKJ",
+    );
     // Token → node map from the untouched workflow: substitution erases the tokens,
     // and reference-video tails are addressed by token name.
     const tokenNodes = mapTokenNodes(workflow);
@@ -3377,6 +3447,11 @@ app.post("/api/comfy/generate", async (req, res) => {
         (l) => !l?.nodeId && l?.enabled !== false,
       ),
     );
+    if (String(previewMethod || "").toLowerCase() === "kj" && !ownsKjPreview)
+      kjInjected = await injectKjPreview(workflow, COMFYUI_URL, {
+        animated: Number(previewEveryReq) > 0,
+        fps: Number(previewFpsReq),
+      });
     passes = progressPasses(workflow, loadNodeTypes(NODE_TYPES_DIR)); // after values + bypass
   } catch (err) {
     return res
@@ -3399,7 +3474,7 @@ app.post("/api/comfy/generate", async (req, res) => {
   // latent2rgb — VideoHelperSuite decodes every frame on each step, and its TAESD
   // path isn't written for ComfyUI's video TAEs.
   const method = comfyPreviewMethod(previewMethod);
-  const every = method !== "none" && Number(previewEveryReq) > 0;
+  const every = method !== "none" && !kjInjected && Number(previewEveryReq) > 0; // HQ sends its own clip
   try {
     const r = await comfyFetch(`${COMFYUI_URL}/prompt`, {
       method: "POST",

@@ -10,6 +10,27 @@ heading for that version with the date, commit, then tag the commit `vX.Y.Z`.
 
 ## [Unreleased]
 
+## [1.6.2] - 2026-11-14
+
+### Added
+
+- **Preview: HQ for every local video run.** A new choice in the 👁 preview menu
+  beside Generate. On a video run whose workflow doesn't have KJNodes' Model Preview
+  Override, GENie adds it for that run, on the model going into each sampler. The run
+  card then shows its larger preview, and a looping clip when the frames menu beside
+  it isn't on *First frame* (played at the fps chosen there). MiniMax H3 runs preview
+  in true colour with the `taeh3` tiny VAE; other models use their latent colours. A
+  workflow that has the node keeps its own, with its own on/off box. Image runs, and a
+  ComfyUI without ComfyUI-KJNodes, get the usual fast preview.
+- **Output size in the Resolution and Encode Size sections.** The Resolution
+  Selector's section shows the width × height it will output, worked out the way
+  ComfyUI does, and so does *Scale Image to Total Pixels* (Encode Size in MiniMax H3
+  Video Upscale), from the size of the video in the form. It updates as you change
+  the settings, and shows beside the section title too.
+- **RelayVSR and RelayVSR DLSS5 default workflows.** Video upscalers that ship with
+  RelayVSR's own model and VAE names and an empty source video. The DLSS5 one adds
+  DLSS 5, RTX Frame Generation and RTX Video HDR, each with an on/off box.
+
 ## [1.6.1] - 2026-11-14
 
 ### Added
@@ -1052,7 +1073,8 @@ second path.
 - A failed run's long error message (e.g. kie.ai's "Timeout while downloading url=…")
   took over its History card and crushed the buttons beside it.
 
-[Unreleased]: https://github.com/resiz3d/genie-ui/compare/v1.6.1...HEAD
+[Unreleased]: https://github.com/resiz3d/genie-ui/compare/v1.6.2...HEAD
+[1.6.2]: https://github.com/resiz3d/genie-ui/compare/v1.6.1...v1.6.2
 [1.6.1]: https://github.com/resiz3d/genie-ui/compare/v1.6.0...v1.6.1
 [1.6.0]: https://github.com/resiz3d/genie-ui/compare/v1.5.1...v1.6.0
 [1.5.1]: https://github.com/resiz3d/genie-ui/compare/v1.5.0...v1.5.1

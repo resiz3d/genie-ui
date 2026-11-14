@@ -81,10 +81,14 @@ user drop-in can override a shipped entry — the same shipped-vs-yours idea as
 - **`preview`** (optional, per variant) adds a live readout to the section, worked
   out in the browser from the section's own controls and redrawn as they change; it
   also shows beside the section's title, so it reads while collapsed. Its `kind`
-  picks the calculation and the other keys name the inputs it reads. The one kind so
-  far is `"resolution"` — `{ "kind": "resolution", "aspect_ratio": "…", "megapixels":
-  "…", "multiple": "…" }` — the width × height a Resolution Selector will output (see
-  `resolution.json`).
+  picks the calculation and the other keys name the inputs it reads (see
+  `resolution.json`):
+  - `"resolution"` — `{ "kind", "aspect_ratio", "megapixels", "multiple" }`: the
+    width × height a Resolution Selector will output.
+  - `"scale_total_pixels"` — `{ "kind", "megapixels", "resolution_steps" }`: the size
+    Scale Image to Total Pixels resizes its source to. That depends on the source's
+    own size, read from the first file in the form's first video field (else image
+    field); until one is added it says so.
 - **`expose`** maps a node **input key** → a control. Only listed inputs become
   controls; everything else is left alone. If an exposed input is wired from
   another node, recognition follows the link to the editable value (see

@@ -276,9 +276,10 @@
             <select id="previewMethod">
               <option value="auto">Preview: fast</option>
               <option value="taesd">Preview: sharp</option>
+              <option value="kj" title="Video runs: KJNodes' Model Preview Override, added to the run when the workflow doesn't have it: a larger preview, and a looping clip with the frames setting beside this. Needs ComfyUI-KJNodes; other runs use the fast preview.">Preview: HQ</option>
               <option value="off">Preview: off</option>
             </select>
-            <select id="previewEvery" title="Video runs: loop the preview frames as a clip instead of showing only the first. While it samples there is about one preview frame per 4 frames of the finished video (60 for a 240-frame video); the rest only exist once it's decoded at the end. Needs ComfyUI-VideoHelperSuite; always uses the fast preview.">
+            <select id="previewEvery" title="Video runs: loop the preview frames as a clip instead of showing only the first. While it samples there is about one preview frame per 4 frames of the finished video (60 for a 240-frame video); the rest only exist once it's decoded at the end. Needs ComfyUI-VideoHelperSuite and uses the fast preview — except with Preview: HQ, where KJNodes draws the clip.">
               <option value="0">First frame</option>
               <option value="1">All frames</option>
               <option value="2">Every 2 frames</option>

@@ -4198,6 +4198,7 @@ function comfyRefTags() {
 // it must not itself trigger a re-render.
 function refreshComfyRefTags() {
   syncComfyDefaultNotes(); // what the run falls back to depends on what's filled
+  for (const update of comfyPreviewUpdaters) update(); // a size read from the source file
   if (!comfyRefLabelScheme) return;
   for (const [f, tags] of comfyRefTags()) {
     const labels = f.el.querySelectorAll(".dropzone .thumb.ready .img-label");
@@ -4511,9 +4512,12 @@ function makeComfyMedia(token, mediaKind) {
 }
 
 // Live readouts a node section's `preview` asks for (node_types: group.preview), worked
-// out from that section's own controls and redrawn as they change. One so far:
-// "resolution" — the width × height a Resolution Selector outputs, shown in the
-// section and beside its title (so it reads while collapsed).
+// out from that section's own controls and redrawn as they change; shown in the
+// section and beside its title (so it reads while collapsed). Kinds:
+// - "resolution": the width × height a Resolution Selector outputs.
+// - "scale_total_pixels": the size Scale Image to Total Pixels resizes the source to —
+//   which depends on the source's own size, read from the form's first video (else
+//   image) field, so it says so until one is added.
 function attachComfyPreviews(tokens) {
   const specs = new Map(); // group key → { spec, names: { inputKey → control name } }
   for (const t of tokens) {
@@ -4527,8 +4531,9 @@ function attachComfyPreviews(tokens) {
   for (const [key, { spec, names }] of specs) {
     const details = comfyControlsEl.querySelector(`details[data-group-key="${CSS.escape(key)}"]`);
     const body = details?.querySelector(".comfy-node-group-body");
+    const compute = COMFY_PREVIEWS[spec.kind];
     // Offline tokens carry no input keys, so there's nothing to compute from.
-    if (!body || spec.kind !== "resolution" || !names[spec.megapixels]) continue;
+    if (!body || !compute || !names[spec.megapixels]) continue;
     const read = (input, fallback) => {
       const f = comfyFields.find((x) => x.name === names[spec[input]]);
       const v = f && typeof f.peek === "function" ? f.peek() : undefined;
@@ -4541,16 +4546,13 @@ function attachComfyPreviews(tokens) {
     const badge = document.createElement("span");
     badge.className = "comfy-preview-badge";
     details.querySelector("summary")?.firstChild?.after(badge);
-    const update = () => {
-      const r = resolutionSelectorSize(
-        read("aspect_ratio", "1:1"),
-        Number(read("megapixels", 1)),
-        Number(read("multiple", 8)),
-      );
-      line.textContent =
-        r ? `Output: ${r.width} × ${r.height} (${((r.width * r.height) / 1048576).toFixed(2)} MP)`
-        : "Output: pick an aspect ratio and megapixels";
-      badge.textContent = r ? ` · ${r.width} × ${r.height}` : "";
+    let seq = 0;
+    const update = async () => {
+      const mine = ++seq;
+      const r = await compute(read);
+      if (mine !== seq || !line.isConnected) return; // a newer change, or the form was redrawn
+      line.textContent = r.text;
+      badge.textContent = r.size ? ` · ${r.size.width} × ${r.size.height}` : "";
     };
     body.addEventListener("input", update);
     body.addEventListener("change", update);
@@ -4561,8 +4563,113 @@ function attachComfyPreviews(tokens) {
     comfyPreviewUpdaters.push(update);
   }
 }
-// Redrawn after saved settings / a re-import fill the fields (prefillComfyControls).
+// Redrawn after saved settings fill the fields (prefillComfyControls) and when a media
+// field's files change (refreshComfyRefTags).
 let comfyPreviewUpdaters = [];
+
+const mpText = (sz) =>
+  `${sz.width} × ${sz.height} (${((sz.width * sz.height) / 1048576).toFixed(2)} MP)`;
+const COMFY_PREVIEWS = {
+  resolution: async (read) => {
+    const size = resolutionSelectorSize(
+      read("aspect_ratio", "1:1"),
+      Number(read("megapixels", 1)),
+      Number(read("multiple", 8)),
+    );
+    return {
+      size,
+      text: size ? `Output: ${mpText(size)}` : "Output: pick an aspect ratio and megapixels",
+    };
+  },
+  scale_total_pixels: async (read) => {
+    const src = comfySourceMedia();
+    if (!src)
+      return {
+        size: null,
+        text: `Size: add a source ${comfyHasMedia("video") ? "video" : "image"} to see it`,
+      };
+    const from = await mediaPixelSize(src.url, src.kind);
+    if (!from) return { size: null, text: "Size: couldn't read the source's size" };
+    const size = scaleToTotalPixelsSize(
+      from,
+      Number(read("megapixels", 1)),
+      Number(read("resolution_steps", 1)),
+    );
+    return {
+      size,
+      text: size ?
+          `Size: ${mpText(size)} — from the ${src.kind}'s ${from.width} × ${from.height}`
+        : "Size: set the megapixels",
+    };
+  },
+};
+
+const comfyHasMedia = (kind) => comfyFields.some((f) => f.mediaKind === kind);
+// The first file in the form's first video field (else image field): { url, kind }.
+function comfySourceMedia() {
+  for (const kind of ["video", "image"]) {
+    for (const f of comfyFields) {
+      if (f.mediaKind !== kind) continue;
+      const url =
+        (typeof f.peekMedia === "function" && f.peekMedia()[0]?.url) ||
+        (typeof f.sources === "function" && f.sources()[0]?.outputUrl) ||
+        null;
+      if (url) return { url, kind };
+    }
+    if (comfyHasMedia(kind)) return null; // the source field is there, just empty
+  }
+  return null;
+}
+
+// A video's or image's pixel size from its metadata, cached per URL (null if unreadable).
+const mediaPixelSizes = new Map();
+function mediaPixelSize(url, kind) {
+  if (!mediaPixelSizes.has(url))
+    mediaPixelSizes.set(
+      url,
+      new Promise((resolve) => {
+        const done = (w, h) => resolve(w > 0 && h > 0 ? { width: w, height: h } : null);
+        if (kind === "image") {
+          const img = new Image();
+          img.onload = () => done(img.naturalWidth, img.naturalHeight);
+          img.onerror = () => done(0, 0);
+          img.src = url;
+          return;
+        }
+        const v = document.createElement("video");
+        v.preload = "metadata";
+        v.muted = true;
+        v.onloadedmetadata = () => {
+          done(v.videoWidth, v.videoHeight);
+          v.removeAttribute("src");
+          v.load();
+        };
+        v.onerror = () => done(0, 0);
+        setTimeout(() => done(0, 0), 15000); // a stalled load can't hold the readout forever
+        v.src = url;
+      }),
+    );
+  return mediaPixelSizes.get(url);
+}
+
+// ComfyUI's Scale Image to Total Pixels (comfy_extras/nodes_post_processing.py): the
+// source scaled to `megapixels` × 1024², keeping its aspect, each side rounded to the
+// nearest `steps` with Python's round.
+function scaleToTotalPixelsSize(from, megapixels, steps) {
+  if (!(megapixels > 0)) return null;
+  const step = steps > 0 ? steps : 1;
+  const scale = Math.sqrt((megapixels * 1024 * 1024) / (from.width * from.height));
+  return {
+    width: pyRound((from.width * scale) / step) * step,
+    height: pyRound((from.height * scale) / step) * step,
+  };
+}
+// Python's round(): halves go to the even number.
+function pyRound(x) {
+  const f = Math.floor(x);
+  if (Math.abs(x - f - 0.5) < 1e-9) return f % 2 === 0 ? f : f + 1;
+  return Math.round(x);
+}
 
 // ComfyUI's Resolution Selector (comfy_extras/nodes_resolution.py): the ratio scaled
 // to `megapixels` × 1024², each side rounded to the nearest `multiple` with Python's
@@ -4574,15 +4681,9 @@ function resolutionSelectorSize(aspect, megapixels, multiple) {
   const h = Number(m[2]);
   const step = multiple > 0 ? multiple : 8;
   const scale = Math.sqrt((megapixels * 1024 * 1024) / (w * h));
-  const roundHalfEven = (x) => {
-    const f = Math.floor(x);
-    const d = x - f;
-    if (Math.abs(d - 0.5) < 1e-9) return f % 2 === 0 ? f : f + 1;
-    return Math.round(x);
-  };
   return {
-    width: roundHalfEven((w * scale) / step) * step,
-    height: roundHalfEven((h * scale) / step) * step,
+    width: pyRound((w * scale) / step) * step,
+    height: pyRound((h * scale) / step) * step,
   };
 }
 
@@ -7324,6 +7425,7 @@ async function queueComfyRun(
         refVideoSeconds: 0,
         previewMethod,
         previewEvery,
+        previewFps, // "Preview: HQ" plays its clip at this rate
         ...(cont ?
           {
             continueFrom: {
