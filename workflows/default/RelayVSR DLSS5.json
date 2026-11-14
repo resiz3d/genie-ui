@@ -1,0 +1,315 @@
+{
+  "1": {
+    "inputs": {
+      "unet_name": "relayvsr_x2_lightx2v_int8_convrot.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "Load Diffusion Model"
+    }
+  },
+  "2": {
+    "inputs": {
+      "vae_name": "relayvsr_flash_vae_x2_fp32.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "Load VAE"
+    }
+  },
+  "3": {
+    "inputs": {
+      "attention": "comfy kitchen attention",
+      "model": [
+        "1",
+        0
+      ]
+    },
+    "class_type": "ModelAttentionBackend",
+    "_meta": {
+      "title": "Model Attention Backend"
+    }
+  },
+  "4": {
+    "inputs": {
+      "cfg": 8,
+      "model": [
+        "3",
+        0
+      ],
+      "positive": [
+        "9",
+        0
+      ],
+      "negative": [
+        "9",
+        0
+      ]
+    },
+    "class_type": "CFGGuider",
+    "_meta": {
+      "title": "CFG Guider"
+    }
+  },
+  "5": {
+    "inputs": {
+      "noise": [
+        "8",
+        0
+      ],
+      "guider": [
+        "4",
+        0
+      ],
+      "sampler": [
+        "10",
+        0
+      ],
+      "sigmas": [
+        "11",
+        0
+      ],
+      "latent_image": [
+        "9",
+        1
+      ]
+    },
+    "class_type": "SamplerCustomAdvanced",
+    "_meta": {
+      "title": "SamplerCustomAdvanced"
+    }
+  },
+  "6": {
+    "inputs": {
+      "detail": 1,
+      "vae": [
+        "2",
+        0
+      ],
+      "samples": [
+        "5",
+        0
+      ],
+      "images": [
+        "16",
+        0
+      ]
+    },
+    "class_type": "VSRDecode",
+    "_meta": {
+      "title": "VSR Decode"
+    }
+  },
+  "7": {
+    "inputs": {
+      "contrast": 100,
+      "saturation": 100,
+      "middle_gray": 50,
+      "luminance": 650,
+      "debanding": true,
+      "output_colorspace": "HDR",
+      "images": [
+        "6",
+        0
+      ]
+    },
+    "class_type": "RTXTrueHDR",
+    "_meta": {
+      "title": "RTX Video HDR"
+    }
+  },
+  "8": {
+    "inputs": {
+      "noise_seed": 42
+    },
+    "class_type": "RandomNoise",
+    "_meta": {
+      "title": "RandomNoise"
+    }
+  },
+  "9": {
+    "inputs": {
+      "model": [
+        "3",
+        0
+      ],
+      "images": [
+        "16",
+        0
+      ]
+    },
+    "class_type": "RelayVSRConditioning",
+    "_meta": {
+      "title": "RelayVSRConditioning"
+    }
+  },
+  "10": {
+    "inputs": {
+      "sampler_name": "euler"
+    },
+    "class_type": "KSamplerSelect",
+    "_meta": {
+      "title": "KSamplerSelect"
+    }
+  },
+  "11": {
+    "inputs": {
+      "scheduler": "simple",
+      "steps": 4,
+      "denoise": 1,
+      "model": [
+        "3",
+        0
+      ]
+    },
+    "class_type": "BasicScheduler",
+    "_meta": {
+      "title": "BasicScheduler"
+    }
+  },
+  "12": {
+    "inputs": {
+      "value": 2
+    },
+    "class_type": "PrimitiveInt",
+    "_meta": {
+      "title": "Frame Multiplier"
+    }
+  },
+  "14": {
+    "inputs": {
+      "generation_type": "frame rate multiplier",
+      "generation_type.multiplier": [
+        "12",
+        0
+      ],
+      "mode": "MEDIUM",
+      "automatic_shot_change_detection": true,
+      "shot_change": false,
+      "image_encoding": "8-bit RGB",
+      "images": [
+        "27",
+        0
+      ]
+    },
+    "class_type": "RTXVideoFrameGeneration",
+    "_meta": {
+      "title": "RTX Video Frame Generation"
+    }
+  },
+  "15": {
+    "inputs": {
+      "upscaling_mode": "1x (DLAA / native)",
+      "nr_preset": "Default",
+      "nr_style": "Default",
+      "nr_intensity": 1,
+      "local_tone_strength": 1,
+      "local_structure_strength": 1.5,
+      "skin_structure_strength": 2,
+      "automatic_mask": true,
+      "dlss_model_preset": "Default",
+      "motion": "auto",
+      "scene_change_threshold": 0.24,
+      "warmup_frames": 0,
+      "runtime_dir": ""
+    },
+    "class_type": "DLSS5Settings",
+    "_meta": {
+      "title": "DLSS5 Settings",
+      "bypass_with": "16"
+    }
+  },
+  "16": {
+    "inputs": {
+      "verify_neural_rendering": true,
+      "images": [
+        "14",
+        0
+      ],
+      "settings": [
+        "15",
+        0
+      ]
+    },
+    "class_type": "DLSS5EnhanceImages",
+    "_meta": {
+      "title": "DLSS5 Enhance Images"
+    }
+  },
+  "17": {
+    "inputs": {
+      "video_info": [
+        "27",
+        3
+      ]
+    },
+    "class_type": "VHS_VideoInfo",
+    "_meta": {
+      "title": "Video Info 🎥🅥🅗🅢"
+    }
+  },
+  "18": {
+    "inputs": {
+      "expression": "a*b",
+      "values.a": [
+        "17",
+        5
+      ],
+      "values.b": [
+        "12",
+        0
+      ]
+    },
+    "class_type": "ComfyMathExpression",
+    "_meta": {
+      "title": "Math Expression",
+      "bypass_with": "14",
+      "bypass_passthrough": "values.a"
+    }
+  },
+  "26": {
+    "inputs": {
+      "frame_rate": [
+        "18",
+        0
+      ],
+      "loop_count": 0,
+      "filename_prefix": "RelayVSR/Upscaled",
+      "format": "video/h265-mp4",
+      "pix_fmt": "yuv420p10le",
+      "crf": 22,
+      "save_metadata": true,
+      "pingpong": false,
+      "save_output": true,
+      "images": [
+        "7",
+        0
+      ],
+      "audio": [
+        "27",
+        2
+      ]
+    },
+    "class_type": "VHS_VideoCombine",
+    "_meta": {
+      "title": "Video Combine 🎥🅥🅗🅢"
+    }
+  },
+  "27": {
+    "inputs": {
+      "video": "",
+      "force_rate": 0,
+      "custom_width": 0,
+      "custom_height": 0,
+      "frame_load_cap": 0,
+      "skip_first_frames": 0,
+      "select_every_nth": 1,
+      "format": "AnimateDiff"
+    },
+    "class_type": "VHS_LoadVideo",
+    "_meta": {
+      "title": "Load Video (Upload) 🎥🅥🅗🅢"
+    }
+  }
+}

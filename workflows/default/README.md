@@ -21,6 +21,7 @@ reference, these were built against:
 | MiniMax H3 Ref2Video (Basic) | `minimax_h3_fastvideo_vsa_datafree_1300step_4step_int8_convrot` | `qwen3vl_32b_minimax_h3_nvfp4_awq` | `minimax_h3_video_vae_fp16` + `minimax_h3_audio_vae_fp32` |
 | MiniMax H3 Ref2Video (Advanced) | `Minimax-h3_Singularity_ref2va_Pruned_v1.3_int8` | `qwen3vl_32b_minimax_h3_nvfp4_awq` | `minimax_h3_video_vae_fp16` + `minimax_h3_audio_vae_fp32` |
 | Qwen Image 2.1 Image Edit | `qwen_image_2.1_int8_convrot` | `qwen3vl_8b_int8_convrot` | `qwen_image_2.1_vae_bf16` |
+| RelayVSR / RelayVSR DLSS5 | `relayvsr_x2_lightx2v_int8_convrot` | — | `relayvsr_flash_vae_x2_fp32` |
 | Z-Image Turbo | a Z-Image Turbo checkpoint (e.g. `cyberrealisticZImage_v10`) | `qwen3_4b_fp8_scaled` | `ae` |
 
 The Qwen Image 2.1 edit workflow is the exception: it keeps its four model file names
@@ -29,6 +30,12 @@ picker left on the first file in the list fails in a way that's hard to read. If
 don't have a file it names, pick your own in the form. It also loads a second text model for its **prompt
 enhancer** — `qwen3.5_9b_qwen_image_2.1_pe_i2i.int8_convrot`, picked under *Prompt
 Enhancer Model (LLM)*. It's only loaded while the enhancer is switched on.
+
+The two RelayVSR video upscalers also keep their model and VAE names, since RelayVSR
+only runs with its own pair; only the source video is empty. **RelayVSR DLSS5** adds
+DLSS 5 enhancement (the ComfyUI-DLSS5-Enhancer custom node), RTX Video Frame Generation
+and RTX Video HDR (comfyui_nvidia_rtx_nodes), each with an on/off box in the form; the
+output frame rate follows the frame-generation multiplier.
 
 Any comparable model works — the table is a starting point, not a requirement.
 A workflow of your own that names a file you do have still selects it, even when
