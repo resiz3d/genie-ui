@@ -10,6 +10,16 @@ heading for that version with the date, commit, then tag the commit `vX.Y.Z`.
 
 ## [Unreleased]
 
+### Added
+
+- **Preview: HQ settings in the form.** With Preview: HQ picked, a video workflow
+  that doesn't have the Model Preview Override gets a **Live Preview (HQ)** section:
+  tiny VAE, max size, JPEG quality, clip fps, frames per preview and *Hide the stock
+  preview*. A note there says the node is added to the run and the workflow file isn't
+  changed. Frames and fps left at 0 follow the 👁 menu beside Generate. The settings
+  are saved per workflow like the rest of the form, and History card upscales use
+  them too.
+
 ## [1.6.2] - 2026-11-14
 
 ### Added

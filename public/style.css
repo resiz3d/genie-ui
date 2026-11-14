@@ -6598,3 +6598,8 @@ button.wf-danger:not(.btn-secondary) {
   opacity: 0.75;
   font-variant-numeric: tabular-nums;
 }
+.comfy-group-note {
+  margin: 0;
+  font-size: 0.8rem;
+  line-height: 1.4;
+}

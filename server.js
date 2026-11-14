@@ -302,13 +302,14 @@ const PREVIEW_METHODS = new Set(["none", "auto", "latent2rgb", "taesd"]);
 
 // "Preview: HQ" (👁 "kj") on a video run: KJNodes' Model Preview Override goes on the
 // model wire into every sampler / guider (one per distinct model source), so the run
-// card shows its preview — larger, true-colour with a tiny VAE, and a looping clip
-// when the 👁 frames menu asks for one — even though the workflow doesn't carry the
-// node. Only for a graph that saves a video and has a sampler, and only when ComfyUI
-// has KJNodes; otherwise nothing changes and the stock preview is used. The tiny VAE
-// is taeh3 for MiniMax H3 (the one video tiny VAE that matches a model GENie runs),
-// else none, which previews with the model's own latent colours. Returns whether it
-// added any.
+// card shows its preview — larger, true-colour with a tiny VAE, and a looping clip —
+// even though the workflow doesn't carry the node. Only for a graph that saves a video
+// and has a sampler, without an override of its own, and only when ComfyUI has
+// KJNodes; otherwise nothing changes and the stock preview is used.
+// Its settings are the form's "Live Preview (HQ)" section (kjPreviewTokens), which
+// shows while HQ is picked; anything not set falls back: the tiny VAE to taeh3 for
+// MiniMax H3 (the one video tiny VAE that matches a model GENie runs) else none, and
+// frames / fps (0) to the 👁 frames menu beside Generate.
 const KJ_SAMPLER_CLASSES = /^(KSampler|KSamplerAdvanced|SamplerCustom)$|Guider$/;
 const KJ_VIDEO_OUTPUTS = new Set([
   "SaveVideo",
@@ -318,9 +319,67 @@ const KJ_VIDEO_OUTPUTS = new Set([
   "SaveAnimatedWEBP",
   "SaveAnimatedPNG",
 ]);
-async function injectKjPreview(workflow, comfyUrl, { animated = false, fps = 12 } = {}) {
-  const nodes = Object.values(workflow);
+// Whether HQ would add the override to this (untouched) workflow.
+function kjPreviewApplies(workflow) {
+  const nodes = Object.values(workflow || {});
+  if (nodes.some((n) => n?.class_type === "ModelPreviewOverrideKJ")) return false; // it has its own
   if (!nodes.some((n) => KJ_VIDEO_OUTPUTS.has(n?.class_type))) return false;
+  return nodes.some(
+    (n) =>
+      KJ_SAMPLER_CLASSES.test(n?.class_type || "") &&
+      Array.isArray(n.inputs?.model) &&
+      n.inputs.model.length === 2,
+  );
+}
+function kjTinyVaeDefault(workflow, spec) {
+  const choices = spec?.input?.optional?.tiny_vae?.[1]?.options || [];
+  const isH3 = Object.values(workflow || {}).some((n) => /minimax_?h3/i.test(n?.class_type || ""));
+  return isH3 && choices.includes("taeh3.safetensors") ? "taeh3.safetensors" : "none";
+}
+// The "Live Preview (HQ)" section's controls, named like the section a workflow with
+// its own override shows (node_types/minimax_h3_upscale.json), so the saved values and
+// the form code are shared. `nodeMap` gets where /object_info describes each, for the
+// usual enrichment; frames and fps point nowhere so 0 ("follow the 👁 menu") isn't
+// held to the node's minimum of 1.
+const KJ_PREVIEW_GROUP = {
+  key: "__kjpreview",
+  label: "Live Preview (HQ)",
+  collapsed: true,
+  note:
+    "Added on the fly by Preview: HQ. This workflow doesn't have KJNodes' Model Preview Override, so GENie adds it to each run while HQ is picked. The workflow file itself isn't changed.",
+};
+function kjPreviewTokens(workflow, spec, nodeMap) {
+  const t = (name, input, label, control, width, order, def) => {
+    nodeMap.set(name, { id: "__kjpreview", classType: "ModelPreviewOverrideKJ", input });
+    return {
+      name,
+      default: String(def),
+      options: [],
+      width,
+      order,
+      role: null,
+      type: null,
+      pin: false,
+      label,
+      control,
+      recommended: def,
+      group: KJ_PREVIEW_GROUP,
+      recognized: true,
+      inputKey: input,
+      nodeId: "__kjpreview",
+    };
+  };
+  return [
+    t("kjpreview_tiny_vae", "tiny_vae", "Tiny VAE (true-colour decode)", "combo", "full", 65.01, kjTinyVaeDefault(workflow, spec)),
+    t("kjpreview_max_resolution", "max_resolution", "Max size (px, 0 = full)", "number", "1/3", 65.02, 1024),
+    t("kjpreview_jpeg_quality", "jpeg_quality", "JPEG quality", "number", "1/3", 65.03, 80),
+    t("kjpreview_fps", "__menu_fps", "Clip fps (0 = 👁 menu)", "number", "1/3", 65.04, 0),
+    t("kjpreview_frames", "__menu_frames", "Frames per preview (1 = still, 0 = 👁 menu)", "number", "1/2", 65.05, 0),
+    t("kjpreview_suppress", "suppress_default_preview", "Hide the stock preview", "toggle", "1/2", 65.06, true),
+  ];
+}
+async function injectKjPreview(workflow, comfyUrl, { animated = false, fps = 12, values = {} } = {}) {
+  if (!kjPreviewApplies(workflow)) return false;
   let info = null;
   try {
     info = await getObjectInfo(false, comfyUrl);
@@ -329,13 +388,21 @@ async function injectKjPreview(workflow, comfyUrl, { animated = false, fps = 12 
   }
   const spec = info?.ModelPreviewOverrideKJ;
   if (!spec) return false;
+  const v = values || {};
+  const num = (x, lo, hi, dflt) => {
+    const n = Math.round(Number(x));
+    return Number.isFinite(n) && n >= lo ? Math.min(hi, n) : dflt;
+  };
   const tinyChoices = spec.input?.optional?.tiny_vae?.[1]?.options || [];
-  const isH3 = nodes.some((n) => /minimax_?h3/i.test(n?.class_type || ""));
   const tinyVae =
-    isH3 && tinyChoices.includes("taeh3.safetensors") ? "taeh3.safetensors" : "none";
+    tinyChoices.includes(v.kjpreview_tiny_vae) ? v.kjpreview_tiny_vae : kjTinyVaeDefault(workflow, spec);
+  const frames = num(v.kjpreview_frames, 1, 1024, animated ? 1024 : 1); // it spreads them over the latent's frames
+  const clipFps = num(v.kjpreview_fps, 1, 60, Math.min(60, Math.max(1, Math.round(fps) || 12)));
+  const suppress =
+    v.kjpreview_suppress === undefined ? true : v.kjpreview_suppress === true || v.kjpreview_suppress === "true";
   let next = Math.max(0, ...Object.keys(workflow).map(Number).filter(Number.isFinite)) + 1;
   const bySource = new Map(); // "id:slot" of the model feeding a sampler → override id
-  for (const n of nodes) {
+  for (const n of Object.values(workflow)) {
     if (!KJ_SAMPLER_CLASSES.test(n?.class_type || "")) continue;
     const m = n.inputs?.model;
     if (!Array.isArray(m) || m.length !== 2) continue;
@@ -348,11 +415,11 @@ async function injectKjPreview(workflow, comfyUrl, { animated = false, fps = 12 
         class_type: "ModelPreviewOverrideKJ",
         inputs: {
           model: [m[0], m[1]],
-          max_resolution: 1024,
-          jpeg_quality: 80,
-          suppress_default_preview: true,
-          preview_frames: animated ? 1024 : 1, // it spreads that many over the latent's frames
-          preview_fps: Math.min(60, Math.max(1, Math.round(fps) || 12)),
+          max_resolution: num(v.kjpreview_max_resolution, 0, 8192, 1024),
+          jpeg_quality: num(v.kjpreview_jpeg_quality, 30, 100, 80),
+          suppress_default_preview: suppress,
+          preview_frames: frames,
+          preview_fps: clipFps,
           tiny_vae: tinyVae,
         },
         _meta: { title: "Model Preview Override (GENie HQ preview)" },
@@ -1737,6 +1804,10 @@ app.get("/api/comfy/workflow-meta", async (req, res) => {
   for (const t of withKeys)
     if (t.swap?.side === "toggle" && !objectInfo?.[t.swap.to])
       missingSwap.add(t.swap.node);
+  // "Preview: HQ" picked (?hq=1) and this run would get the override added: its
+  // settings join the form as their own section.
+  if (req.query.hq === "1" && objectInfo?.ModelPreviewOverrideKJ && kjPreviewApplies(workflow))
+    withKeys.push(...kjPreviewTokens(workflow, objectInfo.ModelPreviewOverrideKJ, nodeMap));
   const enriched = withKeys
     .filter((t) => !(t.swap?.side === "alt" && missingSwap.has(t.swap.node)))
     .map((t) =>
@@ -1805,10 +1876,12 @@ app.put("/api/comfy/settings", (req, res) => {
     const data = req.body && typeof req.body === "object" ? req.body : {};
     // The form saves its whole state on every run; the auto-tag list is edited on its
     // own (PUT /api/comfy/auto-tags), so a form save that doesn't name it keeps it.
-    if (!("autoTags" in data)) {
-      const prev = readComfySettings(req.query.file);
-      if (Array.isArray(prev.autoTags)) data.autoTags = prev.autoTags;
-    }
+    const prev = readComfySettings(req.query.file);
+    if (!("autoTags" in data) && Array.isArray(prev.autoTags)) data.autoTags = prev.autoTags;
+    // The Live Preview (HQ) section is only in the form while HQ is picked, so a save
+    // made without it keeps what it last had.
+    for (const [k, v] of Object.entries(prev))
+      if (k.startsWith("kjpreview_") && !(k in data)) data[k] = v;
     writeJson(p, data);
     res.json({ code: 200, msg: "saved" });
   } catch (err) {
@@ -3346,10 +3419,9 @@ app.post("/api/comfy/generate", async (req, res) => {
   try {
     const wfText = fs.readFileSync(wfPath, "utf8");
     workflow = JSON.parse(wfText);
-    // A workflow with its own Model Preview Override keeps it — and its on/off box.
-    const ownsKjPreview = Object.values(workflow).some(
-      (n) => n?.class_type === "ModelPreviewOverrideKJ",
-    );
+    // Decided on the untouched workflow: one with its own override keeps it (and its
+    // on/off box), even when that box is off.
+    const kjApplies = kjPreviewApplies(workflow);
     // Token → node map from the untouched workflow: substitution erases the tokens,
     // and reference-video tails are addressed by token name.
     const tokenNodes = mapTokenNodes(workflow);
@@ -3447,10 +3519,11 @@ app.post("/api/comfy/generate", async (req, res) => {
         (l) => !l?.nodeId && l?.enabled !== false,
       ),
     );
-    if (String(previewMethod || "").toLowerCase() === "kj" && !ownsKjPreview)
+    if (String(previewMethod || "").toLowerCase() === "kj" && kjApplies)
       kjInjected = await injectKjPreview(workflow, COMFYUI_URL, {
         animated: Number(previewEveryReq) > 0,
         fps: Number(previewFpsReq),
+        values: runValues, // the form's Live Preview (HQ) section
       });
     passes = progressPasses(workflow, loadNodeTypes(NODE_TYPES_DIR)); // after values + bypass
   } catch (err) {

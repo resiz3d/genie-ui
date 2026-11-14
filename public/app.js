@@ -1776,11 +1776,20 @@ autoDraftMaxEl.addEventListener("change", () => {
 const previewMethodEl = document.getElementById("previewMethod");
 previewMethodEl.value = previewMethod;
 previewMethodEl.addEventListener("change", () => {
+  const wasHq = previewMethod === "kj";
   previewMethod = previewMethodEl.value;
   setPref(PREVIEW_KEY, previewMethod);
   if (previewMethod === "off") closePreviewStream();
   syncPreviewAnimControls();
+  // Preview: HQ brings its Live Preview section into a workflow that lacks the node
+  // (and takes it away again): redraw the form, keeping what's in it.
+  if (wasHq !== (previewMethod === "kj") && isComfy()) reloadComfyFormAfter(async () => {});
 });
+// The workflow-meta query: with Preview: HQ picked, ask for its Live Preview (HQ)
+// section too (the server adds it only where the run would get the node added).
+function comfyMetaQuery() {
+  return previewMethod === "kj" ? "&hq=1" : "";
+}
 const previewEveryEl = document.getElementById("previewEvery");
 const previewFpsEl = document.getElementById("previewFps");
 function syncPreviewAnimControls() {
@@ -2370,7 +2379,7 @@ async function queueSavedComfyRun(wf, { video, extra = {}, projectId }) {
     return r.ok && d.code === 200 ? d.data : null;
   };
   const [meta, saved] = await Promise.all([
-    getJson(`/api/comfy/workflow-meta?file=${encodeURIComponent(wf.file)}`),
+    getJson(`/api/comfy/workflow-meta?file=${encodeURIComponent(wf.file)}${comfyMetaQuery()}`),
     getJson(`/api/comfy/settings?file=${encodeURIComponent(wf.file)}`),
   ]);
   const s = saved || {};
@@ -4728,7 +4737,7 @@ async function renderComfyControls() {
   };
   try {
     const r = await fetch(
-      `/api/comfy/workflow-meta?file=${encodeURIComponent(wf.file)}`,
+      `/api/comfy/workflow-meta?file=${encodeURIComponent(wf.file)}${comfyMetaQuery()}`,
     );
     const d = await r.json().catch(() => ({}));
     if (r.ok && d.code === 200 && d.data) meta = d.data;
@@ -4889,6 +4898,14 @@ async function renderComfyControls() {
       groupResets.set(key, reset);
       body = document.createElement("div");
       body.className = "comfy-node-group-body comfy-grid";
+      // A section can say where it comes from (Preview: HQ's, added to the run).
+      if (token.group.note) {
+        const note = document.createElement("p");
+        note.className = "muted comfy-group-note";
+        note.style.gridColumn = "span 12";
+        note.textContent = token.group.note;
+        body.appendChild(note);
+      }
       if (passableIds.has(String(key)) && !bypassIds.has(String(key)))
         summary.appendChild(
           comfyBypassControl.headerToggle(key, (off) => {
