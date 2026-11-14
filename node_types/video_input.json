@@ -1,0 +1,23 @@
+{
+  "_comment": "VHS Load Video (VideoHelperSuite) as a workflow's own source video. Media is normally exposed by the node that imports it (a `references` collection), but a source loader whose outputs fan out — frames to the processing chain, audio and video_info to the output — has no single importing node, so its `video` input is exposed here directly: /object_info marks it uploadable, which gives the field the video upload dropzone (offline, the `video` in its name does). Loaders a reference collection wires (MiniMax H3's reference videos) are consumed by that collection and never reach this entry. The frame options are the loader's own trim/decimate settings; custom width/height stay as exported.",
+  "nodes": {
+    "VHS_LoadVideo": {
+      "display_name": "Load Video (VHS)",
+      "recognize": {
+        "variants": [
+          {
+            "match": [{ "when": "any" }],
+            "group": "Source Video",
+            "expose": {
+              "video":             { "name": "source_video",      "label": "Source Video",       "control": "media",  "width": "full", "order": 1 },
+              "frame_load_cap":    { "name": "frame_load_cap",    "label": "Frame cap (0 = all)", "control": "number", "width": "1/4",  "order": 2 },
+              "skip_first_frames": { "name": "skip_first_frames", "label": "Skip first frames",  "control": "number", "width": "1/4",  "order": 3 },
+              "select_every_nth":  { "name": "select_every_nth",  "label": "Every Nth frame",    "control": "number", "width": "1/4",  "order": 4 },
+              "force_rate":        { "name": "force_rate",        "label": "Force FPS (0 = source)", "control": "number", "width": "1/4", "order": 5 }
+            }
+          }
+        ]
+      }
+    }
+  }
+}

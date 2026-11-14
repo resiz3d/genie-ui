@@ -6,6 +6,8 @@
 //   💬 LLM               — the servers ✨ Build with AI, Revise, Analyze and Chat use (llm.js)
 //   ☁ Online providers  — API keys for cloud services: kie.ai, which is both an
 //                          image/video generator and an LLM, so its key lives here once
+//   ⇧ Video Upscalers   — which upscalers (kie.ai tiers, ComfyUI workflows) a History
+//                          card's ⇧ Upscale offers, and the default its button runs
 //
 // Each tab saves on its own. Everything is kept on the server (settings/*.json), so
 // nothing here needs .env — and API keys never come back to the browser.
@@ -35,6 +37,7 @@
     { id: "generation", icon: "🖼", label: "Image / Video" },
     { id: "llm", icon: "💬", label: "LLM" },
     { id: "providers", icon: "☁", label: "Online providers" },
+    { id: "upscalers", icon: "⇧", label: "Video Upscalers" },
   ];
   const TAB_KEY = "genie_settings_tab";
 
@@ -148,7 +151,7 @@
     link.type = "button";
     link.className = "link-btn llm-head-settings";
     link.textContent = "⚙ Settings";
-    link.title = "ComfyUI servers, LLM servers and online providers";
+    link.title = "ComfyUI servers, LLM servers, online providers and video upscalers";
     link.addEventListener("click", () => open());
     col.append(credits, link);
   }
@@ -429,5 +432,118 @@
     if ((pv.key.value.trim() || pv.clear.checked) && !(await saveProviders())) return;
     await select("llm");
     window.GENie.addLlmServer?.("kieai");
+  });
+
+  // ------------------------------------------------- ⇧ Video Upscalers tab
+  // Tick what History's ⇧ Upscale should offer — kie.ai's Video Upscaler at a tier, or
+  // any ComfyUI workflow (its video field gets the card's video) — and pick the one its
+  // button runs. The rest go in the menu beside it. The catalog comes from app.js
+  // (videoUpscalerCatalog); the picks live in settings/generation.json.
+  const up = pane("upscalers");
+  up.innerHTML = `
+    <p class="muted settings-intro">Choose what the <b>⇧ Upscale</b> button on a History video can use. The
+      <b>default</b> runs when you click the button; the others are in the menu next to it.</p>
+    <p class="muted settings-intro">A ComfyUI workflow upscales in the background: the card's video goes into its
+      video field and one run is queued with the settings you last ran it with in the form, so run it from the form
+      once first. The form itself isn't touched.</p>
+    <h4 class="llm-h4 settings-h4">Cloud · kie.ai</h4>
+    <div class="vu-list vu-cloud"></div>
+    <h4 class="llm-h4 settings-h4">Local · ComfyUI</h4>
+    <input type="search" class="vu-filter hidden" placeholder="Filter workflows…" aria-label="Filter workflows" />
+    <div class="vu-list vu-local"></div>
+    <p class="sp-save-warn hidden vu-err"></p>
+    <div class="modal-actions">
+      <button type="button" class="btn-secondary settings-cancel">Cancel</button>
+      <button type="button" class="vu-save">💾 Save</button>
+    </div>`;
+  const vu = {
+    cloud: $(".vu-cloud", up),
+    local: $(".vu-local", up),
+    filter: $(".vu-filter", up),
+    err: $(".vu-err", up),
+    save: $(".vu-save", up),
+  };
+  let vuRows = []; // [{ id, label, hint, cloud, on }] being edited
+  let vuDefault = null;
+
+  function renderUpscalers() {
+    const q = vu.filter.value.trim().toLowerCase();
+    vu.cloud.innerHTML = "";
+    vu.local.innerHTML = "";
+    for (const r of vuRows) {
+      if (!r.cloud && q && !r.label.toLowerCase().includes(q)) continue;
+      const row = document.createElement("div");
+      row.className = "vu-row" + (r.on ? " on" : "");
+      row.innerHTML = `
+        <label class="inline vu-use"><input type="checkbox" class="vu-on" />
+          <span class="vu-name">${h(r.label)}</span>
+          ${r.hint && (r.cloud || r.hint === "not found") ? `<span class="hint">${h(r.hint)}</span>` : ""}</label>
+        <label class="inline vu-def"><input type="radio" name="vuDefault" class="vu-radio" /> Default</label>`;
+      const on = $(".vu-on", row);
+      const radio = $(".vu-radio", row);
+      on.checked = r.on;
+      radio.checked = r.on && vuDefault === r.id;
+      radio.disabled = !r.on;
+      on.addEventListener("change", () => {
+        r.on = on.checked;
+        if (!r.on && vuDefault === r.id) vuDefault = vuRows.find((x) => x.on)?.id || null;
+        if (r.on && !vuDefault) vuDefault = r.id;
+        renderUpscalers();
+      });
+      radio.addEventListener("change", () => {
+        if (radio.checked) vuDefault = r.id;
+      });
+      (r.cloud ? vu.cloud : vu.local).appendChild(row);
+    }
+    if (!vu.local.children.length)
+      vu.local.innerHTML = `<p class="muted settings-intro">${
+        q ? "No workflow matches." : "No ComfyUI workflows found in workflows/."
+      }</p>`;
+  }
+
+  onShow.upscalers = async () => {
+    showErr(vu.err, "");
+    let g = genSettings;
+    try {
+      g = await api("/api/generation/settings");
+    } catch {
+      /* offline */
+    }
+    const saved = g.videoUpscalers || { ids: [], defaultId: null };
+    const catalog = videoUpscalerCatalog();
+    vuRows = catalog.map((u) => ({ ...u, on: saved.ids.includes(u.id) }));
+    // A picked workflow that's no longer in workflows/ stays listed, to be unticked.
+    for (const id of saved.ids)
+      if (!catalog.some((u) => u.id === id))
+        vuRows.push({
+          id,
+          label: id.replace(/^comfy:/, "").replace(/\.json$/i, ""),
+          hint: "not found",
+          cloud: id.startsWith("kie:"),
+          on: true,
+        });
+    vuDefault = saved.defaultId;
+    vu.filter.value = "";
+    vu.filter.classList.toggle("hidden", vuRows.filter((r) => !r.cloud).length < 8);
+    renderUpscalers();
+  };
+  vu.filter.addEventListener("input", renderUpscalers);
+
+  vu.save.addEventListener("click", async () => {
+    showErr(vu.err, "");
+    const ids = vuRows.filter((r) => r.on).map((r) => r.id);
+    vu.save.disabled = true;
+    try {
+      const saved = await api("/api/generation/settings", "PUT", {
+        videoUpscalers: { ids, defaultId: ids.includes(vuDefault) ? vuDefault : ids[0] || null },
+      });
+      await applyGenSettings(saved);
+      loadHistory(); // the cards' ⇧ Upscale follows the new picks
+      close();
+    } catch (err) {
+      showErr(vu.err, err.message);
+    } finally {
+      vu.save.disabled = false;
+    }
   });
 })();

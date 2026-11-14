@@ -122,6 +122,7 @@ const COMFY_SETTINGS_DIR = path.resolve(
 //                     reverse proxy in front of it adds one. Secrets stay on this server.
 //   comfy.activeId  — the one last picked next to Generate
 //   kieApiKey       — the kie.ai key for the cloud models (never sent to the browser)
+//   videoUpscalers  — { ids, defaultId }: what History's ⇧ Upscale offers (⚙ Video Upscalers)
 // Git-ignored like the rest of settings/. The first time it's needed, a KIE_API_KEY /
 // COMFYUI_URL left in .env by an older version is copied in; after that .env isn't read
 // for either.
@@ -156,7 +157,31 @@ function normalizeGenSettings(raw) {
   return {
     kieApiKey: String(raw?.kieApiKey || "").trim().slice(0, 500),
     comfy: { instances, activeId },
+    videoUpscalers: normalizeVideoUpscalers(raw?.videoUpscalers),
   };
+}
+// The History card's ⇧ Upscale: which upscalers it offers, and the one its button runs.
+// Each is "kie:<tier>" (kie.ai's Video Upscaler at 1080P / 2K / 4K) or "comfy:<file>"
+// (a workflow in workflows/, its video field given the card's video). Never set, it's
+// the three kie.ai tiers with 2K the default — what the card offered before there was
+// a choice. An empty list takes the control off the cards.
+const KIE_UPSCALE_TIERS = ["1080P", "2K", "4K"];
+const DEFAULT_VIDEO_UPSCALERS = {
+  ids: KIE_UPSCALE_TIERS.map((t) => `kie:${t}`),
+  defaultId: "kie:2K",
+};
+function normalizeVideoUpscalers(raw) {
+  if (!raw || !Array.isArray(raw.ids)) return { ...DEFAULT_VIDEO_UPSCALERS };
+  const ids = [];
+  for (const x of raw.ids) {
+    const id = String(x || "").slice(0, 400);
+    const ok =
+      (id.startsWith("kie:") && KIE_UPSCALE_TIERS.includes(id.slice(4))) ||
+      (id.startsWith("comfy:") && id.length > 6);
+    if (ok && !ids.includes(id) && ids.length < 50) ids.push(id);
+  }
+  const defaultId = ids.includes(raw.defaultId) ? raw.defaultId : ids[0] || null;
+  return { ids, defaultId };
 }
 let genSettingsCache = null;
 function readGenSettings() {
@@ -6380,6 +6405,7 @@ function publicGenSettings() {
       hasKey: !!s.kieApiKey,
       viaLlm: !s.kieApiKey && !!llm.kieSourceKey(), // borrowed from a kie.ai LLM server
     },
+    videoUpscalers: s.videoUpscalers,
   };
 }
 app.get("/api/generation/settings", (req, res) => {
@@ -6397,8 +6423,14 @@ function mergeComfyAuth(incoming, saved) {
 }
 app.put("/api/generation/settings", (req, res) => {
   const cur = readGenSettings();
-  const next = { kieApiKey: cur.kieApiKey, comfy: { ...cur.comfy } };
+  const next = {
+    kieApiKey: cur.kieApiKey,
+    comfy: { ...cur.comfy },
+    videoUpscalers: cur.videoUpscalers,
+  };
   const b = req.body || {};
+  if (b.videoUpscalers && typeof b.videoUpscalers === "object")
+    next.videoUpscalers = b.videoUpscalers; // normalized on write
   if (Array.isArray(b.comfy?.instances)) {
     const bad = b.comfy.instances.find((i) => !cleanComfyUrl(i?.url));
     if (bad || !b.comfy.instances.length)

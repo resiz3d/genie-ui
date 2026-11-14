@@ -10,6 +10,8 @@ heading for that version with the date, commit, then tag the commit `vX.Y.Z`.
 
 ## [Unreleased]
 
+## [1.6.1] - 2026-11-14
+
 ### Added
 
 - **Two-stage MiniMax H3 with the latent upscaler.** Workflows that sample small,
@@ -41,14 +43,6 @@ heading for that version with the date, commit, then tag the commit `vX.Y.Z`.
 - **Import from ComfyUI can start the copy clean.** A new checkbox, on by default,
   clears the imported copy's media file names, prompt text and LoRA picks. The import
   message says what it cleared. Untick it to copy the workflow exactly as saved.
-
-### Fixed
-
-- **GENie's connection to ComfyUI no longer drops on big messages.** Node's built-in
-  WebSocket hung up on anything over 4 MB, which a preview clip easily is, so the card
-  stuck on the first (noise) frame. GENie now uses the `ws` package for that socket,
-  so run `npm install` after updating.
-
 - **"⇧ Upscale" on video History cards (kie.ai Video Upscaler).** Pick 1080p, 2K or
   4K; GENie checks kie.ai's limits (MP4/MOV/MKV, ≤50 MB, ≤60 s), shows the cost
   (1.5 / 3 / 6 credits per second of video) and asks first, then uploads the clip and
@@ -90,6 +84,30 @@ heading for that version with the date, commit, then tag the commit `vX.Y.Z`.
   that breaks a limit stops the run with a message naming it, and the first problem
   shows beside the cost estimate as soon as the file is added. Before, kie.ai only
   refused it after sending.
+- **Video Upscalers in ⚙ Settings.** A new tab picks which upscalers a History
+  video's **⇧ Upscale** offers: kie.ai's Video Upscaler at 1080p / 2K / 4K, and any
+  ComfyUI workflow. One is the **default**, run by the button itself; the others are in
+  the **Other…** menu beside it (with each video of a card that has several). A
+  workflow runs in the background: the card's video goes into its video field and one
+  run is queued with the settings you last ran it with in the form, which isn't
+  touched. The picks are saved on the server, so every device shares them. Until you
+  save the tab, the three kie.ai tiers are offered with 2K as the default.
+- **RelayVSR and DLSS 5 nodes.** Forms for **VSR Decode** (detail kept), **CFG
+  Guider** (CFG), **DLSS5 Settings** (mode, model, neural style / preset / intensity,
+  tone, structure, skin, mask, motion and the advanced options) and **DLSS5 Enhance
+  Images** (an on/off box, and failing when neural rendering didn't run). A **VHS Load
+  Video** that loads a workflow's source video gets a **Source Video** upload plus its
+  frame cap, skip, every-Nth and force-FPS settings.
+- **＋ Video ref fills a Source Video.** In a workflow with no reference-video list, a
+  History card's ＋ Video ref puts the video in its Source Video, replacing what was
+  there.
+
+### Fixed
+
+- **GENie's connection to ComfyUI no longer drops on big messages.** Node's built-in
+  WebSocket hung up on anything over 4 MB, which a preview clip easily is, so the card
+  stuck on the first (noise) frame. GENie now uses the `ws` package for that socket,
+  so run `npm install` after updating.
 
 ## [1.6.0] - 2026-11-12
 
@@ -1034,7 +1052,8 @@ second path.
 - A failed run's long error message (e.g. kie.ai's "Timeout while downloading url=…")
   took over its History card and crushed the buttons beside it.
 
-[Unreleased]: https://github.com/resiz3d/genie-ui/compare/v1.6.0...HEAD
+[Unreleased]: https://github.com/resiz3d/genie-ui/compare/v1.6.1...HEAD
+[1.6.1]: https://github.com/resiz3d/genie-ui/compare/v1.6.0...v1.6.1
 [1.6.0]: https://github.com/resiz3d/genie-ui/compare/v1.5.1...v1.6.0
 [1.5.1]: https://github.com/resiz3d/genie-ui/compare/v1.5.0...v1.5.1
 [1.5.0]: https://github.com/resiz3d/genie-ui/compare/v1.4.0...v1.5.0

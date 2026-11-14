@@ -2138,7 +2138,8 @@ function makeEditVideoControl(videos, { name, projectId, kind, id }, { iconOnly 
 }
 
 // "＋ Video ref": puts one of a History card's videos into the form's reference-video
-// field. The field takes gallery files, so the video is copied into the card's
+// field — or, in a ComfyUI workflow without one, its single video field (a Source
+// Video), replacing what was there. The field takes gallery files, so the video is copied into the card's
 // project gallery first (once — a second click reuses that copy). `videos` lists the
 // card's videos as { url, index }; with several, the control is a menu.
 function makeVideoRefControl(entry, videos) {
@@ -2146,7 +2147,7 @@ function makeVideoRefControl(entry, videos) {
     label: '<span class="btn-ico">＋</span> Video ref',
     menuLabel: "＋ Video ref…",
     noun: "Video",
-    title: "Add this video to the form's reference-video field (it's saved to the gallery too)",
+    title: "Add this video to the form's reference-video field, or its Source Video (it's saved to the gallery too)",
     async add({ index }) {
       const res = await fetch(`/api/history/${entry.id}/to-gallery`, {
         method: "POST",
@@ -2239,31 +2240,246 @@ function makeCardRefControl(items, { label, menuLabel, noun, title, add: addOne 
 
 // "⇧ Upscale": a menu of the kie.ai Video Upscaler's resolution tiers for a History
 // card's videos (Video N → tier when the card has several).
+// "⇧ Upscale" on a History card: the button runs the default video upscaler (⚙ Settings
+// → Video Upscalers) on the card's video — the first, when it has several — and the
+// menu beside it holds every other choice: the other upscalers, and on a card with
+// several videos, each video with each upscaler. No upscalers chosen, no control.
 function makeUpscaleControl(entry, videos) {
-  if (!videos.length) return null;
-  const sel = document.createElement("select");
-  sel.className = "hist-project";
-  sel.title = "Upscale with kie.ai's Video Upscaler (MP4/MOV/MKV, up to 50 MB and 60 s)";
-  const ph = new Option("⇧ Upscale…", "", true, true);
-  ph.disabled = true;
-  sel.appendChild(ph);
+  const ups = videoUpscalers();
+  if (!videos.length || !ups.length) return null;
+  const def = ups.find((u) => u.isDefault) || ups[0];
+  const wrap = document.createElement("span");
+  wrap.className = "hist-upscale";
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "btn-secondary";
+  btn.innerHTML = '<span class="btn-ico">⇧</span> Upscale';
+  btn.title =
+    `Upscale ${videos.length > 1 ? "video 1" : "this video"} with ${def.label}` +
+    (def.hint ? ` (${def.hint})` : "") +
+    " — the default in ⚙ Settings → Video Upscalers";
+  btn.addEventListener("click", () => runVideoUpscaler(entry, videos[0], def, btn));
+  wrap.appendChild(btn);
+
+  const choices = [];
   videos.forEach((vid, i) =>
-    UPSCALE_TIERS.forEach((t) =>
+    ups.forEach((u) => {
+      if (i === 0 && u === def) return; // that's the button
+      choices.push({ vid, u });
+    }),
+  );
+  if (choices.length) {
+    const sel = document.createElement("select");
+    sel.className = "hist-project";
+    sel.title = "Upscale with another of your video upscalers";
+    const ph = new Option("Other…", "", true, true);
+    ph.disabled = true;
+    sel.appendChild(ph);
+    choices.forEach(({ vid, u }, k) =>
       sel.appendChild(
         new Option(
-          `${videos.length > 1 ? `Video ${vid.index + 1} → ` : ""}${t.label} (${t.perSec} cr/s)`,
-          `${i}|${t.value}`,
+          `${videos.length > 1 ? `Video ${vid.index + 1} → ` : ""}${u.label}${u.hint ? ` (${u.hint})` : ""}`,
+          String(k),
         ),
       ),
-    ),
-  );
-  sel.addEventListener("change", () => {
-    const [i, tier] = sel.value.split("|");
-    sel.value = "";
-    const vid = videos[Number(i)];
-    if (vid) upscaleVideo(entry, vid, tier);
+    );
+    sel.addEventListener("change", () => {
+      const c = choices[Number(sel.value)];
+      sel.value = "";
+      if (c) runVideoUpscaler(entry, c.vid, c.u, sel);
+    });
+    wrap.appendChild(sel);
+  }
+  return wrap;
+}
+
+// Every upscaler ⚙ Settings → Video Upscalers can offer: kie.ai's Video Upscaler at each
+// tier, and each ComfyUI workflow. { id, label, hint, cloud, tier | file }.
+function videoUpscalerCatalog() {
+  return [
+    ...UPSCALE_TIERS.map((t) => ({
+      id: `kie:${t.value}`,
+      label: `kie.ai Video Upscaler · ${t.label}`,
+      hint: `${t.perSec} cr/s`,
+      cloud: true,
+      tier: t.value,
+    })),
+    ...comfyWorkflows
+      .filter((w) => !w.error)
+      .map((w) => ({ id: `comfy:${w.file}`, label: w.name, hint: "ComfyUI", cloud: false, file: w.file })),
+  ];
+}
+
+// The upscalers chosen in Settings, in the order saved, each with `isDefault`. A
+// workflow that's since gone from workflows/ drops out.
+function videoUpscalers() {
+  const saved = genSettings.videoUpscalers || {
+    ids: UPSCALE_TIERS.map((t) => `kie:${t.value}`),
+    defaultId: "kie:2K",
+  };
+  const byId = new Map(videoUpscalerCatalog().map((u) => [u.id, u]));
+  return (saved.ids || [])
+    .map((id) => byId.get(id))
+    .filter(Boolean)
+    .map((u) => ({ ...u, isDefault: u.id === saved.defaultId }));
+}
+
+function runVideoUpscaler(entry, vid, u, el = null) {
+  if (u.cloud) return upscaleVideo(entry, vid, u.tier);
+  return upscaleWithWorkflow(entry, vid, u, el);
+}
+
+// A ComfyUI workflow as the upscaler, queued in the background: the form isn't touched.
+// The run is built from the workflow's saved settings (settings/comfy/<file>.json —
+// what the form last ran it with) the way submitComfy builds one from the form: saved
+// control values (anything not saved keeps the workflow's own), its LoRAs, bypassed
+// nodes and media, with the card's video uploaded straight into its first video field.
+async function upscaleWithWorkflow(entry, { url, index }, u, btn = null) {
+  const wf = comfyWorkflows.find((w) => w.file === u.file);
+  if (!wf) return alert(`The workflow ${u.label} isn't in workflows/ any more.`);
+  if (!confirm(`Upscale this video with ${u.label}?
+
+It's queued on ComfyUI with that workflow's saved settings.`))
+    return;
+  if (btn) btn.disabled = true;
+  try {
+    await queueSavedComfyRun(wf, {
+      video: { outputUrl: url },
+      extra: { upscaleOf: entry.id, upscaleOfOutput: index },
+      projectId: entry.projectId || activeProjectId,
+    });
+    if (btn?.tagName === "BUTTON") {
+      const was = btn.innerHTML;
+      btn.innerHTML = "Queued!";
+      setTimeout(() => (btn.innerHTML = was), 1500);
+    }
+  } catch (err) {
+    alert(err.message || String(err));
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+// Queue one run of a workflow from its saved settings, without drawing its form.
+// `video` ({ outputUrl } or { id }) goes into the first video field, in the form's own
+// field order; every other media field gets its saved files, or is pruned when empty.
+async function queueSavedComfyRun(wf, { video, extra = {}, projectId }) {
+  const getJson = async (u) => {
+    const r = await fetch(u);
+    const d = await r.json().catch(() => ({}));
+    return r.ok && d.code === 200 ? d.data : null;
+  };
+  const [meta, saved] = await Promise.all([
+    getJson(`/api/comfy/workflow-meta?file=${encodeURIComponent(wf.file)}`),
+    getJson(`/api/comfy/settings?file=${encodeURIComponent(wf.file)}`),
+  ]);
+  const s = saved || {};
+  const savedMedia = s.__media || {};
+  const tokens = meta?.tokens || wf.tokens;
+  const upload = async (src) => {
+    const res = await fetch("/api/comfy/upload", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...(src.outputUrl ? { outputUrl: src.outputUrl } : { id: src.id }),
+        comfyInstanceId: comfyInstanceId(),
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.data?.filename) throw new Error(data.msg || "Couldn't upload the video to ComfyUI");
+    return data.data.filename;
+  };
+
+  // The form's fields, in the form's order (see renderComfyControls): numbered media
+  // tokens make one series, a lone one is a single field, references come from meta.
+  const items = [];
+  const series = new Map();
+  tokens.forEach((token, scanIndex) => {
+    if (token.role) return;
+    const type = comfyControlType(token);
+    if (!MEDIA_TYPES.has(type)) return items.push({ kind: "scalar", token });
+    const m = token.name.match(/^(.*?)(\d+)$/);
+    if (!m) return items.push({ kind: "single", type, token, order: token.order, scanIndex });
+    const key = `${type}:${m[1]}`;
+    let it = series.get(key);
+    if (!it) {
+      it = { kind: "series", type, base: m[1], entries: [], order: undefined, scanIndex };
+      series.set(key, it);
+      items.push(it);
+    }
+    it.entries.push({ token, index: Number(m[2]) });
+    if (token.order != null && (it.order == null || token.order < it.order)) it.order = token.order;
   });
-  return sel;
+  for (const it of items)
+    if (it.kind === "series" && it.entries.length === 1) Object.assign(it, { kind: "single", token: it.entries[0].token });
+  (meta?.references || []).forEach((ref, i) =>
+    items.push({ kind: "reference", type: ref.kind, ref, order: ref.order, scanIndex: 900 + i }),
+  );
+  items.sort((a, b) => (a.order ?? 1000 + (a.scanIndex ?? 0)) - (b.order ?? 1000 + (b.scanIndex ?? 0)));
+
+  const values = {};
+  const prune = [];
+  const references = {};
+  const mediaIds = { image: [], video: [], audio: [] };
+  let placed = false;
+  // The files a media field runs with: the card's video for the first video field,
+  // else what the form last had there.
+  const filesFor = (type, key) => {
+    if (type === "video" && !placed) {
+      placed = true;
+      return [video];
+    }
+    return (savedMedia[key] || []).filter((m) => m?.id);
+  };
+  const noteIds = (type, files) => {
+    for (const f of files) if (f.id) mediaIds[type]?.push(f.id);
+  };
+  for (const it of items) {
+    if (it.kind === "scalar") {
+      const t = it.token;
+      if (!(t.name in s)) continue; // never saved: the workflow's own value stands
+      values[t.name] =
+        s.__after?.[t.name] === "randomize" ? randomSeed() : s[t.name];
+    } else if (it.kind === "reference") {
+      const files = filesFor(it.type, it.ref.name).slice(0, it.ref.max || 9);
+      noteIds(it.type, files);
+      references[it.ref.name] = [];
+      for (const f of files) references[it.ref.name].push(await upload(f));
+    } else if (it.kind === "series") {
+      const names = it.entries.sort((a, b) => a.index - b.index).map((e) => e.token.name);
+      const files = filesFor(it.type, it.base);
+      noteIds(it.type, files);
+      for (let i = 0; i < names.length; i++) {
+        if (files[i]) values[names[i]] = await upload(files[i]);
+        else prune.push(names[i]);
+      }
+    } else {
+      const files = filesFor(it.type, it.token.name).slice(0, 1);
+      noteIds(it.type, files);
+      if (files[0]) values[it.token.name] = await upload(files[0]);
+      else if (it.token.default !== "") values[it.token.name] = it.token.default;
+      else prune.push(it.token.name);
+    }
+  }
+  if (!placed) throw new Error(`${wf.name} has no video field to put the video in.`);
+
+  // Wildcards in saved text get fresh picks, as a form run's do.
+  const memo = new Map();
+  for (const [k, v] of Object.entries(values))
+    if (typeof v === "string" && hasPromptTokens(v)) values[k] = resolveWildcards(v, memo);
+
+  const loras = Array.isArray(s.loras) ? s.loras : [];
+  const wfMedia = Array.isArray(s.workflowMedia) ? s.workflowMedia : [];
+  const bypass = Array.isArray(s.bypass) ? s.bypass : [];
+  const input = { model: `comfy:${wf.file}`, workflow: wf.name, values, ...extra };
+  if (loras.length) input.loras = loras;
+  if (wfMedia.length) input.workflowMedia = wfMedia;
+  if (bypass.length) input.bypass = bypass;
+  if (typeof values.prompt === "string" && values.prompt.trim()) input.prompt = values.prompt.trim();
+  await queueComfyRun(wf, values, prune, mediaIds, input, loras, bypass, {}, null, references, wfMedia, {
+    projectId,
+    throwErrors: true,
+  });
 }
 
 // "✂ Crop": opens the image editor on one image of a History card or on a Gallery
@@ -4249,6 +4465,15 @@ function makeComfyMedia(token, mediaKind) {
       setSource(it && it.id ? { id: it.id, url: it.url, name: it.name } : null);
       tailSec = Number(it?.tail) || 0;
       renderTail();
+    },
+    // One saved file from History's "＋ Video ref", in place of whatever the field held
+    // (a workflow's Source Video). Reference lists take theirs through addMedia instead.
+    replaceMedia(item) {
+      if (!item?.id) return false;
+      setSource({ id: item.id, url: item.url, name: item.name });
+      tailSec = 0;
+      renderTail();
+      return true;
     },
     setTails(byToken) {
       const seconds = Number(byToken?.[token.name]?.seconds);
@@ -6990,13 +7215,14 @@ async function queueComfyRun(
   cont,
   references,
   workflowMedia = [],
+  { projectId = activeProjectId, throwErrors = false } = {},
 ) {
   const job = {
     jobId: nextJobId++,
     taskId: null,
     input,
     mediaLocalIds: mediaIds,
-    projectId: activeProjectId,
+    projectId,
     startedAt: Date.now(),
   };
   try {
@@ -7049,6 +7275,8 @@ async function queueComfyRun(
     pollComfyJob(job);
   } catch (err) {
     // Couldn't queue (e.g. missing node) — no History entry was created; surface it.
+    // A caller away from the form (a History card's ⇧ Upscale) shows it itself.
+    if (throwErrors) throw err;
     setError(err.message || String(err));
   }
 }
@@ -13578,7 +13806,17 @@ function addVideoToRefField(g) {
     const f = comfyFields.find(
       (x) => x.mediaKind === "video" && typeof x.addMedia === "function",
     );
-    if (!f) return "This workflow has no reference-video field.";
+    if (!f) {
+      // No reference-video list: a single video field (a Source Video) takes it instead.
+      const single = comfyFields.find(
+        (x) => x.mediaKind === "video" && typeof x.replaceMedia === "function",
+      );
+      if (single)
+        return single.replaceMedia({ id: g.id, url: g.localUrl, name: g.name }) ?
+            ""
+          : "Couldn't set the video.";
+      return "This workflow has no video field.";
+    }
     if (f.peekMedia().some((m) => m.id === g.id)) return "";
     return f.addMedia({ id: g.id, url: g.localUrl, name: g.name }) ?
         ""

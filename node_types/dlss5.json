@@ -1,0 +1,49 @@
+{
+  "_comment": "DLSS 5 video enhancement (ComfyUI-DLSS5-Enhancer): DLSS5 Settings carries every knob as a DLSS5_SETTINGS object, and DLSS5 Enhance Images runs it over a frame batch (batch order is temporal order). The settings live on their own node, so they get their own section; Enhance Images is `bypassable` with `images` passing straight through (it also has the settings link). A workflow can tie its Settings node to that toggle with `_meta.bypass_with`, so the section hides and the node drops out with it. The motion / scene-change / warm-up / runtime-dir inputs are the node's `advanced` ones and start in a collapsed section with the rest.",
+  "nodes": {
+    "DLSS5EnhanceImages": {
+      "bypassable": true,
+      "bypass_passthrough": "images",
+      "bypass_label": "Use DLSS 5 enhancement",
+      "display_name": "DLSS5 Enhance Images",
+      "recognize": {
+        "variants": [
+          {
+            "match": [{ "when": "any" }],
+            "group": "DLSS 5",
+            "expose": {
+              "verify_neural_rendering": { "name": "dlss_verify", "label": "Fail if neural rendering didn't run", "control": "toggle", "width": "full", "order": 65.5 }
+            }
+          }
+        ]
+      }
+    },
+    "DLSS5Settings": {
+      "display_name": "DLSS5 Settings",
+      "recognize": {
+        "variants": [
+          {
+            "match": [{ "when": "any" }],
+            "group": "DLSS 5 Settings",
+            "collapsed": true,
+            "expose": {
+              "upscaling_mode":           { "name": "dlss_mode",               "label": "Mode",                 "control": "combo",  "width": "1/2", "order": 66 },
+              "dlss_model_preset":        { "name": "dlss_model_preset",       "label": "DLSS model",           "control": "combo",  "width": "1/2", "order": 67 },
+              "nr_style":                 { "name": "dlss_nr_style",           "label": "Neural style",         "control": "combo",  "width": "1/2", "order": 68 },
+              "nr_preset":                { "name": "dlss_nr_preset",          "label": "Neural preset",        "control": "combo",  "width": "1/2", "order": 69 },
+              "nr_intensity":             { "name": "dlss_nr_intensity",       "label": "Neural intensity",     "control": "number", "width": "1/2", "order": 71 },
+              "local_tone_strength":      { "name": "dlss_local_tone",         "label": "Local tone",           "control": "number", "width": "1/2", "order": 72 },
+              "local_structure_strength": { "name": "dlss_local_structure",    "label": "Local structure",      "control": "number", "width": "1/2", "order": 73 },
+              "skin_structure_strength":  { "name": "dlss_skin_structure",     "label": "Skin structure",       "control": "number", "width": "1/2", "order": 74 },
+              "automatic_mask":           { "name": "dlss_auto_mask",          "label": "Automatic skin mask",  "control": "toggle", "width": "full", "order": 75 },
+              "motion":                   { "name": "dlss_motion",             "label": "Motion vectors",       "control": "combo",  "width": "1/3", "order": 76 },
+              "scene_change_threshold":   { "name": "dlss_scene_change",       "label": "Scene-change threshold", "control": "number", "width": "1/3", "order": 77 },
+              "warmup_frames":            { "name": "dlss_warmup_frames",      "label": "Warm-up frames",       "control": "number", "width": "1/3", "order": 78 },
+              "runtime_dir":              { "name": "dlss_runtime_dir",        "label": "Runtime folder (blank = default)", "control": "text", "width": "full", "order": 79 }
+            }
+          }
+        ]
+      }
+    }
+  }
+}

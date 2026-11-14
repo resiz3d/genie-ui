@@ -1,0 +1,19 @@
+{
+  "_comment": "RelayVSR video super-resolution (core comfy_extras.nodes_wan). RelayVSRConditioning takes the low-quality frames at native size and hands the sampler its conditioning and latent; it has only link inputs, so it runs as-is. VSR Decode decodes the sampled latent against those same frames, and its `detail` sets how much of the model's added detail over a bicubic upscale is kept (1 = full model output).",
+  "nodes": {
+    "VSRDecode": {
+      "display_name": "VSR Decode",
+      "recognize": {
+        "variants": [
+          {
+            "match": [{ "when": "any" }],
+            "group": "VSR Decode",
+            "expose": {
+              "detail": { "name": "vsr_detail", "label": "Detail kept", "control": "number", "width": "1/2", "order": 25 }
+            }
+          }
+        ]
+      }
+    }
+  }
+}
