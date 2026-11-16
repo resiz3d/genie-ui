@@ -19,6 +19,12 @@ heading for that version with the date, commit, then tag the commit `vX.Y.Z`.
   changed. Frames and fps left at 0 follow the 👁 menu beside Generate. The settings
   are saved per workflow like the rest of the form, and History card upscales use
   them too.
+- **Save settings without generating.** For ComfyUI workflows, Generate is a split
+  button: its ▾ half opens a menu with **💾 Save settings**, which stores the form as
+  the workflow's settings, the same
+  as Generate does after queueing, so a History card's ⇧ Upscale and your next visit
+  pick up the changes without a run. It won't save while ComfyUI is offline, since the
+  empty pickers would overwrite your choices.
 
 ## [1.6.2] - 2026-11-14
 

@@ -1772,6 +1772,52 @@ autoDraftMaxEl.addEventListener("change", () => {
   }).catch(() => {});
 });
 
+// Generate's ▾ half (ComfyUI workflows): a menu of other things to do with the form.
+// "💾 Save settings" stores the form as this workflow's settings — what Generate saves
+// after queueing, and what a History card's ⇧ Upscale and the next visit start from —
+// without running anything. Not while the form was drawn with ComfyUI offline: its
+// empty pickers would overwrite the choices. The copy of this bar under the prompt
+// (quickGenerate) clicks these same buttons and shows the menu with them.
+const genSplit = document.getElementById("genSplit");
+const genMoreBtn = document.getElementById("genMoreBtn");
+const genMoreMenu = document.getElementById("genMoreMenu");
+const genMoreStatus = document.getElementById("genMoreStatus");
+let genMoreTimer = null;
+const setGenMenu = (open) => {
+  genMoreMenu.classList.toggle("hidden", !open);
+  genSplit.classList.toggle("open", open);
+  genMoreBtn.setAttribute("aria-expanded", String(open));
+};
+genMoreBtn.addEventListener("click", () => setGenMenu(genMoreMenu.classList.contains("hidden")));
+// A click anywhere but a split button (this one or its copy), or Esc, closes it.
+document.addEventListener("click", (e) => {
+  if (!e.target.closest?.(".gen-split")) setGenMenu(false);
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !genMoreMenu.classList.contains("hidden")) setGenMenu(false);
+});
+const sayGenMore = (text) => {
+  clearTimeout(genMoreTimer);
+  genMoreStatus.textContent = text;
+  genMoreTimer = setTimeout(() => (genMoreStatus.textContent = ""), 2500);
+};
+genMoreMenu.addEventListener("click", async (e) => {
+  const item = e.target.closest("[data-action]");
+  if (!item) return;
+  setGenMenu(false);
+  if (item.dataset.action !== "save" || !isComfy()) return;
+  if (comfyMetaOffline || !comfyFields.length)
+    return sayGenMore("Can't save while ComfyUI is offline");
+  genMoreBtn.disabled = true;
+  try {
+    sayGenMore(
+      (await saveComfySettings(comfyFile())) ? "✓ Settings saved" : "Couldn't save the settings",
+    );
+  } finally {
+    genMoreBtn.disabled = false;
+  }
+});
+
 // Live preview method for local runs — sent with each queued prompt.
 const previewMethodEl = document.getElementById("previewMethod");
 previewMethodEl.value = previewMethod;
@@ -3568,6 +3614,10 @@ function applyModelUI() {
   document
     .getElementById("previewMethodField")
     .classList.toggle("hidden", !comfy);
+  // Generate's ▾ half is for ComfyUI workflows (Save settings).
+  document.getElementById("genMoreBtn").classList.toggle("hidden", !comfy);
+  document.getElementById("genSplit").classList.toggle("has-menu", comfy);
+  if (!comfy) document.getElementById("genMoreMenu").classList.add("hidden");
   renderComfyInstancePick();
   // One video in, one out — a batch count means nothing to the upscaler.
   document.getElementById("queueCountField").classList.toggle("hidden", isUpscale());
@@ -7245,13 +7295,15 @@ async function saveComfySettings(file) {
   if (comfyMediaControl) data.workflowMedia = comfyMediaControl.getMedia();
   if (comfyBypassControl) data.bypass = comfyBypassControl.getDisabled();
   try {
-    await fetch(`/api/comfy/settings?file=${encodeURIComponent(file)}`, {
+    const res = await fetch(`/api/comfy/settings?file=${encodeURIComponent(file)}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
     });
+    return res.ok; // whether it was stored (the ⋯ menu's Save settings says so)
   } catch (err) {
     console.error("Failed to save comfy settings:", err);
+    return false;
   }
 }
 

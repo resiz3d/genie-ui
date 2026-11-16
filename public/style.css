@@ -2680,7 +2680,7 @@ input[type="text"].hist-note.unsaved {
 }
 /* Generate while a saved prompt is active. */
 #submitBtn.from-saved::before,
-.quick-generate .submit-row > button.from-saved::before {
+.quick-generate .gen-split > button.from-saved::before {
   content: "📌 ";
 }
 .sp-output-pending {
@@ -6602,4 +6602,67 @@ button.wf-danger:not(.btn-secondary) {
   margin: 0;
   font-size: 0.8rem;
   line-height: 1.4;
+}
+/* Generate as a split button: the main half, a divider, and a ▾ half that opens a
+   small menu (ComfyUI workflows: Save settings). */
+.gen-split {
+  position: relative;
+  display: inline-flex;
+  align-items: stretch;
+  flex: 0 0 auto;
+}
+.gen-split.has-menu > button:first-child {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.gen-split > .gen-split-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 0.7rem;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  border-left: 1px solid rgba(255, 255, 255, 0.45);
+  background: var(--accent-hover);
+}
+.gen-split > .gen-split-toggle.hidden {
+  display: none;
+}
+.gen-split > .gen-split-toggle svg {
+  transition: transform 0.15s;
+}
+.gen-split.open > .gen-split-toggle svg {
+  transform: rotate(180deg);
+}
+.gen-split-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 30;
+  min-width: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: 0.3rem;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+.gen-split-menu.hidden {
+  display: none;
+}
+.gen-split-menu > button {
+  background: transparent;
+  color: var(--text);
+  font-weight: 500;
+  text-align: left;
+  white-space: nowrap;
+  padding: 0.55rem 0.75rem;
+  border-radius: 7px;
+}
+.gen-split-menu > button:hover:not(:disabled) {
+  background: var(--border);
+}
+.gen-more-status:empty {
+  display: none;
 }
