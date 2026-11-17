@@ -2029,20 +2029,74 @@ async function renameProject(id) {
   await pbDo(() => projectApi(`/api/projects/${id}`, "PUT", { name: name.trim() }));
 }
 
+// The delete-project confirm, with a box to delete its media instead of moving it to
+// Default. Resolves { deleteContent } on Delete, null on Cancel / Esc / backdrop.
+function confirmDeleteProject(name) {
+  return new Promise((resolve) => {
+    const modal = document.createElement("div");
+    modal.className = "modal";
+    modal.innerHTML = `
+      <div class="modal-box del-proj-box" role="dialog" aria-labelledby="delProjHeading">
+        <h3 id="delProjHeading"></h3>
+        <p class="muted del-proj-note"></p>
+        <label class="del-proj-check">
+          <input type="checkbox" />
+          <span>Also delete its gallery media, history and output folder</span>
+        </label>
+        <p class="sp-save-warn hidden">Everything in the project's output folder is deleted for good — this can't be undone. Saved prompts and variables still move to Default.</p>
+        <div class="modal-actions">
+          <button type="button" class="btn-secondary" data-act="cancel">Cancel</button>
+          <button type="button" data-act="ok">🗑 Delete</button>
+        </div>
+      </div>`;
+    modal.querySelector("h3").textContent = `Delete project "${name}"?`;
+    const note = modal.querySelector(".del-proj-note");
+    const box = modal.querySelector("input");
+    const warn = modal.querySelector(".sp-save-warn");
+    const sync = () => {
+      note.textContent =
+        box.checked ?
+          "Its gallery media and history will be deleted."
+        : "Its gallery media and history will move to Default.";
+      warn.classList.toggle("hidden", !box.checked);
+    };
+    sync();
+    box.addEventListener("change", sync);
+    const done = (val) => {
+      modal.remove();
+      document.removeEventListener("keydown", onKey, true);
+      resolve(val);
+    };
+    const onKey = (e) => {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        done(null);
+      }
+    };
+    document.addEventListener("keydown", onKey, true);
+    modal.addEventListener("click", (e) => {
+      if (e.target === modal) done(null);
+      const act = e.target.closest("[data-act]")?.dataset.act;
+      if (act === "cancel") done(null);
+      if (act === "ok") done({ deleteContent: box.checked });
+    });
+    document.body.appendChild(modal);
+    modal.querySelector('[data-act="ok"]').focus();
+  });
+}
+
 async function deleteProject(id) {
   if (id === "default") {
     alert("The Default project cannot be deleted.");
     return;
   }
-  const name = projectName(id);
-  if (
-    !confirm(
-      `Delete project "${name}"?\n\nIts gallery media and history will move to Default.`,
-    )
-  )
-    return;
+  const choice = await confirmDeleteProject(projectName(id));
+  if (!choice) return;
   try {
-    await projectApi(`/api/projects/${id}`, "DELETE");
+    await projectApi(
+      `/api/projects/${id}${choice.deleteContent ? "?content=delete" : ""}`,
+      "DELETE",
+    );
   } catch (err) {
     alert(err.message || String(err));
     return;

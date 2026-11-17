@@ -25,6 +25,9 @@ heading for that version with the date, commit, then tag the commit `vX.Y.Z`.
   as Generate does after queueing, so a History card's ⇧ Upscale and your next visit
   pick up the changes without a run. It won't save while ComfyUI is offline, since the
   empty pickers would overwrite your choices.
+- **Delete a project with its media.** The delete-project dialog has a box to delete
+  the project's gallery media, history and everything in its output folder instead of
+  moving them to Default. Saved prompts and variables still move to Default.
 
 ## [1.6.2] - 2026-11-14
 

@@ -332,7 +332,7 @@ shared password meant for a trusted home network, not per-user accounts.
 | `POST /api/create` | Builds the `bytedance/seedance-2` payload and calls `createTask`. |
 | `GET /api/status?taskId=...` | Proxies `recordInfo` so the UI can poll for the result. |
 | `GET /api/credits` | Proxies the account credit balance. |
-| `GET/POST /api/projects`, `PUT/DELETE /api/projects/:id` | Project CRUD; delete moves contents to Default. |
+| `GET/POST /api/projects`, `PUT/DELETE /api/projects/:id` | Project CRUD; delete moves contents to Default (`?content=delete` deletes its gallery, history and folders instead; prompts and variables still move). |
 | `POST /api/upload` | Saves dropped media (image/video/audio) to `input/` locally — no API call. |
 | `POST /api/reupload` | Hosts a saved local file (by id) on kie.ai at generate time; returns a fresh URL. |
 | `GET /api/images` | Lists the saved media gallery. |

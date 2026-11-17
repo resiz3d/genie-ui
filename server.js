@@ -4892,7 +4892,8 @@ app.delete("/api/project-folders/:id", (req, res) => {
   res.json({ code: 200, msg: "deleted; contents moved up" });
 });
 
-// Delete a project: its gallery media and history move to Default.
+// Delete a project: its gallery media and history move to Default (or, with
+// ?content=delete, are deleted along with its folders).
 app.delete("/api/projects/:id", (req, res) => {
   if (req.params.id === "default") {
     return res
@@ -4903,6 +4904,40 @@ app.delete("/api/projects/:id", (req, res) => {
   const proj = projects.find((p) => p.id === req.params.id);
   if (!proj)
     return res.status(404).json({ code: 404, msg: "project not found" });
+
+  // `?content=delete` deletes the project's media instead of moving it to Default:
+  // its gallery and history entries, and everything left in its input/ and output/
+  // folders (edited videos, untracked files…). Saved prompts and variables still
+  // move to Default — they're text, not media.
+  if (req.query.content === "delete") {
+    const gallery = readJson(IMAGES_FILE);
+    for (const e of gallery) {
+      if (e.projectId !== proj.id || !e.storedName) continue;
+      try {
+        fs.rmSync(path.join(INPUT_DIR, e.storedName), { force: true });
+      } catch {}
+    }
+    writeJson(
+      IMAGES_FILE,
+      gallery.filter((e) => e.projectId !== proj.id),
+    );
+    const hist = readJson(HISTORY_FILE);
+    for (const e of hist) if (e.projectId === proj.id) deleteHistoryFiles(e);
+    writeJson(
+      HISTORY_FILE,
+      hist.filter((e) => e.projectId !== proj.id),
+    );
+    for (const root of [INPUT_DIR, OUTPUT_DIR]) {
+      const dir = path.resolve(root, proj.slug);
+      // only ever a direct child of the media root (never the root itself)
+      if (!proj.slug || path.dirname(dir) !== path.resolve(root)) continue;
+      try {
+        fs.rmSync(dir, { recursive: true, force: true });
+      } catch (err) {
+        console.error(`Failed to delete ${dir}:`, err.message);
+      }
+    }
+  }
 
   const images = readJson(IMAGES_FILE);
   for (const entry of images) {
@@ -4970,7 +5005,13 @@ app.delete("/api/projects/:id", (req, res) => {
     path.join(PROJECT_DATA_DIR, proj.slug),
   ])
     removeEmptyDirs(dir);
-  res.json({ code: 200, msg: "deleted; contents moved to Default" });
+  res.json({
+    code: 200,
+    msg:
+      req.query.content === "delete" ?
+        "deleted with its media"
+      : "deleted; contents moved to Default",
+  });
 });
 
 // mime subtype → file extension for stored media

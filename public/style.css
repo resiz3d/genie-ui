@@ -3139,6 +3139,24 @@ input[type="text"].hist-note.unsaved {
 #savePromptModal .modal-box {
   width: min(440px, 92vw);
 }
+.modal-box.del-proj-box {
+  width: min(420px, 92vw);
+}
+.del-proj-check {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin: 0.75rem 0 0;
+  cursor: pointer;
+}
+.del-proj-check input {
+  margin-top: 0.2rem;
+  flex: none;
+}
+.del-proj-box .modal-actions {
+  margin-top: 1rem;
+}
 #savePromptModal .modal-actions {
   margin-top: 1rem;
 }
